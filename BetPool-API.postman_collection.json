@@ -1,0 +1,659 @@
+{
+  "info": {
+    "name": "BetPool API",
+    "description": "BetPool API v2.0 — Collection of all endpoints for the BetPool betting platform.\n\n## Authentication\nMost endpoints require a Bearer token passed via the `Authorization` header.\nSet the `authToken` collection variable after successful login/signup verification.\n\n## Base URL\nThe `baseUrl` variable defaults to `http://localhost:8383/api`.\nUpdate it to point to production/staging as needed.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8383/api",
+      "type": "string"
+    },
+    {
+      "key": "authToken",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Example: Set authToken after login/signup",
+          "// Uncomment and adjust based on your auth flow:",
+          "",
+          "// const loginResponse = pm.response.json();",
+          "// if (loginResponse?.data?.token) {",
+          "//   pm.collectionVariables.set('authToken', loginResponse.data.token);",
+          "// }",
+          "",
+          "// For manual testing, set authToken in the collection variables panel."
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Signup Request OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/signup/request",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "signup", "request"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"+2348012345678\"\n}"
+            },
+            "description": "Request OTP for user signup."
+          }
+        },
+        {
+          "name": "Signup Verify OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/signup/verify",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "signup", "verify"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"+2348012345678\",\n  \"code\": \"123456\"\n}"
+            },
+            "description": "Verify the OTP received during signup. Returns a temp token used to complete signup."
+          }
+        },
+        {
+          "name": "Signup Complete",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/signup/complete",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "signup", "complete"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"+2348012345678\",\n  \"fullName\": \"John Doe\",\n  \"pin\": \"1234\"\n}"
+            },
+            "description": "Complete signup with verified OTP token, full name, and 4-digit PIN."
+          }
+        },
+        {
+          "name": "Login Request OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login/request",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login", "request"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"+2348012345678\"\n}"
+            },
+            "description": "Request OTP for login."
+          }
+        },
+        {
+          "name": "Login Verify OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login/verify",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login", "verify"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"+2348012345678\",\n  \"code\": \"123456\"\n}"
+            },
+            "description": "Verify login OTP. On success, set the returned token as `authToken` in collection variables."
+          }
+        },
+        {
+          "name": "Resend OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/otp/resend",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "otp", "resend"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"+2348012345678\",\n  \"purpose\": \"signup\"\n}"
+            },
+            "description": "Resend OTP. Purpose can be 'signup' or 'login' or 'pin_reset'."
+          }
+        },
+        {
+          "name": "Request PIN Reset",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/pin/reset/request",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "pin", "reset", "request"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"+2348012345678\"\n}"
+            },
+            "description": "Request a PIN reset OTP."
+          }
+        },
+        {
+          "name": "Reset PIN",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/pin/reset",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "pin", "reset"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"+2348012345678\",\n  \"code\": \"123456\",\n  \"newPin\": \"5678\"\n}"
+            },
+            "description": "Reset PIN using the OTP code."
+          }
+        },
+        {
+          "name": "Verify Token",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/verify",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "verify"]
+            },
+            "description": "Verify the current auth token is valid."
+          }
+        },
+        {
+          "name": "Get Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/profile",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "profile"]
+            },
+            "description": "Get the authenticated user's profile."
+          }
+        },
+        {
+          "name": "Update Profile",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/profile",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "profile"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"John Doe Updated\",\n  \"email\": \"john@example.com\"\n}"
+            },
+            "description": "Update profile fields. Both fields are optional."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Pods",
+      "item": [
+        {
+          "name": "Get Pod Feed",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/pods/feed?sport=football&isLive=true&limit=20&cursor=",
+              "host": ["{{baseUrl}}"],
+              "path": ["pods", "feed"],
+              "query": [
+                { "key": "sport", "value": "football", "description": "Filter by sport" },
+                { "key": "isLive", "value": "true", "description": "Filter live pods" },
+                { "key": "limit", "value": "20", "description": "Results per page" },
+                { "key": "cursor", "value": "", "description": "Pagination cursor" }
+              ]
+            },
+            "description": "Active pod feed with optional filtering and cursor-based pagination."
+          }
+        },
+        {
+          "name": "Get Upcoming Pods",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/pods/upcoming?sport=football&limit=20&hoursAhead=24",
+              "host": ["{{baseUrl}}"],
+              "path": ["pods", "upcoming"],
+              "query": [
+                { "key": "sport", "value": "football", "description": "Filter by sport" },
+                { "key": "limit", "value": "20", "description": "Results per page" },
+                { "key": "hoursAhead", "value": "24", "description": "Look ahead window in hours" }
+              ]
+            },
+            "description": "List of upcoming pods within the specified hours ahead."
+          }
+        },
+        {
+          "name": "Get Sports",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/pods/sports",
+              "host": ["{{baseUrl}}"],
+              "path": ["pods", "sports"]
+            },
+            "description": "List all sports that currently have active pods."
+          }
+        },
+        {
+          "name": "Get Pods by Sport",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/pods/sport/football?status=active&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["pods", "sport", "football"],
+              "query": [
+                { "key": "status", "value": "active", "description": "Pod status filter" },
+                { "key": "limit", "value": "20", "description": "Results per page" }
+              ]
+            },
+            "description": "Get pods filtered by sport slug (e.g. football, basketball, tennis)."
+          }
+        },
+        {
+          "name": "Search Pods",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/pods/search?q=manchester&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["pods", "search"],
+              "query": [
+                { "key": "q", "value": "manchester", "description": "Search query" },
+                { "key": "limit", "value": "20", "description": "Results per page" }
+              ]
+            },
+            "description": "Search pods by keyword."
+          }
+        },
+        {
+          "name": "Get Pod by ID",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/pods/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["pods", ":id"],
+              "variable": [
+                { "key": "id", "value": "podId123", "description": "Pod ID" }
+              ]
+            },
+            "description": "Get a single pod by its ID."
+          }
+        },
+        {
+          "name": "Get Pod Gains",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/pods/:id/gains",
+              "host": ["{{baseUrl}}"],
+              "path": ["pods", ":id", "gains"],
+              "variable": [
+                { "key": "id", "value": "podId123", "description": "Pod ID" }
+              ]
+            },
+            "description": "Get the gains/multiplier for a pod. Shown behind an info icon in the UI."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Stakes",
+      "item": [
+        {
+          "name": "Place Stake",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/stakes",
+              "host": ["{{baseUrl}}"],
+              "path": ["stakes"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"podId\": \"podId123\",\n  \"stakeAmount\": 500\n}"
+            },
+            "description": "Place a stake on a pod. Requires auth."
+          }
+        },
+        {
+          "name": "Get User Stakes",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/stakes?status=active&page=1&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["stakes"],
+              "query": [
+                { "key": "status", "value": "active", "description": "Filter by status" },
+                { "key": "page", "value": "1", "description": "Page number" },
+                { "key": "limit", "value": "20", "description": "Results per page" }
+              ]
+            },
+            "description": "List authenticated user's stakes with optional status filter."
+          }
+        },
+        {
+          "name": "Get Active Stakes",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/stakes/active",
+              "host": ["{{baseUrl}}"],
+              "path": ["stakes", "active"]
+            },
+            "description": "Get all currently active stakes for the authenticated user."
+          }
+        },
+        {
+          "name": "Get Stake by ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/stakes/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["stakes", ":id"],
+              "variable": [
+                { "key": "id", "value": "stakeId123", "description": "Stake ID" }
+              ]
+            },
+            "description": "Get a single stake by its ID."
+          }
+        },
+        {
+          "name": "Calculate Payout",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/stakes/calculate?podId=podId123&stakeAmount=500",
+              "host": ["{{baseUrl}}"],
+              "path": ["stakes", "calculate"],
+              "query": [
+                { "key": "podId", "value": "podId123", "description": "Pod ID" },
+                { "key": "stakeAmount", "value": "500", "description": "Stake amount" }
+              ]
+            },
+            "description": "Calculate potential payout for a pod and stake amount."
+          }
+        },
+        {
+          "name": "Get Cashout Quote",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/stakes/:id/cashout/quote",
+              "host": ["{{baseUrl}}"],
+              "path": ["stakes", ":id", "cashout", "quote"],
+              "variable": [
+                { "key": "id", "value": "stakeId123", "description": "Stake ID" }
+              ]
+            },
+            "description": "Get cashout quote for a stake."
+          }
+        },
+        {
+          "name": "Confirm Cashout",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/stakes/:id/cashout/confirm",
+              "host": ["{{baseUrl}}"],
+              "path": ["stakes", ":id", "cashout", "confirm"],
+              "variable": [
+                { "key": "id", "value": "stakeId123", "description": "Stake ID" }
+              ]
+            },
+            "description": "Execute cashout for a stake."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Wallet",
+      "item": [
+        {
+          "name": "Get Balance",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/wallet/balance",
+              "host": ["{{baseUrl}}"],
+              "path": ["wallet", "balance"]
+            },
+            "description": "Get authenticated user's wallet balance."
+          }
+        },
+        {
+          "name": "Get Transactions",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/wallet/transactions?type=deposit&status=success&page=1&limit=20&startDate=2025-01-01&endDate=2026-12-31",
+              "host": ["{{baseUrl}}"],
+              "path": ["wallet", "transactions"],
+              "query": [
+                { "key": "type", "value": "deposit", "description": "Transaction type: deposit, withdrawal, stake, payout" },
+                { "key": "status", "value": "success", "description": "Transaction status" },
+                { "key": "page", "value": "1", "description": "Page number" },
+                { "key": "limit", "value": "20", "description": "Results per page" },
+                { "key": "startDate", "value": "2025-01-01", "description": "Start date filter" },
+                { "key": "endDate", "value": "2026-12-31", "description": "End date filter" }
+              ]
+            },
+            "description": "Get transaction history with optional filters."
+          }
+        },
+        {
+          "name": "Initiate Deposit",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/wallet/deposit",
+              "host": ["{{baseUrl}}"],
+              "path": ["wallet", "deposit"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 1000,\n  \"provider\": \"paystack\"\n}"
+            },
+            "description": "Initiate a deposit. Provider can be 'paystack' or 'flutterwave'."
+          }
+        },
+        {
+          "name": "Deposit Callback",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/wallet/deposit/callback?reference=REF_12345&provider=paystack",
+              "host": ["{{baseUrl}}"],
+              "path": ["wallet", "deposit", "callback"],
+              "query": [
+                { "key": "reference", "value": "REF_12345", "description": "Transaction reference" },
+                { "key": "provider", "value": "paystack", "description": "Payment provider" }
+              ]
+            },
+            "description": "Deposit callback endpoint (called by payment provider redirect). No auth required."
+          }
+        },
+        {
+          "name": "Initiate Withdrawal",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/wallet/withdraw",
+              "host": ["{{baseUrl}}"],
+              "path": ["wallet", "withdraw"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 5000,\n  \"bankCode\": \"058\",\n  \"accountNumber\": \"0123456789\",\n  \"accountName\": \"John Doe\",\n  \"narration\": \"Withdrawal\"\n}"
+            },
+            "description": "Initiate a withdrawal to a bank account."
+          }
+        },
+        {
+          "name": "List Banks",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/wallet/banks?provider=paystack",
+              "host": ["{{baseUrl}}"],
+              "path": ["wallet", "banks"],
+              "query": [
+                { "key": "provider", "value": "paystack", "description": "Provider to list banks for" }
+              ]
+            },
+            "description": "List supported banks. No auth required."
+          }
+        },
+        {
+          "name": "Resolve Bank Account",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/wallet/resolve-account?accountNumber=0123456789&bankCode=058",
+              "host": ["{{baseUrl}}"],
+              "path": ["wallet", "resolve-account"],
+              "query": [
+                { "key": "accountNumber", "value": "0123456789", "description": "Account number" },
+                { "key": "bankCode", "value": "058", "description": "Bank code" }
+              ]
+            },
+            "description": "Resolve and verify a bank account. No auth required."
+          }
+        },
+        {
+          "name": "Get Withdrawal Limits",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/wallet/limits",
+              "host": ["{{baseUrl}}"],
+              "path": ["wallet", "limits"]
+            },
+            "description": "Get withdrawal limits for the authenticated user."
+          }
+        }
+      ]
+    },
+    {
+      "name": "System",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            },
+            "description": "Health check endpoint. Returns API name, version, and timestamp."
+          }
+        }
+      ]
+    }
+  ]
+}

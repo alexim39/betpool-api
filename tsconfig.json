@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "commonjs",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "strict": true,
+    "moduleResolution": "node",
+    "baseUrl": "./src",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "types": ["node", "jest"],
+    "noImplicitAny": false,
+    "strictNullChecks": false,
+    "strictFunctionTypes": false,
+    "noImplicitReturns": false,
+    "noFallthroughCasesInSwitch": false,
+    "noImplicitReturns": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}
