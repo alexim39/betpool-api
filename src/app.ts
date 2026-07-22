@@ -30,7 +30,7 @@ class App {
     this.app.use(helmet());
     this.app.use(bodyParser.urlencoded({ extended: false }));
     this.app.use(bodyParser.json({ limit: '10kb' }));
-    const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:4200,http://localhost:4201,http://localhost:4300').split(',');
+    const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:4200,http://localhost:4201,http://localhost:4300,https://betpool.tech,http://betpool.tech,https://www.betpool.tech,www.betpool.tech,betpool.tech').split(',');
     this.app.use(cors({
       origin: corsOrigins,
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
