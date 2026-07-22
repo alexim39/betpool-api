@@ -28,13 +28,6 @@ class App {
       allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
       credentials: true
     }));
-    this.app.use((req, res, next) => {
-      if (req.method === 'OPTIONS') return next();
-      if (process.env.NODE_ENV === 'production' && !req.secure && req.get('X-Forwarded-Proto') !== 'https') {
-        return res.redirect(301, `https://${req.hostname}${req.originalUrl}`);
-      }
-      next();
-    });
     this.app.use(helmet());
     this.app.use(bodyParser.urlencoded({ extended: false }));
     this.app.use(bodyParser.json({ limit: '10kb' }));
