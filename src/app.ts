@@ -21,7 +21,7 @@ class App {
 
   private config(): void {
     this.app.set('trust proxy', 1);
-    const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:4200,http://localhost:4201,http://localhost:4300,https://betpool.tech,http://betpool.tech,https://www.betpool.tech').split(',');
+    const corsOrigins = ('http://localhost:4200,http://localhost:4201,http://localhost:4300,https://betpool.tech,http://betpool.tech,https://www.betpool.tech').split(',');
     this.app.use(cors({
       origin: corsOrigins,
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
