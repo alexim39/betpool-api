@@ -21,7 +21,15 @@ class App {
 
   private config(): void {
     this.app.set('trust proxy', 1);
+    const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:4200,http://localhost:4201,http://localhost:4300,https://betpool.tech,http://betpool.tech,https://www.betpool.tech').split(',');
+    this.app.use(cors({
+      origin: corsOrigins,
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+      credentials: true
+    }));
     this.app.use((req, res, next) => {
+      if (req.method === 'OPTIONS') return next();
       if (process.env.NODE_ENV === 'production' && !req.secure && req.get('X-Forwarded-Proto') !== 'https') {
         return res.redirect(301, `https://${req.hostname}${req.originalUrl}`);
       }
@@ -30,13 +38,6 @@ class App {
     this.app.use(helmet());
     this.app.use(bodyParser.urlencoded({ extended: false }));
     this.app.use(bodyParser.json({ limit: '10kb' }));
-    const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:4200,http://localhost:4201,http://localhost:4300,https://betpool.tech,http://betpool.tech,https://www.betpool.tech,www.betpool.tech,betpool.tech').split(',');
-    this.app.use(cors({
-      origin: corsOrigins,
-      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-      credentials: true
-    }));
   }
 
   private routes(): void {
