@@ -1,8 +1,8 @@
 import 'dotenv/config';
 import app from "./app";
-import { aiAutomationService } from './services/ai-automation.service';
-import { aiRiskService } from './services/ai-risk.service';
-import { aiBiService } from './services/ai-bi.service';
+import { aiAutomationService } from './modules/ai/ai-automation.service';
+import { aiRiskService } from './modules/ai/ai-risk.service';
+import { aiBiService } from './modules/ai/ai-bi.service';
 
 // set environment configs
 //dotenv.config({ path: './.env' });
