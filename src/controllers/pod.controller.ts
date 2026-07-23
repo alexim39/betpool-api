@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { podService, CreatePodData, UpdatePodData } from '../services/pod.service';
+import { podService } from '../services/pod.service';
 import { PodModel } from '../models/pod.model';
 
 export class PodController {
@@ -143,78 +143,6 @@ export class PodController {
     }
   }
 
-  async create(req: Request, res: Response): Promise<void> {
-    try {
-      const data = req.body as CreatePodData;
-      const pod = await podService.create(data);
-      res.status(201).json({ success: true, data: pod });
-    } catch (error) {
-      console.error('Create pod error:', error);
-      res.status(500).json({ success: false, message: 'Failed to create pod' });
-    }
-  }
-
-  async update(req: Request, res: Response): Promise<void> {
-    try {
-      const { id } = req.params;
-      const data = req.body as UpdatePodData;
-      const pod = await podService.update(id, data, new (require('mongoose').Types.ObjectId)(req.body.userId));
-      if (!pod) {
-        res.status(404).json({ success: false, message: 'Pod not found' });
-        return;
-      }
-      res.json({ success: true, data: pod });
-    } catch (error) {
-      console.error('Update pod error:', error);
-      res.status(500).json({ success: false, message: 'Failed to update pod' });
-    }
-  }
-
-  async publish(req: Request, res: Response): Promise<void> {
-    try {
-      const { id } = req.params;
-      const pod = await podService.publish(id);
-      if (!pod) {
-        res.status(404).json({ success: false, message: 'Pod not found' });
-        return;
-      }
-      res.json({ success: true, data: pod });
-    } catch (error) {
-      console.error('Publish pod error:', error);
-      res.status(500).json({ success: false, message: 'Failed to publish pod' });
-    }
-  }
-
-  async settle(req: Request, res: Response): Promise<void> {
-    try {
-      const { id } = req.params;
-      const { result, notes } = req.body;
-      const pod = await podService.settle(id, result, new (require('mongoose').Types.ObjectId)(req.body.userId), notes);
-      if (!pod) {
-        res.status(404).json({ success: false, message: 'Pod not found' });
-        return;
-      }
-      res.json({ success: true, data: pod });
-    } catch (error) {
-      console.error('Settle pod error:', error);
-      res.status(500).json({ success: false, message: 'Failed to settle pod' });
-    }
-  }
-
-  async cancel(req: Request, res: Response): Promise<void> {
-    try {
-      const { id } = req.params;
-      const pod = await podService.cancel(id);
-      if (!pod) {
-        res.status(404).json({ success: false, message: 'Pod not found' });
-        return;
-      }
-      res.json({ success: true, data: pod });
-    } catch (error) {
-      console.error('Cancel pod error:', error);
-      res.status(500).json({ success: false, message: 'Failed to cancel pod' });
-    }
-  }
 }
 
 export const podController = new PodController();

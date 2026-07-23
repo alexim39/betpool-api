@@ -34,7 +34,7 @@ export class UserService {
     if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET environment variable is required');
     return process.env.JWT_SECRET;
   })();
-  private readonly JWT_EXPIRY = '30d';
+  private readonly JWT_EXPIRY = process.env.JWT_EXPIRY || '7d';
 
   private generateReferralCode(): string {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';

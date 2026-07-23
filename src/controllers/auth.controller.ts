@@ -501,7 +501,9 @@ export class AuthController {
       }
 
       const updatedUser = await userService.submitKyc(userId, type, number);
-      await notifyKycApproved(userId).catch(e => console.error('notifyKycApproved error:', e));
+      if (updatedUser.kycVerified) {
+        await notifyKycApproved(userId).catch(e => console.error('notifyKycApproved error:', e));
+      }
       res.json({ success: true, data: { kycVerified: updatedUser.kycVerified, kycType: updatedUser.kycType } });
     } catch (error) {
       console.error('Submit KYC error:', error);

@@ -374,7 +374,7 @@ export class WalletService {
         user: userId,
         wallet: wallet._id,
         type: 'withdrawal',
-        status: 'processing',
+        status: 'pending',
         amount,
         fee: 0,
         netAmount: amount,
@@ -392,26 +392,11 @@ export class WalletService {
         }
       }], { session });
 
-      await notifyWithdrawalSubmitted(userId, amount, `${accountName} - ${accountNumber}`).catch(e => console.error('notifyWithdrawalSubmitted error:', e));
-
-      const transferResult = await this.processBankTransfer(transaction[0], bankCode, accountNumber, accountName, narration);
-
-      if (!transferResult.success) {
-        await session.abortTransaction();
-        await notifyWithdrawalFailed(userId, amount, transferResult.message || 'Transfer failed').catch(e => console.error('notifyWithdrawalFailed error:', e));
-        return { success: false, reference, message: transferResult.message || 'Transfer failed' };
-      }
-
-      transaction[0].status = 'completed';
-      transaction[0].completedAt = new Date();
-      transaction[0].providerData = transferResult.providerData;
-      await transaction[0].save({ session });
-
       await session.commitTransaction();
 
-      await notifyWithdrawalCompleted(userId, amount, `${accountName} - ${accountNumber}`).catch(e => console.error('notifyWithdrawalCompleted error:', e));
+      await notifyWithdrawalSubmitted(userId, amount, `${accountName} - ${accountNumber}`).catch(e => console.error('notifyWithdrawalSubmitted error:', e));
 
-      return { success: true, reference, message: 'Withdrawal processed successfully' };
+      return { success: true, reference, message: 'Withdrawal submitted for approval' };
     } catch (error) {
       await session.abortTransaction();
       throw error;
@@ -430,7 +415,7 @@ export class WalletService {
     return this.processPaystackTransfer(transaction, bankCode, accountNumber, accountName, narration);
   }
 
-  private async processPaystackTransfer(
+  async processPaystackTransfer(
     transaction: ITransaction,
     bankCode: string,
     accountNumber: string,
@@ -489,7 +474,7 @@ export class WalletService {
       balanceBefore: wallet.balance,
       balanceAfter: wallet.balance,
       currency: 'NGN',
-      reference: `STK_${stakeId}`,
+      reference: `STAKE_${stakeId}`,
       provider: 'internal',
       metadata: { description: 'Stake locked', stakeId }
     });

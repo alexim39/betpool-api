@@ -9,6 +9,7 @@ import { SettingsModel } from '../models/settings.model';
 import { AppError } from '../middleware/error.middleware';
 import { cacheService } from './cache.service';
 import { notifyWithdrawalCompleted, notifyWithdrawalFailed, notifyKycApproved } from './notification.service';
+import { walletService } from './wallet.service';
 
 interface PaginationQuery {
   page?: number;
@@ -806,11 +807,36 @@ export class AdminService {
       const transaction = await TransactionModel.findById(id).session(session);
       if (!transaction) throw new AppError('Transaction not found', 404);
       if (transaction.type !== 'withdrawal') throw new AppError('Not a withdrawal transaction', 400);
-      if (transaction.status !== 'processing') throw new AppError('Withdrawal is not in processing state', 400);
+      if (transaction.status !== 'pending') throw new AppError('Withdrawal is not in pending state', 400);
+
+      const meta = (transaction.metadata || {}) as any;
+      const transferResult = await walletService.processPaystackTransfer(
+        transaction, meta.bankCode, meta.accountNumber, meta.accountName, meta.narration
+      );
+
+      if (!transferResult.success) {
+        const wallet = await WalletModel.findOne({ user: transaction.user }).session(session);
+        if (wallet) {
+          wallet.balance += transaction.amount;
+          wallet.totalWithdrawn -= transaction.amount;
+          wallet.lastTransactionAt = new Date();
+          await wallet.save({ session });
+        }
+        transaction.status = 'failed';
+        transaction.failedAt = new Date();
+        transaction.failureReason = transferResult.message || 'Transfer failed';
+        transaction.providerData = { ...(transferResult.providerData || {}), approvedBy: adminId, approvedAt: new Date() };
+        await transaction.save({ session });
+        await session.commitTransaction();
+        notifyWithdrawalFailed(
+          transaction.user.toString(), transaction.amount, transferResult.message || 'Transfer failed'
+        ).catch(e => console.error('notifyWithdrawalFailed error:', e));
+        return { success: false, message: transferResult.message || 'Transfer failed', transaction };
+      }
 
       transaction.status = 'completed';
       transaction.completedAt = new Date();
-      transaction.providerData = { ...(transaction.providerData || {}), approvedBy: adminId, approvedAt: new Date() };
+      transaction.providerData = { ...(transferResult.providerData || {}), approvedBy: adminId, approvedAt: new Date() };
       await transaction.save({ session });
 
       await session.commitTransaction();
@@ -818,10 +844,10 @@ export class AdminService {
       notifyWithdrawalCompleted(
         transaction.user.toString(),
         transaction.amount,
-        transaction.metadata?.description || 'Bank transfer'
+        `${meta.accountName} - ${meta.accountNumber}`
       ).catch(e => console.error('notifyWithdrawalCompleted error:', e));
 
-      return { success: true, message: 'Withdrawal approved', transaction };
+      return { success: true, message: 'Withdrawal approved and processed', transaction };
     } catch (error) {
       await session.abortTransaction();
       throw error;
@@ -837,7 +863,7 @@ export class AdminService {
       const transaction = await TransactionModel.findById(id).session(session);
       if (!transaction) throw new AppError('Transaction not found', 404);
       if (transaction.type !== 'withdrawal') throw new AppError('Not a withdrawal transaction', 400);
-      if (transaction.status !== 'processing') throw new AppError('Withdrawal is not in processing state', 400);
+      if (transaction.status !== 'pending') throw new AppError('Withdrawal is not in pending state', 400);
 
       // Reverse the withdrawal: refund the wallet
       const wallet = await WalletModel.findOne({ user: transaction.user }).session(session);

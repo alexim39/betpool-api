@@ -91,7 +91,7 @@ router.post('/stakes', authMiddleware, stakeLimiter, validatePlaceStake, stakeCo
 router.get('/stakes', authMiddleware, stakeController.getUserStakes);
 router.get('/stakes/active', authMiddleware, stakeController.getActiveStakes);
 router.get('/stakes/:id', authMiddleware, stakeController.getStakeById);
-router.post('/stakes/calculate', authMiddleware, stakeController.calculatePayout);
+router.get('/stakes/calculate', authMiddleware, stakeController.calculatePayout);
 router.get('/stakes/:id/cashout/quote', authMiddleware, stakeController.getCashoutQuote);
 router.post('/stakes/:id/cashout/confirm', authMiddleware, stakeController.confirmCashout);
 
