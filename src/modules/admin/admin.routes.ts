@@ -3,6 +3,7 @@ import { adminController } from './admin.controller';
 import { settingsController } from './settings.controller';
 import { matchPoolController } from '../match-pools/match-pool.controller';
 import { podSyncController } from '../pods/pod-sync.controller';
+import { aiCurationController } from '../ai/ai-curation.controller';
 import { aiSettlementController } from '../ai/ai-settlement.controller';
 import { aiKycController } from '../ai/ai-kyc.controller';
 import { aiRiskController } from '../ai/ai-risk.controller';
@@ -42,6 +43,7 @@ router.post('/pods/:id/ai-settle', aiSettlementController.settlePod);
 router.post('/pods/:id/toggle-external-booking', adminController.toggleExternalBooking);
 router.post('/pods/:id/cancel', adminController.cancelPod);
 router.post('/pods/sync', podSyncController.sync);
+router.post('/ai/curate', aiCurationController.curate);
 router.post('/ai/settle-all', aiSettlementController.settleAll);
 
 // User management
