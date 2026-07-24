@@ -17,12 +17,14 @@ export class AdminController {
 
   async listPods(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const { page, limit, status, search } = req.query;
+      const { page, limit, status, search, dateFrom, dateTo } = req.query;
       const result = await adminService.listPods({
         page: page ? parseInt(page as string) : 1,
         limit: limit ? parseInt(limit as string) : 20,
         status: status as string,
-        search: search as string
+        search: search as string,
+        dateFrom: dateFrom as string,
+        dateTo: dateTo as string
       });
       res.json({ success: true, data: result });
     } catch (error) {
