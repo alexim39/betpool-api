@@ -75,6 +75,17 @@ const WalletSchema = new Schema({
   timestamps: true
 });
 
+// pre-save hook ensures balance is never negative (min:0 is bypassed by findOneAndUpdate with $inc)
+WalletSchema.pre('save', function(this: IWallet, next) {
+  if (this.balance < 0) {
+    return next(new Error('Wallet balance cannot be negative'));
+  }
+  if (this.lockedBalance < 0) {
+    return next(new Error('Locked balance cannot be negative'));
+  }
+  next();
+});
+
 WalletSchema.methods.availableBalance = function(this: IWallet): number {
   return this.balance - this.lockedBalance;
 };

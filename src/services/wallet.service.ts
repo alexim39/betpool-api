@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import crypto from 'crypto';
 import { WalletModel, IWallet } from '../models/wallet.model';
 import { TransactionModel, ITransaction } from '../models/transaction.model';
 import { StakeModel } from '../models/stake.model';
@@ -6,6 +7,8 @@ import { BankAccountModel, IBankAccount } from '../models/bank-account.model';
 import { paymentService } from './payment.service';
 import { userService } from './user.service';
 import { notifyDepositSuccess, notifyDepositFailed, notifyWithdrawalSubmitted, notifyWithdrawalCompleted, notifyWithdrawalFailed } from './notification.service';
+import { runTransaction } from '../utils/transaction';
+import { logger } from './logger.service';
 
 interface DepositResult {
   success: boolean;
@@ -22,7 +25,8 @@ interface WithdrawalResult {
 
 export class WalletService {
   private generateReference(prefix: string): string {
-    return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    const rand = crypto.randomBytes(4).toString('hex').toUpperCase();
+    return `${prefix}_${Date.now()}_${rand}`;
   }
 
   async getOrCreateWallet(userId: string): Promise<IWallet> {
@@ -129,18 +133,13 @@ export class WalletService {
     provider: 'paystack',
     providerData: Record<string, any>
   ): Promise<{ success: boolean; message: string }> {
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
-    try {
+    return runTransaction(async (session) => {
       const transaction = await TransactionModel.findOne({ reference }).session(session);
       if (!transaction) {
-        await session.abortTransaction();
         return { success: false, message: 'Transaction not found' };
       }
 
       if (transaction.status === 'completed') {
-        await session.abortTransaction();
         return { success: true, message: 'Already processed' };
       }
 
@@ -151,14 +150,12 @@ export class WalletService {
         transaction.failureReason = providerData.message || 'Payment failed';
         transaction.failedAt = new Date();
         await transaction.save({ session });
-        await session.commitTransaction();
-        await notifyDepositFailed(transaction.user.toString(), transaction.amount, providerData.message || 'Payment failed').catch(e => console.error('notifyDepositFailed error:', e));
+        await notifyDepositFailed(transaction.user.toString(), transaction.amount, providerData.message || 'Payment failed').catch(e => logger.error('notifyDepositFailed error', e));
         return { success: false, message: 'Payment not successful' };
       }
 
       const wallet = await WalletModel.findById(transaction.wallet).session(session);
       if (!wallet) {
-        await session.abortTransaction();
         return { success: false, message: 'Wallet not found' };
       }
 
@@ -176,16 +173,9 @@ export class WalletService {
       wallet.lastTransactionAt = new Date();
       await wallet.save({ session });
 
-      await session.commitTransaction();
-
-      await notifyDepositSuccess(transaction.user.toString(), transaction.amount, reference).catch(e => console.error('notifyDepositSuccess error:', e));
+      await notifyDepositSuccess(transaction.user.toString(), transaction.amount, reference).catch(e => logger.error('notifyDepositSuccess error', e));
       return { success: true, message: `₦${transaction.amount.toLocaleString()} deposited successfully` };
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
-      session.endSession();
-    }
+    });
   }
 
   async recoverPendingDeposits(userId: string): Promise<{ recovered: number; message: string }> {
@@ -201,53 +191,34 @@ export class WalletService {
     for (const txn of pendingTransactions) {
       const verification = await paymentService.verifyPaystackTransaction(txn.reference);
       if (verification && verification.status === 'success') {
-        const session = await mongoose.startSession();
-        session.startTransaction();
-
-        try {
+        const r = await runTransaction(async (session) => {
           const wallet = await WalletModel.findById(txn.wallet).session(session);
-          if (wallet) {
-            const newBalance = wallet.balance + txn.amount;
-            txn.status = 'completed';
-            txn.balanceBefore = wallet.balance;
-            txn.balanceAfter = newBalance;
-            txn.completedAt = new Date();
-            txn.externalReference = verification.channel;
-            if (txn.metadata && typeof txn.metadata === 'object') {
-              (txn.metadata as any).verifiedAt = new Date().toISOString();
-            }
-            await txn.save({ session });
-
-            wallet.balance = newBalance;
-            wallet.totalDeposited += txn.amount;
-            wallet.lastTransactionAt = new Date();
-            await wallet.save({ session });
-
-            await session.commitTransaction();
-            recovered++;
-          } else {
-            await session.abortTransaction();
+          if (!wallet) return false;
+          const newBalance = wallet.balance + txn.amount;
+          txn.status = 'completed';
+          txn.balanceBefore = wallet.balance;
+          txn.balanceAfter = newBalance;
+          txn.completedAt = new Date();
+          txn.externalReference = verification.channel;
+          if (txn.metadata && typeof txn.metadata === 'object') {
+            (txn.metadata as any).verifiedAt = new Date().toISOString();
           }
-        } catch (error) {
-          await session.abortTransaction();
-        } finally {
-          session.endSession();
-        }
-      } else if (verification === null) {
-        const session = await mongoose.startSession();
-        session.startTransaction();
+          await txn.save({ session });
 
-        try {
+          wallet.balance = newBalance;
+          wallet.totalDeposited += txn.amount;
+          wallet.lastTransactionAt = new Date();
+          await wallet.save({ session });
+          return true;
+        });
+        if (r) recovered++;
+      } else if (verification === null) {
+        await runTransaction(async (session) => {
           txn.status = 'failed';
           txn.failureReason = 'Payment verification failed';
           txn.failedAt = new Date();
           await txn.save({ session });
-          await session.commitTransaction();
-        } catch (error) {
-          await session.abortTransaction();
-        } finally {
-          session.endSession();
-        }
+        });
       }
     }
 
@@ -258,23 +229,17 @@ export class WalletService {
   }
 
   async verifyAndCreditDeposit(reference: string): Promise<{ success: boolean; message: string }> {
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
-    try {
+    return runTransaction(async (session) => {
       const transaction = await TransactionModel.findOne({ reference }).session(session);
       if (!transaction) {
-        await session.abortTransaction();
         return { success: false, message: 'Transaction not found' };
       }
 
       if (transaction.status === 'completed') {
-        await session.abortTransaction();
         return { success: true, message: 'Already processed' };
       }
 
       if (transaction.type !== 'deposit') {
-        await session.abortTransaction();
         return { success: false, message: 'Invalid transaction type' };
       }
 
@@ -284,13 +249,11 @@ export class WalletService {
         transaction.failureReason = 'Payment verification failed';
         transaction.failedAt = new Date();
         await transaction.save({ session });
-        await session.commitTransaction();
         return { success: false, message: 'Payment verification failed' };
       }
 
       const wallet = await WalletModel.findById(transaction.wallet).session(session);
       if (!wallet) {
-        await session.abortTransaction();
         return { success: false, message: 'Wallet not found' };
       }
 
@@ -311,16 +274,60 @@ export class WalletService {
       wallet.lastTransactionAt = new Date();
       await wallet.save({ session });
 
-      await session.commitTransaction();
-
-      await notifyDepositSuccess(transaction.user.toString(), transaction.amount, reference).catch(e => console.error('notifyDepositSuccess error:', e));
+      await notifyDepositSuccess(transaction.user.toString(), transaction.amount, reference).catch(e => logger.error('notifyDepositSuccess error', e));
       return { success: true, message: `₦${transaction.amount.toLocaleString()} deposited successfully` };
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
-      session.endSession();
-    }
+    });
+  }
+
+  async confirmWithdrawal(reference: string): Promise<{ success: boolean; message: string }> {
+    return runTransaction(async (session) => {
+      const transaction = await TransactionModel.findOne({ reference, type: 'withdrawal' }).session(session);
+      if (!transaction) {
+        return { success: false, message: 'Withdrawal transaction not found' };
+      }
+      if (transaction.status === 'completed') {
+        return { success: true, message: 'Already processed' };
+      }
+
+      transaction.status = 'completed';
+      transaction.completedAt = new Date();
+      await transaction.save({ session });
+
+      await notifyWithdrawalCompleted(transaction.user.toString(), transaction.amount, reference).catch(e => logger.error('notifyWithdrawalCompleted error', e));
+      return { success: true, message: 'Withdrawal completed' };
+    });
+  }
+
+  async failWithdrawal(reference: string): Promise<{ success: boolean; message: string }> {
+    return runTransaction(async (session) => {
+      const transaction = await TransactionModel.findOne({ reference, type: 'withdrawal' }).session(session);
+      if (!transaction) {
+        return { success: false, message: 'Withdrawal transaction not found' };
+      }
+      if (transaction.status === 'completed' || transaction.status === 'failed') {
+        return { success: true, message: 'Already processed' };
+      }
+
+      const wallet = await WalletModel.findById(transaction.wallet).session(session);
+      if (!wallet) {
+        return { success: false, message: 'Wallet not found' };
+      }
+
+      const refundAmount = transaction.amount;
+      wallet.balance += refundAmount;
+      wallet.totalWithdrawn -= refundAmount;
+      wallet.lastTransactionAt = new Date();
+      await wallet.save({ session });
+
+      transaction.status = 'failed';
+      transaction.failureReason = 'Paystack transfer failed';
+      transaction.failedAt = new Date();
+      transaction.balanceAfter = wallet.balance;
+      await transaction.save({ session });
+
+      await notifyWithdrawalFailed(transaction.user.toString(), transaction.amount, 'Transfer failed — funds returned to wallet').catch(e => logger.error('notifyWithdrawalFailed error', e));
+      return { success: true, message: 'Withdrawal marked failed, wallet re-credited' };
+    });
   }
 
   async initiateWithdrawal(
@@ -339,20 +346,14 @@ export class WalletService {
 
     const reference = this.generateReference('WDR');
 
-    const session = await mongoose.startSession();
-    session.startTransaction();
+    if (amount < 500) {
+      return { success: false, reference: '', message: 'Minimum withdrawal is ₦500' };
+    }
+    if (amount > 5_000_000) {
+      return { success: false, reference: '', message: 'Maximum withdrawal is ₦5,000,000' };
+    }
 
-    try {
-      if (amount < 500) {
-        await session.abortTransaction();
-        return { success: false, reference: '', message: 'Minimum withdrawal is ₦500' };
-      }
-      if (amount > 5_000_000) {
-        await session.abortTransaction();
-        return { success: false, reference: '', message: 'Maximum withdrawal is ₦5,000,000' };
-      }
-
-      // Atomically debit wallet — prevents race condition
+    return runTransaction(async (session) => {
       const wallet = await WalletModel.findOneAndUpdate(
         {
           user: userId,
@@ -366,11 +367,10 @@ export class WalletService {
       );
 
       if (!wallet) {
-        await session.abortTransaction();
         return { success: false, reference: '', message: 'Insufficient balance' };
       }
 
-      const transaction = await TransactionModel.create([{
+      await TransactionModel.create([{
         user: userId,
         wallet: wallet._id,
         type: 'withdrawal',
@@ -392,17 +392,10 @@ export class WalletService {
         }
       }], { session });
 
-      await session.commitTransaction();
-
-      await notifyWithdrawalSubmitted(userId, amount, `${accountName} - ${accountNumber}`).catch(e => console.error('notifyWithdrawalSubmitted error:', e));
+      await notifyWithdrawalSubmitted(userId, amount, `${accountName} - ${accountNumber}`).catch(e => logger.error('notifyWithdrawalSubmitted error', e));
 
       return { success: true, reference, message: 'Withdrawal submitted for approval' };
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
-      session.endSession();
-    }
+    });
   }
 
   private async processBankTransfer(
@@ -454,60 +447,69 @@ export class WalletService {
   }
 
   async lockBalance(userId: string, amount: number, stakeId: string): Promise<boolean> {
-    const wallet = await WalletModel.findOneAndUpdate(
-      { user: new mongoose.Types.ObjectId(userId),
-        $expr: { $gte: [{ $subtract: ['$balance', '$lockedBalance'] }, amount] }
-      },
-      { $inc: { lockedBalance: amount }, $set: { lastTransactionAt: new Date() } },
-      { new: true }
-    );
-    if (!wallet) return false;
+    return runTransaction(async (session) => {
+      const wallet = await WalletModel.findOneAndUpdate(
+        { user: new mongoose.Types.ObjectId(userId),
+          $expr: { $gte: [{ $subtract: ['$balance', '$lockedBalance'] }, amount] }
+        },
+        { $inc: { lockedBalance: amount }, $set: { lastTransactionAt: new Date() } },
+        { new: true, session }
+      );
+      if (!wallet) {
+        return false;
+      }
 
-    await TransactionModel.create({
-      user: userId,
-      wallet: wallet._id,
-      type: 'stake',
-      status: 'completed',
-      amount,
-      fee: 0,
-      netAmount: amount,
-      balanceBefore: wallet.balance,
-      balanceAfter: wallet.balance,
-      currency: 'NGN',
-      reference: `STAKE_${stakeId}`,
-      provider: 'internal',
-      metadata: { description: 'Stake locked', stakeId }
+      await TransactionModel.create([{
+        user: userId,
+        wallet: wallet._id,
+        type: 'stake',
+        status: 'completed',
+        amount,
+        fee: 0,
+        netAmount: amount,
+        balanceBefore: wallet.balance,
+        balanceAfter: wallet.balance,
+        currency: 'NGN',
+        reference: `STAKE_${stakeId}`,
+        provider: 'internal',
+        metadata: { description: 'Stake locked', stakeId }
+      }], { session });
+
+      return true;
     });
-    return true;
   }
 
   async unlockBalance(userId: string, amount: number, stakeId: string): Promise<boolean> {
-    const wallet = await WalletModel.findOneAndUpdate(
-      { user: new mongoose.Types.ObjectId(userId),
-        lockedBalance: { $gte: amount }
-      },
-      { $inc: { lockedBalance: -amount }, $set: { lastTransactionAt: new Date() } },
-      { new: true }
-    );
-    if (!wallet) return false;
+    return runTransaction(async (session) => {
+      const wallet = await WalletModel.findOneAndUpdate(
+        { user: new mongoose.Types.ObjectId(userId),
+          lockedBalance: { $gte: amount }
+        },
+        { $inc: { lockedBalance: -amount }, $set: { lastTransactionAt: new Date() } },
+        { new: true, session }
+      );
+      if (!wallet) {
+        return false;
+      }
 
-    await TransactionModel.create({
-      user: userId,
-      wallet: wallet._id,
-      type: 'stake_refund',
-      status: 'completed',
-      amount,
-      fee: 0,
-      netAmount: amount,
-      balanceBefore: wallet.balance,
-      balanceAfter: wallet.balance,
-      currency: 'NGN',
-      reference: `REF_${stakeId}`,
-      provider: 'internal',
-      metadata: { description: 'Stake refunded', stakeId }
+      await TransactionModel.create([{
+        user: userId,
+        wallet: wallet._id,
+        type: 'stake_refund',
+        status: 'completed',
+        amount,
+        fee: 0,
+        netAmount: amount,
+        balanceBefore: wallet.balance,
+        balanceAfter: wallet.balance,
+        currency: 'NGN',
+        reference: `REF_${stakeId}`,
+        provider: 'internal',
+        metadata: { description: 'Stake refunded', stakeId }
+      }], { session });
+
+      return true;
     });
-
-    return true;
   }
 
   async settleStake(
@@ -518,47 +520,54 @@ export class WalletService {
     netPayout: number,
     platformFee: number
   ): Promise<boolean> {
-    if (status === 'lost') {
-      await WalletModel.findOneAndUpdate(
+    return runTransaction(async (session) => {
+      if (status === 'lost') {
+        const wallet = await WalletModel.findOneAndUpdate(
+          { user: new mongoose.Types.ObjectId(userId),
+            lockedBalance: { $gte: stakeAmount }
+          },
+          { $inc: { lockedBalance: -stakeAmount }, $set: { lastTransactionAt: new Date() } },
+          { new: true, session }
+        );
+        if (!wallet) {
+          return false;
+        }
+        return true;
+      }
+
+      const amount = (status === 'won') ? netPayout : stakeAmount;
+      const description = status === 'won' ? 'Stake won' : (status === 'void' ? 'Stake voided' : 'Stake refunded');
+
+      const wallet = await WalletModel.findOneAndUpdate(
         { user: new mongoose.Types.ObjectId(userId),
           lockedBalance: { $gte: stakeAmount }
         },
-        { $inc: { lockedBalance: -stakeAmount }, $set: { lastTransactionAt: new Date() } },
-        { new: true }
+        { $inc: { lockedBalance: -stakeAmount, balance: amount, ...(status === 'won' ? { totalWon: netPayout } : {}) },
+          $set: { lastTransactionAt: new Date() } },
+        { new: true, session }
       );
+      if (!wallet) {
+        return false;
+      }
+
+      await TransactionModel.create([{
+        user: userId,
+        wallet: wallet._id,
+        type: status === 'won' ? 'payout' : 'refund',
+        status: 'completed',
+        amount,
+        fee: platformFee,
+        netAmount: amount,
+        balanceBefore: wallet.balance - amount,
+        balanceAfter: wallet.balance,
+        currency: 'NGN',
+        reference: `${(status === 'won' ? 'PAYOUT' : 'REFUND')}_${stakeId}`,
+        provider: 'internal',
+        metadata: { description, stakeId, platformFee }
+      }], { session });
+
       return true;
-    }
-
-    const amount = (status === 'won') ? netPayout : stakeAmount;
-    const description = status === 'won' ? 'Stake won' : (status === 'void' ? 'Stake voided' : 'Stake refunded');
-
-    const wallet = await WalletModel.findOneAndUpdate(
-      { user: new mongoose.Types.ObjectId(userId),
-        lockedBalance: { $gte: stakeAmount }
-      },
-      { $inc: { lockedBalance: -stakeAmount, balance: amount, ...(status === 'won' ? { totalWon: netPayout } : {}) },
-        $set: { lastTransactionAt: new Date() } },
-      { new: true }
-    );
-    if (!wallet) return false;
-
-    await TransactionModel.create({
-      user: userId,
-      wallet: wallet._id,
-      type: status === 'won' ? 'payout' : 'refund',
-      status: 'completed',
-      amount,
-      fee: platformFee,
-      netAmount: amount,
-      balanceBefore: wallet.balance - amount,
-      balanceAfter: wallet.balance,
-      currency: 'NGN',
-      reference: `${(status === 'won' ? 'PAYOUT' : 'REFUND')}_${stakeId}`,
-      provider: 'internal',
-      metadata: { description, stakeId, platformFee }
     });
-
-    return true;
   }
 
   async getTransactionHistory(

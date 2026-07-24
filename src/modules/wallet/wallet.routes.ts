@@ -11,10 +11,10 @@ const router = Router();
 
 router.get('/balance', authMiddleware, walletController.getBalance);
 router.get('/transactions', authMiddleware, walletController.getTransactions);
-router.post('/deposit', authMiddleware, validateDeposit, walletController.initiateDeposit);
+router.post('/deposit', authMiddleware, apiLimiter, validateDeposit, walletController.initiateDeposit);
 router.get('/deposit/callback', apiLimiter, walletController.depositCallback);
 router.post('/deposit/recover', authMiddleware, walletController.recoverDeposits);
-router.post('/withdraw', authMiddleware, validateWithdrawal, walletController.initiateWithdrawal);
+router.post('/withdraw', authMiddleware, apiLimiter, validateWithdrawal, walletController.initiateWithdrawal);
 router.get('/banks', apiLimiter, walletController.listBanks);
 router.get('/resolve-account', apiLimiter, walletController.resolveBankAccount);
 router.get('/limits', authMiddleware, walletController.getWithdrawalLimits);

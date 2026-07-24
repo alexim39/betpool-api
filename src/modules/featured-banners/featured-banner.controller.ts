@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import { AuthRequest } from '../../middleware/auth.middleware';
 import { FeaturedBannerModel } from './featured-banner.model';
 import { chatWithOra } from '../ai';
+import { logger } from '../../services/logger.service';
 
 export class FeaturedBannerController {
   async getActive(req: AuthRequest, res: Response): Promise<void> {
@@ -18,7 +19,7 @@ export class FeaturedBannerController {
 
       res.json({ success: true, data: banners });
     } catch (error) {
-      console.error('FeaturedBanner getActive error:', error);
+      logger.error('FeaturedBanner getActive error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch banners' });
     }
   }
@@ -31,7 +32,7 @@ export class FeaturedBannerController {
         .lean();
       res.json({ success: true, data: banners });
     } catch (error) {
-      console.error('FeaturedBanner adminList error:', error);
+      logger.error('FeaturedBanner adminList error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch banners' });
     }
   }
@@ -67,7 +68,7 @@ export class FeaturedBannerController {
 
       res.status(201).json({ success: true, data: banner });
     } catch (error) {
-      console.error('FeaturedBanner create error:', error);
+      logger.error('FeaturedBanner create error', error);
       res.status(500).json({ success: false, message: 'Failed to create banner' });
     }
   }
@@ -102,7 +103,7 @@ export class FeaturedBannerController {
 
       res.json({ success: true, data: banner });
     } catch (error) {
-      console.error('FeaturedBanner update error:', error);
+      logger.error('FeaturedBanner update error', error);
       res.status(500).json({ success: false, message: 'Failed to update banner' });
     }
   }
@@ -117,7 +118,7 @@ export class FeaturedBannerController {
       }
       res.json({ success: true, message: 'Banner deleted' });
     } catch (error) {
-      console.error('FeaturedBanner delete error:', error);
+      logger.error('FeaturedBanner delete error', error);
       res.status(500).json({ success: false, message: 'Failed to delete banner' });
     }
   }
@@ -140,7 +141,7 @@ export class FeaturedBannerController {
       const result = await chatWithOra(messages, req.user?.userId);
       res.json({ success: true, data: { description: result.content } });
     } catch (error) {
-      console.error('FeaturedBanner generateDescription error:', error);
+      logger.error('FeaturedBanner generateDescription error', error);
       res.status(500).json({ success: false, message: 'Failed to generate description' });
     }
   }

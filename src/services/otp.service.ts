@@ -98,7 +98,7 @@ export class OtpService {
     return otp;
   }
 
-  async verifyOTP(phone: string, code: string, purpose: 'signup' | 'login' | 'reset_pin' | 'verify_phone' | 'email_login'): Promise<{ valid: boolean; message?: string; user?: IUser }> {
+  async verifyOTP(phone: string, code: string, purpose: 'signup' | 'login' | 'reset_pin' | 'verify_phone' | 'email_login', consumeOnSuccess = true): Promise<{ valid: boolean; message?: string; user?: IUser }> {
     const otp = await OtpModel.findOne({ 
       phone, 
       purpose, 
@@ -127,8 +127,10 @@ export class OtpService {
       };
     }
 
-    otp.consumed = true;
-    await otp.save();
+    if (consumeOnSuccess) {
+      otp.consumed = true;
+      await otp.save();
+    }
 
     if (purpose === 'signup' || purpose === 'login') {
       const user = await UserModel.findOne({ phone });
@@ -155,7 +157,24 @@ export class OtpService {
     return { valid: true, message: 'Code verified successfully' };
   }
 
+  async consumeOTP(phone: string, purpose: 'signup' | 'login' | 'reset_pin' | 'verify_phone' | 'email_login'): Promise<void> {
+    await OtpModel.updateOne(
+      { phone, purpose, consumed: false },
+      { consumed: true }
+    );
+  }
+
   async resendOTP(phone: string, purpose: 'signup' | 'login' | 'reset_pin' | 'verify_phone' | 'email_login'): Promise<IOtp> {
+    // Enforce 30-second cooldown
+    const lastOtp = await OtpModel.findOne({ phone, purpose }).sort({ createdAt: -1 });
+    if (lastOtp) {
+      const elapsed = Date.now() - lastOtp.createdAt.getTime();
+      if (elapsed < 30000) {
+        const wait = Math.ceil((30000 - elapsed) / 1000);
+        throw new Error(`Please wait ${wait} seconds before requesting a new code`);
+      }
+    }
+
     await OtpModel.updateMany(
       { phone, purpose, consumed: false },
       { consumed: true }

@@ -85,8 +85,14 @@ export class StakeService {
       if (data.stakeAmount > pod.maxStake) {
         throw new Error(`Maximum stake is ₦${pod.maxStake.toLocaleString()}`);
       }
+      if (pod.bookedExternally) {
+        throw new Error('This pod is externally booked and not available for staking');
+      }
 
       const potentialPayout = Math.floor(data.stakeAmount * pod.gainsMultiplier);
+      if (pod.maxPayout && potentialPayout > pod.maxPayout) {
+        throw new Error(`Stake exceeds maximum payout of ₦${pod.maxPayout.toLocaleString()}`);
+      }
       const platformFee = Math.floor(potentialPayout * (this.PLATFORM_FEE_PERCENT / 100));
       const netPayout = potentialPayout - platformFee;
       const refundPercent = pod.refundPercent ?? 0;
@@ -280,6 +286,9 @@ export class StakeService {
         if (stakeAmount > pod.maxStake) {
           throw new Error(`Maximum stake is ₦${pod.maxStake.toLocaleString()} for "${pod.title}"`);
         }
+        if (pod.bookedExternally) {
+          throw new Error(`"${pod.title}" is externally booked and not available for staking`);
+        }
       }
 
       const combinedMultiplier = pods.reduce((acc, p) => acc * p.gainsMultiplier, 1);
@@ -408,10 +417,15 @@ export class StakeService {
     stakeId: string,
     result: 'win' | 'lost' | 'void',
     settledBy: string,
-    notes?: string
+    notes?: string,
+    existingSession?: mongoose.ClientSession
   ): Promise<IStake | null> {
-    const session = await mongoose.startSession();
-    session.startTransaction();
+    const ownsSession = !existingSession;
+    const session = existingSession || await mongoose.startSession();
+
+    if (ownsSession) {
+      session.startTransaction();
+    }
 
     try {
       const stake = await StakeModel.findById(stakeId).session(session);
@@ -485,13 +499,22 @@ export class StakeService {
         stake.settledOdds = stake.combinedMultiplier;
         await stake.save({ session });
 
-        await session.commitTransaction();
+        // Decrement exposure on all pods in the parlay
+        for (const item of stake.items) {
+          await PodModel.findByIdAndUpdate(item.pod, { $inc: { currentExposure: -stake.stakeAmount, currentParticipants: -1 } }).session(session);
+        }
 
-        const title = `${stake.items[0]?.homeTeam} vs ${stake.items[0]?.awayTeam} +${stake.items.length - 1}`;
-        if (result === 'win') {
-          await notifyStakeWon(stake.user.toString(), `${title} (parlay)`, payoutAmount).catch(e => console.error(e));
-        } else if (result === 'lost') {
-          await notifyStakeLost(stake.user.toString(), `${title} (parlay)`, stake.stakeAmount).catch(e => console.error(e));
+        if (ownsSession) {
+          await session.commitTransaction();
+        }
+
+        if (ownsSession) {
+          const title = `${stake.items[0]?.homeTeam} vs ${stake.items[0]?.awayTeam} +${stake.items.length - 1}`;
+          if (result === 'win') {
+            await notifyStakeWon(stake.user.toString(), `${title} (parlay)`, payoutAmount).catch(e => console.error(e));
+          } else if (result === 'lost') {
+            await notifyStakeLost(stake.user.toString(), `${title} (parlay)`, stake.stakeAmount).catch(e => console.error(e));
+          }
         }
 
         return stake;
@@ -557,21 +580,32 @@ export class StakeService {
       stake.settledOdds = pod.gainsMultiplier;
       await stake.save({ session });
 
-      await session.commitTransaction();
+      // Decrement pod exposure now that stake is settled
+      await PodModel.findByIdAndUpdate(stake.pod, { $inc: { currentExposure: -stake.stakeAmount, currentParticipants: -1 } }).session(session);
 
-      const notifPod = await PodModel.findById(stake.pod).select('title');
-      if (result === 'win') {
-        await notifyStakeWon(stake.user.toString(), notifPod?.title || 'Pod', payoutAmount).catch(e => console.error(e));
-      } else if (result === 'lost') {
-        await notifyStakeLost(stake.user.toString(), notifPod?.title || 'Pod', stake.stakeAmount - payoutAmount).catch(e => console.error(e));
+      if (ownsSession) {
+        await session.commitTransaction();
+      }
+
+      if (ownsSession) {
+        const notifPod = await PodModel.findById(stake.pod).select('title');
+        if (result === 'win') {
+          await notifyStakeWon(stake.user.toString(), notifPod?.title || 'Pod', payoutAmount).catch(e => console.error(e));
+        } else if (result === 'lost') {
+          await notifyStakeLost(stake.user.toString(), notifPod?.title || 'Pod', stake.stakeAmount - payoutAmount).catch(e => console.error(e));
+        }
       }
 
       return stake;
     } catch (error) {
-      await session.abortTransaction();
+      if (ownsSession) {
+        await session.abortTransaction();
+      }
       throw error;
     } finally {
-      session.endSession();
+      if (ownsSession) {
+        session.endSession();
+      }
     }
   }
 
@@ -705,6 +739,9 @@ export class StakeService {
       }], { session });
 
       await session.commitTransaction();
+
+      // Decrement pod exposure
+      await PodModel.findByIdAndUpdate(stake.pod, { $inc: { currentExposure: -stake.stakeAmount, currentParticipants: -1 } });
 
       const cashoutPod = await PodModel.findById(stake.pod).select('title');
       await notifyStakeCashedOut(userId, cashoutPod?.title || 'Pod', cashoutAmount).catch(e => console.error(e));

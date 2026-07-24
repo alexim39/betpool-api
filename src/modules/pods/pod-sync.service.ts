@@ -180,8 +180,8 @@ export class PodSyncService {
           if (existing) { result.skipped++; continue; }
 
           const matchDateObj = new Date(eventDate);
-          const opensAt = new Date(matchDateObj.getTime() - 2 * 60 * 60 * 1000);
-          const stakingClosesAt = new Date(matchDateObj.getTime() - 24 * 60 * 60 * 1000);
+          const opensAt = new Date(matchDateObj.getTime() - 24 * 60 * 60 * 1000);
+          const stakingClosesAt = new Date(matchDateObj.getTime() - 2 * 60 * 60 * 1000);
 
           const spreadFactor = 0.85;
           const adjustedMult = Math.round(sel.multiplier * spreadFactor * 100) / 100;

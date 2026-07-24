@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import Notification from '../../models/notification.model';
+import { logger } from '../../services/logger.service';
 
 export class NotificationController {
   async getNotifications(req: Request, res: Response): Promise<void> {
@@ -36,7 +37,7 @@ export class NotificationController {
         }
       });
     } catch (error) {
-      console.error('Get notifications error:', error);
+      logger.error('Get notifications error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch notifications' });
     }
   }
@@ -63,7 +64,7 @@ export class NotificationController {
 
       res.json({ success: true, data: notification });
     } catch (error) {
-      console.error('Mark notification read error:', error);
+      logger.error('Mark notification read error', error);
       res.status(500).json({ success: false, message: 'Failed to update notification' });
     }
   }
@@ -83,7 +84,7 @@ export class NotificationController {
 
       res.json({ success: true, message: 'All notifications marked as read' });
     } catch (error) {
-      console.error('Mark all read error:', error);
+      logger.error('Mark all read error', error);
       res.status(500).json({ success: false, message: 'Failed to mark notifications as read' });
     }
   }
@@ -110,7 +111,7 @@ export class NotificationController {
 
       res.json({ success: true, data: notification });
     } catch (error) {
-      console.error('Mark notification unread error:', error);
+      logger.error('Mark notification unread error', error);
       res.status(500).json({ success: false, message: 'Failed to update notification' });
     }
   }
@@ -133,7 +134,7 @@ export class NotificationController {
 
       res.json({ success: true, message: 'Notification deleted' });
     } catch (error) {
-      console.error('Delete notification error:', error);
+      logger.error('Delete notification error', error);
       res.status(500).json({ success: false, message: 'Failed to delete notification' });
     }
   }

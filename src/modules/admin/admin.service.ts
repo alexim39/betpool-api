@@ -10,6 +10,8 @@ import { AppError } from '../../middleware/error.middleware';
 import { cacheService } from '../../services/cache.service';
 import { notifyWithdrawalCompleted, notifyWithdrawalFailed, notifyKycApproved } from '../../services/notification.service';
 import { walletService } from '../../services/wallet.service';
+import { stakeService } from '../staking/stake.service';
+import { logger } from '../../services/logger.service';
 
 interface PaginationQuery {
   page?: number;
@@ -47,6 +49,8 @@ interface DashboardData {
 }
 
 export class AdminService {
+  private readonly PLATFORM_FEE_PERCENT = 10;
+
   async getDashboard(): Promise<DashboardData> {
     const now = new Date();
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -286,71 +290,16 @@ export class AdminService {
       }).session(session);
 
       for (const stake of activeStakes) {
-        // Skip parlay stakes — handled separately below
         if (stake.isParlay) continue;
-
-        const wallet = await WalletModel.findOne({ user: stake.user }).session(session);
-        if (!wallet) continue;
-
-        let payoutAmount = 0;
-        let txType = 'refund';
-        let newStatus: IStake['status'] = 'lost';
-
-        if (result === 'win') {
-          payoutAmount = stake.netPayout;
-          wallet.balance += payoutAmount;
-          wallet.totalWon += payoutAmount;
-          newStatus = 'won';
-          txType = 'payout';
-        } else if (result === 'void') {
-          payoutAmount = stake.stakeAmount;
-          wallet.balance += payoutAmount;
-          newStatus = 'void';
-          txType = 'refund';
-        } else {
-          payoutAmount = stake.refundAmount ?? 0;
-          wallet.balance += payoutAmount;
-          newStatus = 'lost';
-          txType = 'refund';
-        }
-
-        wallet.lastTransactionAt = new Date();
-        await wallet.save({ session });
-
-        if (payoutAmount > 0) {
-          const isPartialRefund = result === 'loss' && payoutAmount < stake.stakeAmount;
-          await TransactionModel.create([{
-            user: stake.user,
-            wallet: wallet._id,
-            type: txType,
-            status: 'completed',
-            amount: payoutAmount,
-            fee: result === 'win' ? stake.platformFee : 0,
-            netAmount: payoutAmount,
-            balanceBefore: wallet.balance - payoutAmount,
-            balanceAfter: wallet.balance,
-            currency: 'NGN',
-            reference: `POD_${result.toUpperCase()}_${stake._id}`,
-            provider: 'internal',
-            metadata: {
-              podId: id,
-              stakeId: stake._id,
-              description: isPartialRefund
-                ? `Pod lost — ${stake.refundPercent}% refund (₦${payoutAmount.toLocaleString()}) of ₦${stake.stakeAmount.toLocaleString()} stake`
-                : result === 'win' ? 'Pod won' : 'Pod voided - stake refunded',
-              originalStake: stake.stakeAmount,
-              refundPercent: stake.refundPercent,
-              refundAmount: payoutAmount
-            }
-          }], { session });
-        }
-
-        stake.status = newStatus;
-        stake.settledAt = new Date();
-        stake.settledBy = new mongoose.Types.ObjectId(settledBy);
-        stake.settlementNotes = notes || `Pod ${result}`;
-        stake.settledOdds = pod.gainsMultiplier;
-        await stake.save({ session });
+        const settlementNotes = notes || `Pod ${result}`;
+        const stakeResult = result === 'loss' ? 'lost' : result;
+        await stakeService.settleStake(
+          stake._id.toString(),
+          stakeResult,
+          settledBy,
+          settlementNotes,
+          session
+        );
       }
 
       // 2. Handle parlay stakes referencing this pod via items
@@ -389,6 +338,7 @@ export class AdminService {
         let payoutAmount = 0;
         let txType = 'refund';
         let newStatus: IStake['status'] = 'lost';
+        let parlayFee = 0;
 
         if (allWon) {
           payoutAmount = stake.netPayout;
@@ -396,22 +346,21 @@ export class AdminService {
           wallet.totalWon += payoutAmount;
           newStatus = 'won';
           txType = 'payout';
+          parlayFee = stake.platformFee;
         } else if (allVoid) {
           payoutAmount = stake.stakeAmount;
           wallet.balance += payoutAmount;
           newStatus = 'void';
           txType = 'refund';
         } else if (hasLoss) {
-          // Any loss = parlay lost, no refund
           payoutAmount = 0;
           newStatus = 'lost';
           txType = 'refund';
         } else {
-          // Mixed void + won: recalculate for remaining legs
           const activeItems = stake.items.filter(i => i.status === 'won');
           const recalculatedMultiplier = activeItems.reduce((acc, i) => acc * i.gainsMultiplier, 1);
           const recalculatedPayout = Math.floor(stake.stakeAmount * recalculatedMultiplier);
-          const recalculatedFee = Math.floor(recalculatedPayout * 10 / 100);
+          const recalculatedFee = Math.floor(recalculatedPayout * (this.PLATFORM_FEE_PERCENT / 100));
           const recalculatedNet = recalculatedPayout - recalculatedFee;
 
           payoutAmount = recalculatedNet;
@@ -419,6 +368,7 @@ export class AdminService {
           wallet.totalWon += payoutAmount;
           newStatus = 'won';
           txType = 'payout';
+          parlayFee = recalculatedFee;
         }
 
         wallet.lastTransactionAt = new Date();
@@ -431,7 +381,7 @@ export class AdminService {
             type: txType,
             status: 'completed',
             amount: payoutAmount,
-            fee: newStatus === 'won' ? stake.platformFee : 0,
+            fee: newStatus === 'won' ? parlayFee : 0,
             netAmount: payoutAmount,
             balanceBefore: wallet.balance - payoutAmount,
             balanceAfter: wallet.balance,
@@ -454,6 +404,11 @@ export class AdminService {
         stake.settlementNotes = notes || `Parlay ${result}`;
         stake.settledOdds = stake.combinedMultiplier;
         await stake.save({ session });
+
+        // Decrement exposure for each pod in the fully-settled parlay
+        for (const item of stake.items) {
+          await PodModel.findByIdAndUpdate(item.pod, { $inc: { currentExposure: -stake.stakeAmount } }).session(session);
+        }
       }
 
       const podResult = result === 'win' ? 'win' : result === 'loss' ? 'loss' : 'void';
@@ -757,7 +712,7 @@ export class AdminService {
     await user.save();
 
     if (wasApproved) {
-      notifyKycApproved(id).catch(e => console.error('notifyKycApproved error:', e));
+      notifyKycApproved(id).catch(e => logger.error('notifyKycApproved error', e));
     }
 
     return user;
@@ -830,7 +785,7 @@ export class AdminService {
         await session.commitTransaction();
         notifyWithdrawalFailed(
           transaction.user.toString(), transaction.amount, transferResult.message || 'Transfer failed'
-        ).catch(e => console.error('notifyWithdrawalFailed error:', e));
+        ).catch(e => logger.error('notifyWithdrawalFailed error', e));
         return { success: false, message: transferResult.message || 'Transfer failed', transaction };
       }
 
@@ -845,7 +800,7 @@ export class AdminService {
         transaction.user.toString(),
         transaction.amount,
         `${meta.accountName} - ${meta.accountNumber}`
-      ).catch(e => console.error('notifyWithdrawalCompleted error:', e));
+      ).catch(e => logger.error('notifyWithdrawalCompleted error', e));
 
       return { success: true, message: 'Withdrawal approved and processed', transaction };
     } catch (error) {
@@ -886,7 +841,7 @@ export class AdminService {
         transaction.user.toString(),
         transaction.amount,
         reason
-      ).catch(e => console.error('notifyWithdrawalFailed error:', e));
+      ).catch(e => logger.error('notifyWithdrawalFailed error', e));
 
       return { success: true, message: 'Withdrawal rejected and refunded', transaction };
     } catch (error) {

@@ -6,6 +6,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import routes from './routes';
 import { errorHandler } from './middleware/error.middleware';
+import { logger } from './services/logger.service';
 
 dotenv.config({ path: './.env' });
 
@@ -49,8 +50,8 @@ class App {
       serverSelectionTimeoutMS: 5000,
       socketTimeoutMS: 45000,
     })
-      .then(() => console.log('MongoDB connected'))
-      .catch((error) => console.error('MongoDB connection error:', error));
+      .then(() => logger.info('MongoDB connected'))
+      .catch((error) => logger.error('MongoDB connection error', error));
   }
 }
 

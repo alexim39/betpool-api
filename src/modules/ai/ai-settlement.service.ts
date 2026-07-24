@@ -3,6 +3,7 @@ import { PodModel, IPod } from '../../models/pod.model';
 import { AdminService } from '../admin/admin.service';
 import { UserModel } from '../../models/user.model';
 import { createInAppNotification } from '../../services/notification.service';
+import { logger } from '../../services/logger.service';
 
 export interface SettlementCheckResult {
   podId: string;
@@ -315,9 +316,12 @@ export class AISettlementService {
     const disputed = await PodModel.countDocuments({ settlementDisputed: true, status: { $in: ['active', 'published'] } });
     const stuck = await PodModel.countDocuments({
       status: { $in: ['active', 'published'] },
+      matchDate: { $lte: new Date() },
       $or: [
         { 'metadata.fixtureId': { $exists: false } },
         { 'metadata.fixtureId': null },
+        { settlementStatus: { $in: ['disputed', 'stuck'] } },
+        { settlementStatus: { $exists: false } },
       ],
     });
     return { disputed, stuck };
@@ -398,7 +402,7 @@ Return ONLY a JSON object:
       });
     } catch (e: any) {
       clearTimeout(timeoutId);
-      console.error(`[AI Settlement] DeepSeek call failed: ${e.message}`);
+      logger.error('[AI Settlement] DeepSeek call failed', e.message);
       return null;
     }
     clearTimeout(timeoutId);

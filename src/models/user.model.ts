@@ -8,6 +8,9 @@ export interface IUser extends mongoose.Document {
   email?: string;
   pinHash: string;
   role: 'user' | 'admin';
+  tokenVersion: number;
+  failedLoginAttempts: number;
+  lockedUntil?: Date;
   phoneVerified: boolean;
   kycVerified: boolean;
   kycType: 'bvn' | 'nin' | null;
@@ -96,6 +99,18 @@ export const UserSchema = new Schema({
   referredBy: {
     type: Schema.Types.ObjectId,
     ref: 'User'
+  },
+  tokenVersion: {
+    type: Number,
+    default: 0
+  },
+  failedLoginAttempts: {
+    type: Number,
+    default: 0
+  },
+  lockedUntil: {
+    type: Date,
+    default: null
   },
   isActive: {
     type: Boolean,

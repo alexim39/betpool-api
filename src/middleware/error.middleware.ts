@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { logger } from '../services/logger.service';
 
 export class AppError extends Error {
   statusCode: number;
@@ -15,7 +16,7 @@ export const errorHandler = (err: Error, _req: Request, res: Response, _next: Ne
   const message = err.message || 'Internal server error';
 
   if (process.env.NODE_ENV !== 'production') {
-    console.error('Error:', err);
+    logger.error('Error', err);
   }
 
   res.status(statusCode).json({

@@ -33,7 +33,7 @@ export class AuthController {
         ...(isDev ? { debugCode: otp.code } : {})
       });
     } catch (error) {
-      console.error('Request signup OTP error:', error);
+      logger.error('Request signup OTP error', error);
       res.status(500).json({ success: false, message: 'Failed to send OTP' });
     }
   }
@@ -46,7 +46,7 @@ export class AuthController {
         return;
       }
 
-      const result = await otpService.verifyOTP(phone, code, 'signup');
+      const result = await otpService.verifyOTP(phone, code, 'signup', false);
       if (!result.valid) {
         res.status(400).json({ success: false, message: result.message });
         return;
@@ -54,7 +54,7 @@ export class AuthController {
 
       res.json({ success: true, message: 'Phone verified. Complete registration.' });
     } catch (error) {
-      console.error('Verify signup OTP error:', error);
+      logger.error('Verify signup OTP error', error);
       res.status(500).json({ success: false, message: 'Verification failed' });
     }
   }
@@ -67,22 +67,22 @@ export class AuthController {
         return;
       }
 
-      if (!/^\d{4}$/.test(pin)) {
-        res.status(400).json({ success: false, message: 'PIN must be 4 digits' });
+      if (!/^\d{6}$/.test(pin)) {
+        res.status(400).json({ success: false, message: 'PIN must be 6 digits' });
         return;
       }
 
       const result = await userService.signup({ phone, fullName, pin, referralCode, email, code });
-      await notifyWelcome(result.user._id.toString()).catch(e => console.error('notifyWelcome error:', e));
+      await notifyWelcome(result.user._id.toString()).catch(e => logger.error('notifyWelcome error', e));
       if (result.user.referredBy) {
         const referrer = await UserModel.findById(result.user.referredBy).select('fullName').lean();
         if (referrer) {
-          notifyReferralUsed(result.user.referredBy.toString(), result.user.fullName).catch(e => console.error('notifyReferralUsed error:', e));
+          notifyReferralUsed(result.user.referredBy.toString(), result.user.fullName).catch(e => logger.error('notifyReferralUsed error', e));
         }
       }
       res.json({ success: true, data: { user: result.user, token: result.token } });
     } catch (error: any) {
-      console.error('Complete signup error:', error);
+      logger.error('Complete signup error', error);
       res.status(400).json({ success: false, message: error.message || 'Registration failed' });
     }
   }
@@ -113,7 +113,7 @@ export class AuthController {
         ...(isDev ? { debugCode: otp.code } : {})
       });
     } catch (error) {
-      console.error('Request login OTP error:', error);
+      logger.error('Request login OTP error', error);
       res.status(500).json({ success: false, message: 'Failed to send login code' });
     }
   }
@@ -134,7 +134,7 @@ export class AuthController {
 
       res.json({ success: true, data: { user: result.user, token: result.token } });
     } catch (error: any) {
-      console.error('Verify login OTP error:', error);
+      logger.error('Verify login OTP error', error);
       res.status(400).json({ success: false, message: error.message || 'Login failed' });
     }
   }
@@ -148,21 +148,44 @@ export class AuthController {
       }
 
       const user = await userService.getUserByEmail(email);
-
       if (!user) {
-        const existingAdmin = await UserModel.findOne({ role: 'admin' }).lean();
-        if (existingAdmin) {
-          res.status(400).json({ success: false, message: 'Account not found with that email' });
-          return;
-        }
-        await userService.provisionFirstAdmin(email);
+        res.status(400).json({ success: false, message: 'Account not found with that email' });
+        return;
       }
 
       await otpService.createOTP(email.toLowerCase().trim(), 'email_login');
       res.json({ success: true, message: 'Login token sent to your email' });
     } catch (error) {
-      console.error('Request email login token error:', error);
+      logger.error('Request email login token error', error);
       res.status(500).json({ success: false, message: 'Failed to send email token' });
+    }
+  }
+
+  async setupAdmin(req: Request, res: Response): Promise<void> {
+    try {
+      const { email, fullName, setupKey } = req.body;
+      if (!email || !fullName || !setupKey) {
+        res.status(400).json({ success: false, message: 'Email, full name, and setup key required' });
+        return;
+      }
+
+      const requiredKey = process.env.ADMIN_SETUP_KEY;
+      if (!requiredKey || setupKey !== requiredKey) {
+        res.status(403).json({ success: false, message: 'Invalid setup key' });
+        return;
+      }
+
+      const existingAdmin = await UserModel.findOne({ role: 'admin' }).lean();
+      if (existingAdmin) {
+        res.status(400).json({ success: false, message: 'Admin already exists. Use existing admin login.' });
+        return;
+      }
+
+      await userService.provisionFirstAdmin(email);
+      res.json({ success: true, message: 'Admin account created. Check your email for login code.' });
+    } catch (error) {
+      logger.error('Setup admin error', error);
+      res.status(500).json({ success: false, message: 'Failed to create admin account' });
     }
   }
 
@@ -182,7 +205,7 @@ export class AuthController {
 
       res.json({ success: true, data: { user: result.user, token: result.token } });
     } catch (error: any) {
-      console.error('Verify email login error:', error);
+      logger.error('Verify email login error', error);
       res.status(400).json({ success: false, message: error.message || 'Login failed' });
     }
   }
@@ -221,7 +244,7 @@ export class AuthController {
       await user.save();
       res.json({ success: true, data: { user, token } });
     } catch (error: any) {
-      console.error('PIN login error:', error);
+      logger.error('PIN login error', error);
       res.status(401).json({ success: false, message: error.message || 'Invalid credentials' });
     }
   }
@@ -237,7 +260,7 @@ export class AuthController {
       await userService.requestPinReset(phone);
       res.json({ success: true, message: 'PIN reset code sent via SMS' });
     } catch (error) {
-      console.error('Request PIN reset error:', error);
+      logger.error('Request PIN reset error', error);
       res.status(500).json({ success: false, message: 'Failed to send reset code' });
     }
   }
@@ -251,14 +274,14 @@ export class AuthController {
       }
 
       if (!/^\d{4}$/.test(newPin)) {
-        res.status(400).json({ success: false, message: 'PIN must be 4 digits' });
+        res.status(400).json({ success: false, message: 'PIN must be 6 digits' });
         return;
       }
 
       await userService.resetPin(phone, code, newPin);
       res.json({ success: true, message: 'PIN reset successfully' });
     } catch (error: any) {
-      console.error('Reset PIN error:', error);
+      logger.error('Reset PIN error', error);
       res.status(400).json({ success: false, message: error.message || 'PIN reset failed' });
     }
   }
@@ -278,15 +301,15 @@ export class AuthController {
       }
 
       if (!/^\d{4}$/.test(newPin)) {
-        res.status(400).json({ success: false, message: 'PIN must be 4 digits' });
+        res.status(400).json({ success: false, message: 'PIN must be 6 digits' });
         return;
       }
 
       await userService.changePin(userId, currentPin, newPin);
-      await notifyPinChanged(userId).catch(e => console.error('notifyPinChanged error:', e));
+      await notifyPinChanged(userId).catch(e => logger.error('notifyPinChanged error', e));
       res.json({ success: true, message: 'PIN changed successfully' });
     } catch (error: any) {
-      console.error('Change PIN error:', error);
+      logger.error('Change PIN error', error);
       res.status(400).json({ success: false, message: error.message || 'Failed to change PIN' });
     }
   }
@@ -307,7 +330,7 @@ export class AuthController {
 
       res.json({ success: true, data: user });
     } catch (error) {
-      console.error('Get profile error:', error);
+      logger.error('Get profile error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch profile' });
     }
   }
@@ -329,7 +352,7 @@ export class AuthController {
 
       res.json({ success: true, data: user });
     } catch (error: any) {
-      console.error('Update profile error:', error.message);
+      logger.error('Update profile error', error.message);
       const message = error.message?.includes('already in use')
         ? error.message
         : 'Failed to update profile';
@@ -354,8 +377,21 @@ export class AuthController {
         ...(isDev ? { debugCode: otp.code } : {})
       });
     } catch (error) {
-      console.error('Resend OTP error:', error);
+      logger.error('Resend OTP error', error);
       res.status(500).json({ success: false, message: 'Failed to resend OTP' });
+    }
+  }
+
+  async logout(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = (req as any).user?.userId;
+      if (userId) {
+        await userService.logout(userId);
+      }
+      res.json({ success: true, message: 'Logged out successfully' });
+    } catch (error) {
+      logger.error('Logout error', error);
+      res.status(500).json({ success: false, message: 'Logout failed' });
     }
   }
 
@@ -376,7 +412,7 @@ export class AuthController {
 
       res.json({ success: true, token: newToken });
     } catch (error) {
-      console.error('Refresh token error:', error);
+      logger.error('Refresh token error', error);
       res.status(500).json({ success: false, message: 'Token refresh failed' });
     }
   }
@@ -398,7 +434,7 @@ export class AuthController {
 
       res.json({ success: true, data: user });
     } catch (error) {
-      console.error('Verify token error:', error);
+      logger.error('Verify token error', error);
       res.status(500).json({ success: false, message: 'Token verification failed' });
     }
   }
@@ -414,7 +450,7 @@ export class AuthController {
       const stats = await userService.getReferralStats(userId);
       res.json({ success: true, data: stats });
     } catch (error: any) {
-      console.error('Referral stats error:', error);
+      logger.error('Referral stats error', error);
       res.status(400).json({ success: false, message: error.message || 'Failed to fetch referral stats' });
     }
   }
@@ -430,7 +466,7 @@ export class AuthController {
       const result = await userService.checkReferralCode(code);
       res.json({ success: true, data: result });
     } catch (error) {
-      console.error('Check referral code error:', error);
+      logger.error('Check referral code error', error);
       res.status(500).json({ success: false, message: 'Failed to check referral code' });
     }
   }
@@ -457,7 +493,7 @@ export class AuthController {
         ...(isDev ? { debugCode: 'Use /auth/otp/resend for debug' } : {})
       });
     } catch (error) {
-      console.error('Request phone verification error:', error);
+      logger.error('Request phone verification error', error);
       res.status(500).json({ success: false, message: 'Failed to send verification code' });
     }
   }
@@ -475,7 +511,7 @@ export class AuthController {
       delete (userJson as any).pinHash;
       res.json({ success: true, message: 'Phone verified successfully', data: { phoneVerified: true, user: userJson } });
     } catch (error: any) {
-      console.error('Confirm phone verification error:', error);
+      logger.error('Confirm phone verification error', error);
       res.status(400).json({ success: false, message: error.message || 'Verification failed' });
     }
   }
@@ -502,11 +538,11 @@ export class AuthController {
 
       const updatedUser = await userService.submitKyc(userId, type, number);
       if (updatedUser.kycVerified) {
-        await notifyKycApproved(userId).catch(e => console.error('notifyKycApproved error:', e));
+        await notifyKycApproved(userId).catch(e => logger.error('notifyKycApproved error', e));
       }
       res.json({ success: true, data: { kycVerified: updatedUser.kycVerified, kycType: updatedUser.kycType } });
     } catch (error) {
-      console.error('Submit KYC error:', error);
+      logger.error('Submit KYC error', error);
       res.status(500).json({ success: false, message: 'KYC submission failed' });
     }
   }
@@ -536,7 +572,7 @@ export class AuthController {
         }
       });
     } catch (error) {
-      console.error('Get KYC status error:', error);
+      logger.error('Get KYC status error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch KYC status' });
     }
   }

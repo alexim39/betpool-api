@@ -3,6 +3,7 @@ import { AuthRequest } from '../../middleware/auth.middleware';
 import { adminService } from './admin.service';
 import { aiSettlementService } from '../ai';
 import { LoanModel } from './loan.model';
+import { logger } from '../../services/logger.service';
 
 export class AdminController {
   async getDashboard(req: AuthRequest, res: Response): Promise<void> {
@@ -10,7 +11,7 @@ export class AdminController {
       const data = await adminService.getDashboard();
       res.json({ success: true, data });
     } catch (error) {
-      console.error('Admin dashboard error:', error);
+      logger.error('Admin dashboard error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch dashboard' });
     }
   }
@@ -28,7 +29,7 @@ export class AdminController {
       });
       res.json({ success: true, data: result });
     } catch (error) {
-      console.error('Admin list pods error:', error);
+      logger.error('Admin list pods error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch pods' });
     }
   }
@@ -43,7 +44,7 @@ export class AdminController {
       }
       res.json({ success: true, data: pod });
     } catch (error) {
-      console.error('Admin get pod error:', error);
+      logger.error('Admin get pod error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch pod' });
     }
   }
@@ -54,7 +55,7 @@ export class AdminController {
       const pod = await adminService.createPod(req.body, userId);
       res.status(201).json({ success: true, data: pod });
     } catch (error: any) {
-      console.error('Admin create pod error:', error);
+      logger.error('Admin create pod error', error);
       res.status(400).json({ success: false, message: error.message || 'Failed to create pod' });
     }
   }
@@ -70,7 +71,7 @@ export class AdminController {
       }
       res.json({ success: true, data: pod });
     } catch (error: any) {
-      console.error('Admin update pod error:', error);
+      logger.error('Admin update pod error', error);
       res.status(400).json({ success: false, message: error.message || 'Failed to update pod' });
     }
   }
@@ -85,7 +86,7 @@ export class AdminController {
       }
       res.json({ success: true, data: pod });
     } catch (error) {
-      console.error('Admin publish pod error:', error);
+      logger.error('Admin publish pod error', error);
       res.status(500).json({ success: false, message: 'Failed to publish pod' });
     }
   }
@@ -96,7 +97,7 @@ export class AdminController {
       const pod = await adminService.activatePod(id);
       res.json({ success: true, data: pod });
     } catch (error: any) {
-      console.error('Admin activate pod error:', error);
+      logger.error('Admin activate pod error', error);
       res.status(400).json({ success: false, message: error.message || 'Failed to activate pod' });
     }
   }
@@ -128,7 +129,7 @@ export class AdminController {
       const pod = await adminService.settlePod(id, result, userId, notes, finalHomeScore, finalAwayScore);
       res.json({ success: true, data: pod });
     } catch (error: any) {
-      console.error('Admin settle pod error:', error);
+      logger.error('Admin settle pod error', error);
       res.status(400).json({ success: false, message: error.message || 'Failed to settle pod' });
     }
   }
@@ -140,7 +141,7 @@ export class AdminController {
       const pod = await adminService.cancelPod(id, userId);
       res.json({ success: true, data: pod });
     } catch (error: any) {
-      console.error('Admin cancel pod error:', error);
+      logger.error('Admin cancel pod error', error);
       res.status(400).json({ success: false, message: error.message || 'Failed to cancel pod' });
     }
   }
@@ -155,7 +156,7 @@ export class AdminController {
       });
       res.json({ success: true, data: result });
     } catch (error) {
-      console.error('Admin list users error:', error);
+      logger.error('Admin list users error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch users' });
     }
   }
@@ -170,7 +171,7 @@ export class AdminController {
       }
       res.json({ success: true, data: result });
     } catch (error) {
-      console.error('Admin get user error:', error);
+      logger.error('Admin get user error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch user' });
     }
   }
@@ -186,7 +187,7 @@ export class AdminController {
       const statusText = user.isSuspended ? 'suspended' : 'active';
       res.json({ success: true, data: user, message: `User ${statusText}` });
     } catch (error) {
-      console.error('Admin toggle user status error:', error);
+      logger.error('Admin toggle user status error', error);
       res.status(500).json({ success: false, message: 'Failed to toggle user status' });
     }
   }
@@ -202,7 +203,7 @@ export class AdminController {
       const statusText = user.kycVerified ? 'verified' : 'unverified';
       res.json({ success: true, data: user, message: `KYC ${statusText}` });
     } catch (error) {
-      console.error('Admin verify KYC error:', error);
+      logger.error('Admin verify KYC error', error);
       res.status(500).json({ success: false, message: 'Failed to verify KYC' });
     }
   }
@@ -219,7 +220,7 @@ export class AdminController {
       });
       res.json({ success: true, data: result });
     } catch (error) {
-      console.error('Admin list stakes error:', error);
+      logger.error('Admin list stakes error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch stakes' });
     }
   }
@@ -234,7 +235,7 @@ export class AdminController {
       }
       res.json({ success: true, data: stake });
     } catch (error) {
-      console.error('Admin get stake error:', error);
+      logger.error('Admin get stake error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch stake' });
     }
   }
@@ -253,7 +254,7 @@ export class AdminController {
       const stake = await adminService.settleStake(id, result, userId, notes);
       res.json({ success: true, data: stake });
     } catch (error: any) {
-      console.error('Admin settle stake error:', error);
+      logger.error('Admin settle stake error', error);
       res.status(400).json({ success: false, message: error.message || 'Failed to settle stake' });
     }
   }
@@ -269,7 +270,7 @@ export class AdminController {
       }
       res.json({ success: true, data: stake });
     } catch (error: any) {
-      console.error('Admin void stake error:', error);
+      logger.error('Admin void stake error', error);
       res.status(400).json({ success: false, message: error.message || 'Failed to void stake' });
     }
   }
@@ -286,7 +287,7 @@ export class AdminController {
       });
       res.json({ success: true, data: result });
     } catch (error) {
-      console.error('Admin list transactions error:', error);
+      logger.error('Admin list transactions error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch transactions' });
     }
   }
@@ -302,7 +303,7 @@ export class AdminController {
       }
       res.json({ success: true, data: user, message: 'KYC rejected' });
     } catch (error: any) {
-      console.error('Admin reject KYC error:', error);
+      logger.error('Admin reject KYC error', error);
       res.status(500).json({ success: false, message: error.message || 'Failed to reject KYC' });
     }
   }
@@ -317,7 +318,7 @@ export class AdminController {
       }
       res.json({ success: true, data: transaction });
     } catch (error) {
-      console.error('Admin get withdrawal error:', error);
+      logger.error('Admin get withdrawal error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch withdrawal' });
     }
   }
@@ -332,7 +333,7 @@ export class AdminController {
       });
       res.json({ success: true, data: result });
     } catch (error) {
-      console.error('Admin list withdrawals error:', error);
+      logger.error('Admin list withdrawals error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch withdrawals' });
     }
   }
@@ -344,7 +345,7 @@ export class AdminController {
       const result = await adminService.approveWithdrawal(id, adminId);
       res.json({ success: true, data: result });
     } catch (error: any) {
-      console.error('Admin approve withdrawal error:', error);
+      logger.error('Admin approve withdrawal error', error);
       res.status(400).json({ success: false, message: error.message || 'Failed to approve withdrawal' });
     }
   }
@@ -357,7 +358,7 @@ export class AdminController {
       const result = await adminService.rejectWithdrawal(id, reason || 'Rejected by admin', adminId);
       res.json({ success: true, data: result });
     } catch (error: any) {
-      console.error('Admin reject withdrawal error:', error);
+      logger.error('Admin reject withdrawal error', error);
       res.status(400).json({ success: false, message: error.message || 'Failed to reject withdrawal' });
     }
   }
@@ -373,7 +374,7 @@ export class AdminController {
       });
       res.json({ success: true, data: result });
     } catch (error) {
-      console.error('Admin list loans error:', error);
+      logger.error('Admin list loans error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch loans' });
     }
   }
@@ -388,7 +389,7 @@ export class AdminController {
       }
       res.json({ success: true, data: loan });
     } catch (error) {
-      console.error('Admin get loan error:', error);
+      logger.error('Admin get loan error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch loan' });
     }
   }
@@ -419,7 +420,7 @@ export class AdminController {
       });
       res.json({ success: true, data: loan });
     } catch (error: any) {
-      console.error('Admin create loan error:', error);
+      logger.error('Admin create loan error', error);
       res.status(400).json({ success: false, message: error.message || 'Failed to create loan' });
     }
   }
@@ -431,7 +432,7 @@ export class AdminController {
       const result = await adminService.approveLoan(id, adminId);
       res.json({ success: true, data: result });
     } catch (error: any) {
-      console.error('Admin approve loan error:', error);
+      logger.error('Admin approve loan error', error);
       res.status(400).json({ success: false, message: error.message || 'Failed to approve loan' });
     }
   }
@@ -443,7 +444,7 @@ export class AdminController {
       const result = await adminService.rejectLoan(id, reason || 'Rejected by admin');
       res.json({ success: true, data: result });
     } catch (error: any) {
-      console.error('Admin reject loan error:', error);
+      logger.error('Admin reject loan error', error);
       res.status(400).json({ success: false, message: error.message || 'Failed to reject loan' });
     }
   }
@@ -454,7 +455,7 @@ export class AdminController {
       const result = await adminService.repayLoan(id);
       res.json({ success: true, data: result });
     } catch (error: any) {
-      console.error('Admin repay loan error:', error);
+      logger.error('Admin repay loan error', error);
       res.status(400).json({ success: false, message: error.message || 'Failed to repay loan' });
     }
   }
@@ -466,7 +467,7 @@ export class AdminController {
       const pod = await adminService.toggleExternalBooking(id, adminId);
       res.json({ success: true, data: pod });
     } catch (error: any) {
-      console.error('Toggle external booking error:', error);
+      logger.error('Toggle external booking error', error);
       res.status(error.status || 500).json({ success: false, message: error.message || 'Failed to toggle external booking' });
     }
   }
@@ -486,7 +487,7 @@ export class AdminController {
       });
       res.json({ success: true, data: result });
     } catch (error) {
-      console.error('Admin list pods ready for betting error:', error);
+      logger.error('Admin list pods ready for betting error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch pods ready for betting' });
     }
   }
@@ -514,7 +515,7 @@ export class AdminController {
       const result = await adminService.manualAdjustment(userId, amount, type, reason, adminId);
       res.json({ success: true, data: result });
     } catch (error: any) {
-      console.error('Admin manual adjustment error:', error);
+      logger.error('Admin manual adjustment error', error);
       res.status(400).json({ success: false, message: error.message || 'Failed to adjust wallet' });
     }
   }
@@ -523,7 +524,7 @@ export class AdminController {
       const data = await adminService.getReserveConsumption();
       res.json({ success: true, data });
     } catch (error) {
-      console.error('Reserve consumption error:', error);
+      logger.error('Reserve consumption error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch reserve consumption' });
     }
   }

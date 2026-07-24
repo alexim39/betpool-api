@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { walletService } from '../../services/wallet.service';
 import { paymentService } from '../../services/payment.service';
+import { logger } from '../../services/logger.service';
 
 export class WalletController {
   async getBalance(req: Request, res: Response): Promise<void> {
@@ -14,7 +15,7 @@ export class WalletController {
       const balance = await walletService.getBalance(userId);
       res.json({ success: true, data: balance });
     } catch (error) {
-      console.error('Get balance error:', error);
+      logger.error('Get balance error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch balance' });
     }
   }
@@ -39,7 +40,7 @@ export class WalletController {
 
       res.json({ success: true, data: result });
     } catch (error) {
-      console.error('Get transactions error:', error);
+      logger.error('Get transactions error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch transactions' });
     }
   }
@@ -72,7 +73,7 @@ export class WalletController {
 
       res.json(result);
     } catch (error) {
-      console.error('Initiate deposit error:', error);
+      logger.error('Initiate deposit error', error);
       res.status(500).json({ success: false, message: 'Failed to initiate deposit' });
     }
   }
@@ -88,7 +89,7 @@ export class WalletController {
       const result = await walletService.recoverPendingDeposits(userId);
       res.json({ success: true, data: result });
     } catch (error) {
-      console.error('Recover deposits error:', error);
+      logger.error('Recover deposits error', error);
       res.status(500).json({ success: false, message: 'Recovery failed' });
     }
   }
@@ -105,7 +106,7 @@ export class WalletController {
 
       res.json(result);
     } catch (error) {
-      console.error('Deposit callback error:', error);
+      logger.error('Deposit callback error', error);
       res.status(500).json({ success: false, message: 'Callback processing failed' });
     }
   }
@@ -130,13 +131,18 @@ export class WalletController {
         return;
       }
 
-      if (event.status === 'success') {
+      const body = req.body;
+      if (body.event === 'charge.success' && event.status === 'success') {
         await walletService.verifyAndCreditDeposit(event.reference);
+      } else if (body.event === 'transfer.success') {
+        await walletService.confirmWithdrawal(event.reference);
+      } else if (body.event === 'transfer.failed') {
+        await walletService.failWithdrawal(event.reference);
       }
 
       res.status(200).json({ success: true });
     } catch (error) {
-      console.error('Paystack webhook error:', error);
+      logger.error('Paystack webhook error', error);
       res.status(200).json({ success: true, message: 'Webhook received' });
     }
   }
@@ -167,7 +173,7 @@ export class WalletController {
 
       res.json(result);
     } catch (error) {
-      console.error('Initiate withdrawal error:', error);
+      logger.error('Initiate withdrawal error', error);
       res.status(500).json({ success: false, message: 'Failed to initiate withdrawal' });
     }
   }
@@ -192,7 +198,7 @@ export class WalletController {
 
       res.json({ success: true, data: result });
     } catch (error) {
-      console.error('Resolve account error:', error);
+      logger.error('Resolve account error', error);
       res.status(500).json({ success: false, message: 'Failed to resolve account' });
     }
   }
@@ -202,7 +208,7 @@ export class WalletController {
       const banks = await paymentService.listBanks();
       res.json({ success: true, data: banks });
     } catch (error) {
-      console.error('List banks error:', error);
+      logger.error('List banks error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch banks' });
     }
   }
@@ -218,7 +224,7 @@ export class WalletController {
       const account = await walletService.saveAccount(userId, bankCode, accountNumber, accountName, bankName || '');
       res.json({ success: true, data: account });
     } catch (error) {
-      console.error('Save account error:', error);
+      logger.error('Save account error', error);
       res.status(500).json({ success: false, message: 'Failed to save account' });
     }
   }
@@ -229,7 +235,7 @@ export class WalletController {
       const accounts = await walletService.getSavedAccounts(userId);
       res.json({ success: true, data: accounts });
     } catch (error) {
-      console.error('Get saved accounts error:', error);
+      logger.error('Get saved accounts error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch saved accounts' });
     }
   }
@@ -240,7 +246,7 @@ export class WalletController {
       await walletService.deleteSavedAccount(userId, req.params.id);
       res.json({ success: true, message: 'Account removed' });
     } catch (error) {
-      console.error('Delete saved account error:', error);
+      logger.error('Delete saved account error', error);
       res.status(500).json({ success: false, message: 'Failed to remove account' });
     }
   }
@@ -251,7 +257,7 @@ export class WalletController {
       await walletService.setDefaultAccount(userId, req.params.id);
       res.json({ success: true, message: 'Default account updated' });
     } catch (error) {
-      console.error('Set default account error:', error);
+      logger.error('Set default account error', error);
       res.status(500).json({ success: false, message: 'Failed to set default account' });
     }
   }

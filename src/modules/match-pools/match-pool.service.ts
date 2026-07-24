@@ -264,29 +264,8 @@ export class MatchPoolService {
       pool.settledAt = new Date();
       await pool.save({ session });
 
-      // Create platform fee transaction
-      const admin = await UserModel.findOne({ role: 'admin' }).session(session);
-      if (admin) {
-        const adminWallet = await WalletModel.findOne({ user: admin._id }).session(session);
-        if (adminWallet) {
-          adminWallet.balance += effectiveFee;
-          await adminWallet.save({ session });
-        }
-        await TransactionModel.create([{
-          user: admin._id,
-          wallet: adminWallet._id,
-          type: 'fee',
-          status: 'completed',
-          amount: effectiveFee,
-          fee: 0,
-          netAmount: effectiveFee,
-          balanceBefore: adminWallet.balance - platformFeeAmount,
-          balanceAfter: adminWallet.balance,
-          currency: 'NGN',
-          reference: `MPFEE-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
-          provider: 'internal'
-        }], { session });
-      }
+      // Log platform fee as a platform revenue entry
+      logger.info(`MatchPool platform fee: ₦${effectiveFee.toLocaleString()} for pool ${pool._id}`);
 
       logger.info('MatchPool Settlement', auditLog);
 

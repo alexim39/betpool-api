@@ -28,7 +28,7 @@ export const validateSignupVerify = [
 export const validateSignupComplete = [
   body('phone').notEmpty().withMessage('Phone number required'),
   body('fullName').isLength({ min: 2 }).withMessage('Full name must be at least 2 characters'),
-  body('pin').matches(/^\d{4}$/).withMessage('PIN must be 4 digits'),
+  body('pin').matches(/^\d{6}$/).withMessage('PIN must be 4 digits'),
   body('code').matches(/^\d{6}$/).withMessage('Verification code must be 6 digits'),
   body('email').optional().isEmail().withMessage('Invalid email address'),
   body('referralCode').optional().matches(/^[A-Z0-9]{6}$/).withMessage('Invalid referral code'),
@@ -62,7 +62,7 @@ export const validateLoginVerify = [
 export const validatePinReset = [
   body('phone').notEmpty().withMessage('Phone number required'),
   body('code').matches(/^\d{6}$/).withMessage('Code must be 6 digits'),
-  body('newPin').matches(/^\d{4}$/).withMessage('PIN must be 4 digits'),
+  body('newPin').matches(/^\d{6}$/).withMessage('PIN must be 4 digits'),
   validate
 ];
 
@@ -87,7 +87,7 @@ export const validateWithdrawal = [
   body('bankCode').notEmpty().withMessage('Bank code required'),
   body('accountNumber').matches(/^\d{10}$/).withMessage('Account number must be 10 digits'),
   body('accountName').notEmpty().withMessage('Account name required'),
-  body('pin').matches(/^\d{4}$/).withMessage('PIN must be 4 digits'),
+  body('pin').matches(/^\d{6}$/).withMessage('PIN must be 4 digits'),
   validate
 ];
 

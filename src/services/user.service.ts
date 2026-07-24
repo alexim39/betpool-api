@@ -45,19 +45,26 @@ export class UserService {
     return code;
   }
 
-  generateToken(userId: string, role?: string): string {
-    return jwt.sign({ userId, role: role || 'user' }, this.JWT_SECRET, { expiresIn: this.JWT_EXPIRY } as jwt.SignOptions);
+  generateToken(userId: string, role?: string, tokenVersion?: number): string {
+    return jwt.sign({ userId, role: role || 'user', tokenVersion: tokenVersion ?? 0 }, this.JWT_SECRET, { expiresIn: this.JWT_EXPIRY } as jwt.SignOptions);
   }
 
   async refreshToken(token: string): Promise<string | null> {
     try {
-      const decoded = jwt.verify(token, this.JWT_SECRET, { ignoreExpiration: true }) as { userId: string; role?: string };
-      const user = await UserModel.findById(decoded.userId).select('_id role');
+      const decoded = jwt.verify(token, this.JWT_SECRET, { ignoreExpiration: true }) as { userId: string; role?: string; tokenVersion?: number };
+      const user = await UserModel.findById(decoded.userId).select('_id role tokenVersion isActive isSuspended');
       if (!user) return null;
-      return this.generateToken(decoded.userId, decoded.role || user.role);
+      if (!user.isActive || user.isSuspended) return null;
+      // Token rotation: reject old tokenVersion tokens
+      if (decoded.tokenVersion !== undefined && decoded.tokenVersion < user.tokenVersion) return null;
+      return this.generateToken(decoded.userId, decoded.role || user.role, user.tokenVersion);
     } catch {
       return null;
     }
+  }
+
+  async logout(userId: string): Promise<void> {
+    await UserModel.findByIdAndUpdate(userId, { $inc: { tokenVersion: 1 } });
   }
 
   private decodeToken(token: string): { userId: string; role?: string } | null {
@@ -69,13 +76,13 @@ export class UserService {
     }
   }
 
-  async provisionFirstAdmin(email: string): Promise<void> {
+  async provisionFirstAdmin(email: string, fullName?: string): Promise<void> {
     const pinHash = await bcrypt.hash(Math.random().toString(), this.PIN_SALT_ROUNDS);
     const referralCode = this.generateReferralCode();
 
     await UserModel.create({
       phone: `+234${Math.random().toString().slice(2, 12)}`,
-      fullName: 'Admin',
+      fullName: fullName || 'Admin',
       email: email.toLowerCase().trim(),
       pinHash,
       role: 'admin',
@@ -97,6 +104,12 @@ export class UserService {
       throw new Error('Phone number already registered');
     }
 
+    // Verify OTP code before allowing signup
+    const otpResult = await otpService.verifyOTP(data.phone, data.code, 'signup');
+    if (!otpResult.valid) {
+      throw new Error(otpResult.message || 'Invalid or expired verification code');
+    }
+
     let referredBy: mongoose.Types.ObjectId | undefined;
     if (data.referralCode) {
       const referrer = await UserModel.findOne({ referralCode: data.referralCode });
@@ -110,8 +123,6 @@ export class UserService {
     session.startTransaction();
 
     try {
-      // Clean up any stale wallet with null userId before creating new user
-      await WalletModel.deleteOne({ user: null }).session(session);
 
       const [user] = await UserModel.create([{
         phone: formattedPhone,
@@ -159,7 +170,9 @@ export class UserService {
 
       await session.commitTransaction();
 
-      const token = this.generateToken(user._id.toString(), user.role);
+      await otpService.consumeOTP(formattedPhone, 'signup');
+
+      const token = this.generateToken(user._id.toString(), user.role, user.tokenVersion);
       return { user, token, isNewUser: true };
     } catch (error) {
       await session.abortTransaction();
@@ -173,20 +186,41 @@ export class UserService {
     const formattedPhone = otpService.formatPhoneNumber(data.phone);
 
     const user = await UserModel.findOne({ phone: formattedPhone });
+
+    // Timing-safe dummy hash to prevent user enumeration
+    const dummyHash = await bcrypt.hash('000000', this.PIN_SALT_ROUNDS);
+
     if (!user) {
+      await bcrypt.compare(data.pin, dummyHash);
       throw new Error('Invalid credentials');
     }
 
     if (!user.isActive || user.isSuspended) {
+      await bcrypt.compare(data.pin, dummyHash);
       throw new Error('Account suspended. Contact support.');
+    }
+
+    // Check account lockout
+    if (user.lockedUntil && user.lockedUntil > new Date()) {
+      const remaining = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 1000 / 60);
+      throw new Error(`Account locked. Try again in ${remaining} minute(s).`);
     }
 
     const isValid = await bcrypt.compare(data.pin, user.pinHash);
     if (!isValid) {
+      user.failedLoginAttempts += 1;
+      if (user.failedLoginAttempts >= 5) {
+        user.lockedUntil = new Date(Date.now() + 15 * 60 * 1000);
+        user.failedLoginAttempts = 0;
+      }
+      await user.save();
       throw new Error('Invalid credentials');
     }
 
-    const token = this.generateToken(user._id.toString(), user.role);
+    // Reset failed attempts on successful login
+    user.failedLoginAttempts = 0;
+    user.lockedUntil = null;
+    const token = this.generateToken(user._id.toString(), user.role, user.tokenVersion);
     user.lastLoginAt = new Date();
     await user.save();
 
@@ -234,7 +268,7 @@ export class UserService {
     if (!user) throw new Error('User not found');
     if (!user.isActive || user.isSuspended) throw new Error('Account suspended. Contact support.');
 
-    const token = this.generateToken(user._id.toString());
+    const token = this.generateToken(user._id.toString(), user.role, user.tokenVersion);
     user.lastLoginAt = new Date();
     await user.save();
 
@@ -251,7 +285,7 @@ export class UserService {
     if (!user) throw new Error('User not found');
     if (!user.isActive || user.isSuspended) throw new Error('Account suspended. Contact support.');
 
-    const token = this.generateToken(user._id.toString(), user.role);
+    const token = this.generateToken(user._id.toString(), user.role, user.tokenVersion);
     user.lastLoginAt = new Date();
     await user.save();
 
@@ -266,6 +300,7 @@ export class UserService {
     if (!isValid) throw new Error('Current PIN is incorrect');
 
     user.pinHash = await bcrypt.hash(newPin, this.PIN_SALT_ROUNDS);
+    user.tokenVersion += 1;
     await user.save();
   }
 
@@ -284,6 +319,7 @@ export class UserService {
     if (!user) throw new Error('User not found');
 
     user.pinHash = await bcrypt.hash(newPin, this.PIN_SALT_ROUNDS);
+    user.tokenVersion += 1;
     await user.save();
   }
 
