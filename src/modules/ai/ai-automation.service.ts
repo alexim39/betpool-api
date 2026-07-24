@@ -5,6 +5,7 @@ import { adminService } from '../admin/admin.service';
 import { PodModel } from '../../models/pod.model';
 import { StakeModel } from '../../models/stake.model';
 import { logger } from '../../services/logger.service';
+import { betManagerService } from '../bet-manager/bet-manager.service';
 
 export class AIAutomationService {
   private intervalId: ReturnType<typeof setInterval> | null = null;
@@ -104,7 +105,21 @@ export class AIAutomationService {
       //   console.log(`[Ora Automation] Created ${result.curation.created} pods`);
       // }
 
-      // Step 2: Settle finished pods — DISABLED (manual settlement only)
+      // Step 2: Bet Manager — unlock deposits, reconcile allocations, settle cycles, allocate
+      try {
+        const unlocked = await betManagerService.unlockDeposits();
+        if (unlocked > 0) logger.info('BetManager deposits unlocked', { count: unlocked });
+        await betManagerService.reconcileAllocations();
+        for (const tier of ['defender', 'midfielder', 'striker'] as const) {
+          await betManagerService.settleCycle(tier);
+        }
+        await betManagerService.allocateDaily();
+      } catch (err: any) {
+        logger.error('BetManager automation error', err.message);
+        result.settlement.errors.push(`BetManager: ${err.message}`);
+      }
+
+      // Step 3: Settle finished pods — DISABLED (manual settlement only)
       // logger.info('Ora Automation starting settlement');
       // const settleAdmin = await this.getSystemAdmin();
       // const settleResult = await aiSettlementService.settleAllSettleable(settleAdmin);

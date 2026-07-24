@@ -10,6 +10,7 @@ import { notificationRoutes } from '../modules/notifications';
 import { matchPoolRoutes } from '../modules/match-pools';
 import { featuredBannerRoutes } from '../modules/featured-banners';
 import { adminRoutes } from '../modules/admin';
+import betManagerRoutes from '../modules/bet-manager/bet-manager.routes';
 
 import { authMiddleware } from '../middleware/auth.middleware';
 import { adminMiddleware } from '../middleware/admin.middleware';
@@ -37,6 +38,7 @@ router.use('/wallet', walletRoutes);
 router.use('/ai', aiRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/match-pools', matchPoolRoutes);
+router.use('/bet-manager', betManagerRoutes);
 router.use('/featured-games', featuredBannerRoutes);
 
 // Admin routes (auth + admin middleware applied at this level)

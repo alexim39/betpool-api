@@ -10,6 +10,7 @@ import { aiBiController } from '../ai/ai-bi.controller';
 import { aiCampaignController } from '../ai/ai-campaign.controller';
 import { featuredBannerController } from '../featured-banners/featured-banner.controller';
 import { adminChatController } from '../chat/admin-chat.controller';
+import { betManagerAdminController } from '../bet-manager/bet-manager.admin.controller';
 
 const router = Router();
 
@@ -121,5 +122,16 @@ router.post('/featured-games', featuredBannerController.create);
 router.post('/featured-games/generate-description', featuredBannerController.generateDescription);
 router.put('/featured-games/:id', featuredBannerController.update);
 router.delete('/featured-games/:id', featuredBannerController.remove);
+
+// Bet Manager (admin)
+router.get('/bet-manager/stats', betManagerAdminController.getStats);
+router.get('/bet-manager/accounts', betManagerAdminController.listAccounts);
+router.get('/bet-manager/accounts/:id', betManagerAdminController.getAccountDetail);
+router.get('/bet-manager/deposits', betManagerAdminController.listDeposits);
+router.get('/bet-manager/pools', betManagerAdminController.getPools);
+router.get('/bet-manager/cycles', betManagerAdminController.getCycles);
+router.get('/bet-manager/tier/:tier', betManagerAdminController.getTierDetail);
+router.post('/bet-manager/settle-cycle', betManagerAdminController.settleCycle);
+router.post('/bet-manager/reconcile', betManagerAdminController.runReconcile);
 
 export default router;
