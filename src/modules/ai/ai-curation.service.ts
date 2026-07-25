@@ -94,6 +94,8 @@ export interface CurationResponse {
   oraTotalPods: number;
   oraWon: number;
   confidenceThreshold: number;
+  autoCreated?: boolean;
+  createdPods?: Array<{ fixtureId: number; homeTeam: string; awayTeam: string; podId: string; title: string }>;
 }
 
 export class AICurationService {
@@ -219,22 +221,22 @@ export class AICurationService {
       }
     }
 
-    // 7. Enforce max 15 pods — keep highest confidence
-    if (result.recommended > 15) {
+    // 7. Enforce max 10 pods — keep highest value score (confidence × multiplier)
+    if (result.recommended > 10) {
       result.fixtures.sort((a, b) => {
-        const aConf = a.recommendations?.[0]?.confidence || 0;
-        const bConf = b.recommendations?.[0]?.confidence || 0;
-        return bConf - aConf;
+        const aScore = (a.recommendations?.[0]?.confidence || 0) * ((a.multiplier || 1.5) - 1);
+        const bScore = (b.recommendations?.[0]?.confidence || 0) * ((b.multiplier || 1.5) - 1);
+        return bScore - aScore;
       });
       let demoted = 0;
       for (const f of result.fixtures) {
-        if (f.verdict === 'RECOMMEND' && result.recommended - demoted > 15) {
+        if (f.verdict === 'RECOMMEND' && result.recommended - demoted > 10) {
           f.verdict = 'SKIP';
-          f.overallReasoning = 'Demoted: exceeded 15-pod quality cap. Higher-confidence picks prioritized.';
+          f.overallReasoning = 'Demoted: exceeded 10-pod quality cap. Higher-value picks prioritized.';
           demoted++;
         }
       }
-      result.recommended = 15;
+      result.recommended = 10;
       result.skipped += demoted;
     }
 
@@ -425,10 +427,13 @@ ${oddsStr}
 FINANCIAL HEALTH:
 ${finStr}
 
-CRITICAL RULES:
-- BetPool's profit model: we earn commission ONLY when pods WIN. Every losing pod earns zero revenue.
-- We need HIGH WINNING CONSISTENCY above all else. This is a survival requirement.
-- We should create FEW high-confidence pods (15-30 total) rather than many low-confidence ones.
+CRITICAL RULES (SURVIVAL DEPENDS ON FOLLOWING THESE):
+- BetPool's profit model: we earn commission ONLY when pods WIN. Every losing pod earns zero revenue. This is a survival requirement.
+- We need HIGH WINNING CONSISTENCY above all else. Recommend ONLY outcomes that have a very high probability of winning.
+- Prefer 10 excellent pods over 30 mediocre ones. Quality over quantity is the only path to survival.
+- VALUE SCORING: Score each outcome as confidence × (multiplier - 1). Always pick the outcome with the highest value score, NOT just the highest confidence alone.
+- NEVER recommend an outcome with a multiplier below 1.3x — the risk-adjusted return is too low regardless of confidence.
+- NEVER recommend an outcome with confidence below 70% — the risk of losing is unacceptable.
 - If the best single outcome has a multiplier below 1.5x, consider combining 2 high-confidence outcomes from this SAME fixture as a parlay to get reasonable odds (1.8x - 5.0x target).
 - Never combine outcomes from different fixtures. Both legs must be from this same match.
 
@@ -439,6 +444,7 @@ Return valid JSON matching this structure:
       "selection": "Home Win" | "Draw" | "Away Win" | "Over X.5" | "Under X.5" | "BTTS Yes" | "BTTS No",
       "confidence": number (0-100),
       "recommendedMultiplier": number (1.0-10.0),
+      "valueScore": number (confidence * (multiplier - 1)),
       "reasoning": "Brief justification"
     }
   ],

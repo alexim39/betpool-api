@@ -37,75 +37,77 @@ export class AIAutomationService {
     const result = { curation: { recommended: 0, created: 0 }, settlement: { settled: 0, errors: [] as string[] } };
 
     try {
-      // Step 1: Curate + create pods — DISABLED
-      // const adminUser = await this.getSystemAdmin();
-      // const activePodCount = await PodModel.countDocuments({ status: 'active' });
-      // if (activePodCount >= 15) {
-      //   console.log(`[Ora Automation] Curation SKIPPED — ${activePodCount} active pods already (max 15)`);
-      //   result.settlement.errors.push(`Pod creation skipped: ${activePodCount} active pods already live (max 15)`);
-      // } else {
-      //   console.log('[Ora Automation] Starting curation...');
-      //   const curation = await aiCurationService.curate();
-      //   console.log(`[Ora Automation] Curation: ${curation.recommended} recommended, ${curation.skipped} skipped`);
-      //   if (aiRiskService.isCreationFrozen()) {
-      //     console.log('[Ora Automation] Pod creation SKIPPED — risk management has frozen new pod creation');
-      //     result.settlement.errors.push('Pod creation frozen by risk management — risk ratio too high');
-      //   } else if (adminUser && curation.recommended > 0) {
-      //     const systemWallet = await import('../models/wallet.model').then(m => m.WalletModel.findOne({}).sort({ balance: -1 }).lean());
-      //     const systemFunds = (systemWallet as any)?.balance || 50000000;
-      //     const riskFactor = 0.15;
-      //     const dynamicMaxExposure = Math.floor(systemFunds / Math.max(activePodCount + 1, 1) * riskFactor);
-      //     const getRefundPercent = (multiplier: number): number => {
-      //       if (multiplier >= 1.9) return 5;
-      //       if (multiplier >= 1.7) return 20;
-      //       if (multiplier >= 1.5) return 35;
-      //       return 0;
-      //     };
-      //     for (const f of curation.fixtures) {
-      //       if (f.verdict !== 'RECOMMEND' || !f.selection || !f.multiplier) continue;
-      //       try {
-      //         const matchDate = new Date(f.matchDate);
-      //         const stakingClosesAt = new Date(matchDate.getTime() - 24 * 60 * 60 * 1000);
-      //         const settlementEstimateAt = new Date(matchDate.getTime() + 24 * 60 * 60 * 1000);
-      //         const leg = { homeTeam: f.homeTeam, awayTeam: f.awayTeam, matchDate: f.matchDate, league: f.league };
-      //         const payload: any = {
-      //           title: `${f.homeTeam} vs ${f.awayTeam}`,
-      //           sport: 'Football', league: f.league,
-      //           homeTeam: f.homeTeam, awayTeam: f.awayTeam,
-      //           matchDate: f.matchDate,
-      //           marketType: f.isCombined ? 'Parlay' : '1X2',
-      //           selection: f.selection,
-      //           marketOdds: f.multiplier,
-      //           gainsMultiplier: Math.round(f.multiplier * 0.85 * 100) / 100,
-      //           refundPercent: getRefundPercent(Math.round(f.multiplier * 0.85 * 100) / 100),
-      //           minStake: 100, maxStake: 100000,
-      //           maxTotalExposure: dynamicMaxExposure,
-      //           stakingClosesAt, settlementEstimateAt,
-      //           settlementEstimateLabel: settlementEstimateAt.toLocaleDateString('en-NG', { month: 'short', day: 'numeric', year: 'numeric' }),
-      //           status: 'active',
-      //           legs: f.isCombined ? [leg, leg] : [leg],
-      //           metadata: {
-      //             oraCurated: true,
-      //             oraConfidence: f.recommendations?.[0]?.confidence || 0,
-      //             fixtureId: f.fixtureId,
-      //             ...(f.isCombined && f.combinedLegs ? {
-      //               combined: true,
-      //               legMarkets: f.combinedLegs.map(l => l.marketType),
-      //               legSelections: f.combinedLegs.map(l => l.selection),
-      //             } : {}),
-      //           },
-      //         };
-      //         await adminService.createPod(payload, adminUser);
-      //         result.curation.created++;
-      //       } catch (err: any) {
-      //         result.settlement.errors.push(`Failed to create pod for ${f.homeTeam} vs ${f.awayTeam}: ${err.message}`);
-      //       }
-      //     }
-      //   }
-      //   console.log(`[Ora Automation] Created ${result.curation.created} pods`);
-      // }
+      // Step 1: Curate + create + publish pods
+      const adminUser = await this.getSystemAdmin();
+      const activePodCount = await PodModel.countDocuments({ status: 'active' });
+      if (activePodCount >= 10) {
+        logger.info(`[Ora Automation] Curation SKIPPED — ${activePodCount} active pods already (max 10)`);
+        result.settlement.errors.push(`Pod creation skipped: ${activePodCount} active pods already live (max 10)`);
+      } else if (!adminUser) {
+        logger.warn('[Ora Automation] Curation SKIPPED — no admin user found');
+        result.settlement.errors.push('Pod creation skipped: no admin user found');
+      } else {
+        logger.info('[Ora Automation] Starting curation...');
+        const curation = await aiCurationService.curate();
+        logger.info(`[Ora Automation] Curation: ${curation.recommended} recommended, ${curation.skipped} skipped of ${curation.total}`);
 
-      // Step 2: Bet Manager — unlock deposits, reconcile allocations, settle cycles, allocate
+        if (aiRiskService.isCreationFrozen()) {
+          logger.info('[Ora Automation] Pod creation SKIPPED — risk management has frozen new pod creation');
+          result.settlement.errors.push('Pod creation frozen by risk management — risk ratio too high');
+        } else if (curation.recommended > 0) {
+          for (const fixture of curation.fixtures) {
+            if (fixture.verdict !== 'RECOMMEND') continue;
+
+            const bestPick = fixture.recommendations.reduce(
+              (best, r) => (r.confidence > (best?.confidence || 0) ? r : best),
+              fixture.recommendations[0]
+            );
+            if (!bestPick) continue;
+
+            try {
+              const matchDate = new Date(fixture.matchDate);
+              const stakingClosesAt = new Date(matchDate.getTime() - 24 * 60 * 60 * 1000);
+              const settlementEstimateAt = new Date(matchDate.getTime() + 24 * 60 * 60 * 1000);
+
+              await adminService.createPod({
+                title: `${fixture.homeTeam} vs ${fixture.awayTeam}`,
+                sport: 'football',
+                league: fixture.league,
+                homeTeam: fixture.homeTeam,
+                awayTeam: fixture.awayTeam,
+                matchDate,
+                marketType: fixture.isCombined ? 'parlay' as const : '1X2' as const,
+                selection: bestPick.selection || fixture.selection || '',
+                gainsMultiplier: fixture.multiplier || bestPick.recommendedMultiplier || 1.5,
+                minStake: 100,
+                maxStake: 100000,
+                maxTotalExposure: 500000,
+                opensAt: new Date(),
+                stakingClosesAt,
+                settlementEstimateAt,
+                settlementEstimateLabel: settlementEstimateAt.toLocaleDateString('en-NG', { month: 'short', day: 'numeric', year: 'numeric' }),
+                status: 'active' as const,
+                legs: [{ homeTeam: fixture.homeTeam, awayTeam: fixture.awayTeam, matchDate, league: fixture.league }],
+                metadata: {
+                  oraCurated: true,
+                  oraConfidence: bestPick.confidence,
+                  fixtureId: fixture.fixtureId,
+                  combined: fixture.isCombined,
+                  legMarkets: fixture.combinedLegs?.map(l => l.marketType),
+                  legSelections: fixture.combinedLegs?.map(l => l.selection),
+                },
+              }, adminUser);
+
+              result.curation.created++;
+            } catch (err: any) {
+              result.settlement.errors.push(`Failed to create pod for ${fixture.homeTeam} vs ${fixture.awayTeam}: ${err.message}`);
+            }
+          }
+          logger.info(`[Ora Automation] Published ${result.curation.created} pods`);
+        }
+      }
+
+      // Step 2: Bet Manager operations
       try {
         const unlocked = await betManagerService.unlockDeposits();
         if (unlocked > 0) logger.info('BetManager deposits unlocked', { count: unlocked });
@@ -118,13 +120,6 @@ export class AIAutomationService {
         logger.error('BetManager automation error', err.message);
         result.settlement.errors.push(`BetManager: ${err.message}`);
       }
-
-      // Step 3: Settle finished pods — DISABLED (manual settlement only)
-      // logger.info('Ora Automation starting settlement');
-      // const settleAdmin = await this.getSystemAdmin();
-      // const settleResult = await aiSettlementService.settleAllSettleable(settleAdmin);
-      // result.settlement = { settled: settleResult.settled, errors: settleResult.errors };
-      // logger.info('Ora Automation settlement complete', { settled: settleResult.settled, errors: settleResult.errors.length });
 
     } catch (err: any) {
       logger.error('Ora Automation cycle error', err.message);

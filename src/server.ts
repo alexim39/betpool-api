@@ -11,10 +11,10 @@ const port: any = process.env.PORT || 8383;
 
 app.listen(port, () => {
     logger.info(`Express server listening on port ${port}`);
-    // Start Ora automation cycle (every 6 hours) — settlement only (curation disabled)
+    // Start Ora automation cycle (every 2 hours) — curation, pod creation, bet manager
     if (process.env.ORA_AUTOMATION !== 'disabled') {
-        aiAutomationService.start();
-        logger.info('[Ora Automation] Background settlement cycle started — every 6 hours');
+        aiAutomationService.start(2 * 60 * 60 * 1000);
+        logger.info('[Ora Automation] Background curation + publishing cycle started — every 2 hours');
     }
     // Start risk auto-escalation scheduler (every 15 minutes)
     if (process.env.RISK_AUTO_ESCALATION !== 'disabled') {
