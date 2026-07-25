@@ -114,7 +114,7 @@ export async function chatWithOra(
           'Authorization': `Bearer ${apiKey}`
         },
         body: JSON.stringify({
-          model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
+          model: process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash',
           messages: [systemPrompt, ...messages],
           temperature: 0.7,
           max_tokens: 500

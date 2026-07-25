@@ -390,7 +390,7 @@ Return ONLY a JSON object:
           'Authorization': `Bearer ${this.deepseekKey}`,
         },
         body: JSON.stringify({
-          model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
+          model: process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash',
           messages: [
             { role: 'system', content: 'You are Ora, BetPool\'s settlement verification AI. Verify match results against pod selections and return structured JSON.' },
             { role: 'user', content: prompt },

@@ -478,7 +478,7 @@ Rules:
             'Authorization': `Bearer ${this.deepseekKey}`,
           },
           body: JSON.stringify({
-            model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
+            model: process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash',
             messages: [
               { role: 'system', content: 'You are Ora, BetPool\'s senior odds analyst. Our survival depends on winning consistency. You are cautious and analytical. You prioritize high-confidence picks over high-odds gambles. You combine markets from the same fixture only when the single outcome odds are too low. Return ONLY valid JSON with no markdown.' },
               { role: 'user', content: prompt },

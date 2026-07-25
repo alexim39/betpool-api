@@ -244,7 +244,7 @@ Return ONLY a JSON object:
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.deepseekKey}` },
         body: JSON.stringify({
-          model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
+          model: process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash',
           messages: [
             { role: 'system', content: 'You are Ora, BetPool\'s marketing AI. Generate personalized, engaging messages to retain users and drive deposits/stakes. Be concise and action-oriented.' },
             { role: 'user', content: prompt },

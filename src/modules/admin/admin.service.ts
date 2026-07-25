@@ -11,6 +11,7 @@ import { cacheService } from '../../services/cache.service';
 import { notifyWithdrawalCompleted, notifyWithdrawalFailed, notifyKycApproved } from '../../services/notification.service';
 import { walletService } from '../../services/wallet.service';
 import { stakeService } from '../staking/stake.service';
+import { runTransaction } from '../../utils/transaction';
 import { logger } from '../../services/logger.service';
 
 interface PaginationQuery {
@@ -271,10 +272,7 @@ export class AdminService {
   }
 
   async settlePod(id: string, result: 'win' | 'loss' | 'void', settledBy: string, notes?: string, homeScore?: number, awayScore?: number): Promise<IPod | null> {
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
-    try {
+    return runTransaction(async (session) => {
       const pod = await PodModel.findById(id).session(session);
       if (!pod) throw new Error('Pod not found');
       if (pod.status === 'settled' || pod.status === 'cancelled') {
@@ -423,21 +421,12 @@ export class AdminService {
       if (awayScore !== undefined) pod.awayScore = awayScore;
       await pod.save({ session });
 
-      await session.commitTransaction();
       return pod;
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
-      session.endSession();
-    }
+    });
   }
 
   async cancelPod(id: string, cancelledBy: string): Promise<IPod | null> {
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
-    try {
+    return runTransaction(async (session) => {
       const pod = await PodModel.findById(id).session(session);
       if (!pod) throw new Error('Pod not found');
       if (pod.status === 'settled' || pod.status === 'cancelled') {
@@ -540,7 +529,6 @@ export class AdminService {
           }
         } else {
           // Only this leg voided, parlay continues with reduced odds
-          // Recalculate combined odds for remaining pending legs
           const wonItems = stake.items.filter(i => i.status === 'won');
           const pendingItems = stake.items.filter(i => i.status === 'pending');
           const remainingOdds = [...wonItems, ...pendingItems].reduce((acc, i) => acc * i.gainsMultiplier, 1);
@@ -553,14 +541,8 @@ export class AdminService {
       pod.settledAt = new Date();
       await pod.save({ session });
 
-      await session.commitTransaction();
       return pod;
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
-      session.endSession();
-    }
+    });
   }
 
   async listPodsReadyForBetting(query: any): Promise<PaginatedResult<IPod>> {

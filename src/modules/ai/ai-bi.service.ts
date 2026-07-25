@@ -300,7 +300,7 @@ Return ONLY a JSON object:
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.deepseekKey}` },
           body: JSON.stringify({
-            model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
+            model: process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash',
             messages: [
               { role: 'system', content: 'You are Ora, BetPool\'s business intelligence analyst. Analyze performance data and provide concise, actionable insights for the CEO.' },
               { role: 'user', content: prompt },
