@@ -202,7 +202,6 @@ export class AISettlementService {
     const now = new Date();
     const pods = await PodModel.find({
       status: { $in: ['active', 'published'] },
-      'metadata.fixtureId': { $exists: true },
       matchDate: { $lte: now },
     });
     const adminService = new AdminService();
