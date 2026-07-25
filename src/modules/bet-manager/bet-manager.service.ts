@@ -273,14 +273,20 @@ export class BetManagerService {
       const withdrawValue = account.units * navData.nav;
       const withdrawAmount = Math.min(withdrawValue, poolWallet.balance);
 
+      // 20% service charge on profits (deducted at withdrawal)
+      const costBasis = account.totalDeposited;
+      const profit = Math.max(0, withdrawAmount - costBasis);
+      const serviceCharge = Math.floor(profit * 0.20);
+      const netToUser = withdrawAmount - serviceCharge;
+
       const userWallet = await WalletModel.findOne({ user: userId }).session(session);
       if (!userWallet) return { success: false, message: 'User wallet not found' };
 
-      poolWallet.balance -= withdrawAmount;
+      poolWallet.balance -= netToUser;
       poolWallet.lastTransactionAt = new Date();
       await poolWallet.save({ session });
 
-      userWallet.balance += withdrawAmount;
+      userWallet.balance += netToUser;
       userWallet.lastTransactionAt = new Date();
       await userWallet.save({ session });
 
@@ -290,19 +296,18 @@ export class BetManagerService {
         type: 'withdrawal',
         status: 'completed',
         amount: withdrawAmount,
-        fee: 0,
-        netAmount: withdrawAmount,
-        balanceBefore: userWallet.balance - withdrawAmount,
+        fee: serviceCharge,
+        netAmount: netToUser,
+        balanceBefore: userWallet.balance - netToUser,
         balanceAfter: userWallet.balance,
         currency: 'NGN',
         reference: `BM_WDR_${userId.slice(-6)}_${Date.now()}`,
         provider: 'internal',
-        metadata: { description: `Bet Manager ${tier} withdrawal`, tier },
+        metadata: { description: `Bet Manager ${tier} withdrawal`, tier, serviceCharge },
       }], { session });
 
-      const profit = withdrawAmount - account.totalDeposited;
-      account.totalWithdrawn += withdrawAmount;
-      account.totalProfit += profit;
+      account.totalWithdrawn += netToUser;
+      account.totalProfit += profit - serviceCharge;
       account.units = 0;
       await account.save({ session });
 
@@ -315,7 +320,7 @@ export class BetManagerService {
         userId,
         accountId: account._id,
         type: 'withdrawal',
-        amount: withdrawAmount,
+        amount: netToUser,
         units: 0,
         navAtExecution: navData.nav,
         depositedAt: new Date(),
@@ -325,12 +330,12 @@ export class BetManagerService {
 
       const cycle = await BetManagerCycleModel.findOne({ tier, status: 'active' }).session(session);
       if (cycle) {
-        cycle.cashBalance = (cycle.cashBalance || 0) - withdrawAmount;
+        cycle.cashBalance = (cycle.cashBalance || 0) - netToUser;
         await cycle.save({ session });
       }
 
-      logger.info('BetManager withdraw', { userId, tier, withdrawAmount });
-      return { success: true, message: `₦${withdrawAmount.toLocaleString()} withdrawn from ${tier} Bet Manager` };
+      logger.info('BetManager withdraw', { userId, tier, withdrawAmount, serviceCharge, netToUser });
+      return { success: true, message: `₦${netToUser.toLocaleString()} withdrawn from ${tier} Bet Manager (₦${serviceCharge.toLocaleString()} service charge)` };
     });
   }
 

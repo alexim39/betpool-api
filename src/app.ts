@@ -31,6 +31,8 @@ class App {
     }));
     this.app.use(helmet());
     this.app.use(bodyParser.urlencoded({ extended: false }));
+    // Raw body parser for webhook (HMAC must verify original payload bytes)
+    this.app.use('/api/webhook/paystack', bodyParser.raw({ type: 'application/json' }));
     this.app.use(bodyParser.json({ limit: '10kb' }));
   }
 

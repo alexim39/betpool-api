@@ -119,24 +119,26 @@ export class WalletController {
         return;
       }
 
-      const isValid = paymentService.verifyPaystackWebhookSignature(req.body, signature);
+      const rawBody = req.body instanceof Buffer ? req.body.toString() : JSON.stringify(req.body);
+      const payload = JSON.parse(rawBody);
+
+      const isValid = paymentService.verifyPaystackWebhookSignature(rawBody, signature);
       if (!isValid) {
         res.status(401).json({ success: false, message: 'Invalid signature' });
         return;
       }
 
-      const event = paymentService.handlePaystackWebhook(req.body);
+      const event = paymentService.handlePaystackWebhook(payload);
       if (!event) {
         res.status(200).json({ success: true, message: 'Event ignored' });
         return;
       }
 
-      const body = req.body;
-      if (body.event === 'charge.success' && event.status === 'success') {
+      if (payload.event === 'charge.success' && event.status === 'success') {
         await walletService.verifyAndCreditDeposit(event.reference);
-      } else if (body.event === 'transfer.success') {
+      } else if (payload.event === 'transfer.success') {
         await walletService.confirmWithdrawal(event.reference);
-      } else if (body.event === 'transfer.failed') {
+      } else if (payload.event === 'transfer.failed') {
         await walletService.failWithdrawal(event.reference);
       }
 

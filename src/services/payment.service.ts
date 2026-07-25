@@ -35,8 +35,8 @@ export class PaymentService {
     return process.env.PAYSTACK_WEBHOOK_SECRET || '';
   }
 
-  verifyPaystackWebhookSignature(payload: any, signature: string): boolean {
-    const hash = crypto.createHmac('sha256', this.paystackWebhookSecret).update(JSON.stringify(payload)).digest('hex');
+  verifyPaystackWebhookSignature(rawBody: string, signature: string): boolean {
+    const hash = crypto.createHmac('sha256', this.paystackWebhookSecret).update(rawBody).digest('hex');
     return hash === signature;
   }
 

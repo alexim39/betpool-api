@@ -148,11 +148,13 @@ export class UserService {
 
       // Credit referrer bonus
       if (referredBy) {
-        const referrerWallet = await WalletModel.findOne({ user: referredBy }).session(session);
+        const BONUS_AMOUNT = 500;
+        const referrerWallet = await WalletModel.findOneAndUpdate(
+          { user: referredBy },
+          { $inc: { balance: BONUS_AMOUNT }, $set: { lastTransactionAt: new Date() } },
+          { session, new: true }
+        );
         if (referrerWallet) {
-          const BONUS_AMOUNT = 500;
-          referrerWallet.balance += BONUS_AMOUNT;
-          await referrerWallet.save({ session });
           await TransactionModel.create([{
             user: referredBy,
             type: 'bonus',

@@ -443,33 +443,34 @@ export class StakeService {
           item.settledAt = new Date();
         }
 
-        const wallet = await WalletModel.findOne({ user: stake.user }).session(session);
-        if (!wallet) throw new Error('Wallet not found');
-
         let payoutAmount = 0;
         let newStatus: IStake['status'];
         let txType = 'refund';
+        const incFields: Record<string, number> = {};
 
         if (result === 'win') {
           payoutAmount = stake.netPayout;
-          wallet.balance += payoutAmount;
-          wallet.totalWon += payoutAmount;
+          incFields.balance = payoutAmount;
+          incFields.totalWon = payoutAmount;
           newStatus = 'won';
           txType = 'payout';
         } else if (result === 'void') {
           payoutAmount = stake.stakeAmount;
-          wallet.balance += payoutAmount;
+          incFields.balance = payoutAmount;
           newStatus = 'void';
           txType = 'refund';
         } else {
-          // Parlay lost — no refund (refundPercent is always 0 for parlays)
           payoutAmount = 0;
           newStatus = 'lost';
           txType = 'refund';
         }
 
-        wallet.lastTransactionAt = new Date();
-        await wallet.save({ session });
+        const wallet = await WalletModel.findOneAndUpdate(
+          { user: stake.user },
+          { $inc: incFields, $set: { lastTransactionAt: new Date() } },
+          { session, new: true }
+        );
+        if (!wallet) throw new Error('Wallet not found');
 
         if (payoutAmount > 0) {
           await TransactionModel.create([{
@@ -524,33 +525,35 @@ export class StakeService {
       const pod = await PodModel.findById(stake.pod).session(session);
       if (!pod) throw new Error('Pod not found');
 
-      const wallet = await WalletModel.findOne({ user: stake.user }).session(session);
-      if (!wallet) throw new Error('Wallet not found');
-
       let payoutAmount = 0;
       let newStatus: IStake['status'];
       let description = '';
+      const incFields: Record<string, number> = {};
 
       if (result === 'win') {
         payoutAmount = stake.netPayout;
-        wallet.balance += payoutAmount;
-        wallet.totalWon += payoutAmount;
+        incFields.balance = payoutAmount;
+        incFields.totalWon = payoutAmount;
         newStatus = 'won';
         description = 'Stake won';
       } else if (result === 'void') {
         payoutAmount = stake.stakeAmount;
-        wallet.balance += payoutAmount;
+        incFields.balance = payoutAmount;
         newStatus = 'void';
         description = 'Stake voided - stake refunded';
       } else {
         payoutAmount = stake.refundAmount ?? 0;
-        wallet.balance += payoutAmount;
+        incFields.balance = payoutAmount;
         newStatus = 'lost';
         description = `Stake lost - ${stake.refundPercent}% refund (₦${payoutAmount.toLocaleString()})`;
       }
 
-      wallet.lastTransactionAt = new Date();
-      await wallet.save({ session });
+      const wallet = await WalletModel.findOneAndUpdate(
+        { user: stake.user },
+        { $inc: incFields, $set: { lastTransactionAt: new Date() } },
+        { session, new: true }
+      );
+      if (!wallet) throw new Error('Wallet not found');
 
       if (payoutAmount > 0) {
         await TransactionModel.create([{
@@ -706,12 +709,12 @@ export class StakeService {
       const cashoutAmount = Math.floor(stake.stakeAmount * (1 - CASHOUT_FEE_PERCENT / 100));
       const fee = stake.stakeAmount - cashoutAmount;
 
-      const wallet = await WalletModel.findOne({ user: userId }).session(session);
+      const wallet = await WalletModel.findOneAndUpdate(
+        { user: userId },
+        { $inc: { balance: cashoutAmount }, $set: { lastTransactionAt: new Date() } },
+        { session, new: true }
+      );
       if (!wallet) throw new Error('Wallet not found');
-
-      wallet.balance += cashoutAmount;
-      wallet.lastTransactionAt = new Date();
-      await wallet.save({ session });
 
       stake.status = 'cashed_out';
       stake.cashoutRequested = true;
@@ -738,10 +741,10 @@ export class StakeService {
         metadata: { originalStake: stake.stakeAmount, cashoutAmount, fee, stakeId: stake._id }
       }], { session });
 
-      await session.commitTransaction();
+      // Decrement pod exposure inside the transaction
+      await PodModel.findByIdAndUpdate(stake.pod, { $inc: { currentExposure: -stake.stakeAmount, currentParticipants: -1 } }).session(session);
 
-      // Decrement pod exposure
-      await PodModel.findByIdAndUpdate(stake.pod, { $inc: { currentExposure: -stake.stakeAmount, currentParticipants: -1 } });
+      await session.commitTransaction();
 
       const cashoutPod = await PodModel.findById(stake.pod).select('title');
       await notifyStakeCashedOut(userId, cashoutPod?.title || 'Pod', cashoutAmount).catch(e => console.error(e));

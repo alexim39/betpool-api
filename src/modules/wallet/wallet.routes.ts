@@ -12,7 +12,7 @@ const router = Router();
 router.get('/balance', authMiddleware, walletController.getBalance);
 router.get('/transactions', authMiddleware, walletController.getTransactions);
 router.post('/deposit', authMiddleware, apiLimiter, validateDeposit, walletController.initiateDeposit);
-router.get('/deposit/callback', apiLimiter, walletController.depositCallback);
+router.get('/deposit/callback', authMiddleware, apiLimiter, walletController.depositCallback);
 router.post('/deposit/recover', authMiddleware, walletController.recoverDeposits);
 router.post('/withdraw', authMiddleware, apiLimiter, validateWithdrawal, walletController.initiateWithdrawal);
 router.get('/banks', apiLimiter, walletController.listBanks);

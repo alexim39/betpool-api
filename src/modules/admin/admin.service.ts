@@ -756,58 +756,78 @@ export class AdminService {
   }
 
   async approveWithdrawal(id: string, adminId: string): Promise<any> {
-    const session = await mongoose.startSession();
-    session.startTransaction();
+    // Phase 1: Atomically claim the withdrawal inside a transaction
+    const claimSession = await mongoose.startSession();
+    claimSession.startTransaction();
     try {
-      const transaction = await TransactionModel.findById(id).session(session);
-      if (!transaction) throw new AppError('Transaction not found', 404);
-      if (transaction.type !== 'withdrawal') throw new AppError('Not a withdrawal transaction', 400);
-      if (transaction.status !== 'pending') throw new AppError('Withdrawal is not in pending state', 400);
-
-      const meta = (transaction.metadata || {}) as any;
-      const transferResult = await walletService.processPaystackTransfer(
-        transaction, meta.bankCode, meta.accountNumber, meta.accountName, meta.narration
+      const transaction = await TransactionModel.findOneAndUpdate(
+        { _id: id, type: 'withdrawal', status: 'pending' },
+        { $set: { status: 'processing', providerData: { approvedBy: adminId, approvedAt: new Date() } } },
+        { session: claimSession, new: true }
       );
-
-      if (!transferResult.success) {
-        const wallet = await WalletModel.findOne({ user: transaction.user }).session(session);
-        if (wallet) {
-          wallet.balance += transaction.amount;
-          wallet.totalWithdrawn -= transaction.amount;
-          wallet.lastTransactionAt = new Date();
-          await wallet.save({ session });
-        }
-        transaction.status = 'failed';
-        transaction.failedAt = new Date();
-        transaction.failureReason = transferResult.message || 'Transfer failed';
-        transaction.providerData = { ...(transferResult.providerData || {}), approvedBy: adminId, approvedAt: new Date() };
-        await transaction.save({ session });
-        await session.commitTransaction();
-        notifyWithdrawalFailed(
-          transaction.user.toString(), transaction.amount, transferResult.message || 'Transfer failed'
-        ).catch(e => logger.error('notifyWithdrawalFailed error', e));
-        return { success: false, message: transferResult.message || 'Transfer failed', transaction };
+      if (!transaction) {
+        const existing = await TransactionModel.findById(id).session(claimSession);
+        if (!existing) throw new AppError('Transaction not found', 404);
+        if (existing.type !== 'withdrawal') throw new AppError('Not a withdrawal transaction', 400);
+        throw new AppError('Withdrawal is not in pending state', 400);
       }
-
-      transaction.status = 'completed';
-      transaction.completedAt = new Date();
-      transaction.providerData = { ...(transferResult.providerData || {}), approvedBy: adminId, approvedAt: new Date() };
-      await transaction.save({ session });
-
-      await session.commitTransaction();
-
-      notifyWithdrawalCompleted(
-        transaction.user.toString(),
-        transaction.amount,
-        `${meta.accountName} - ${meta.accountNumber}`
-      ).catch(e => logger.error('notifyWithdrawalCompleted error', e));
-
-      return { success: true, message: 'Withdrawal approved and processed', transaction };
+      await claimSession.commitTransaction();
     } catch (error) {
-      await session.abortTransaction();
+      await claimSession.abortTransaction();
       throw error;
     } finally {
-      session.endSession();
+      claimSession.endSession();
+    }
+
+    // Phase 2: Call Paystack outside any DB transaction
+    const transaction = await TransactionModel.findById(id) as any;
+    const meta = (transaction.metadata || {}) as any;
+    const transferResult = await walletService.processPaystackTransfer(
+      transaction, meta.bankCode, meta.accountNumber, meta.accountName, meta.narration
+    );
+
+    // Phase 3: Record the result in a new transaction
+    const resultSession = await mongoose.startSession();
+    resultSession.startTransaction();
+    try {
+      const txn = await TransactionModel.findById(id).session(resultSession);
+
+      if (!transferResult.success) {
+        const wallet = await WalletModel.findOneAndUpdate(
+          { user: txn.user },
+          { $inc: { balance: txn.amount, totalWithdrawn: -txn.amount }, $set: { lastTransactionAt: new Date() } },
+          { session: resultSession, new: true }
+        );
+        txn.status = 'failed';
+        txn.failedAt = new Date();
+        txn.failureReason = transferResult.message || 'Transfer failed';
+        txn.providerData = { ...(txn.providerData || {}), ...(transferResult.providerData || {}) };
+        await txn.save({ session: resultSession });
+        await resultSession.commitTransaction();
+        notifyWithdrawalFailed(
+          txn.user.toString(), txn.amount, transferResult.message || 'Transfer failed'
+        ).catch(e => logger.error('notifyWithdrawalFailed error', e));
+        return { success: false, message: transferResult.message || 'Transfer failed', transaction: txn };
+      }
+
+      txn.status = 'completed';
+      txn.completedAt = new Date();
+      txn.providerData = { ...(txn.providerData || {}), ...(transferResult.providerData || {}) };
+      await txn.save({ session: resultSession });
+      await resultSession.commitTransaction();
+
+      notifyWithdrawalCompleted(
+        txn.user.toString(),
+        txn.amount,
+        `${meta.accountName} - ${meta.accountNumber}`
+      ).catch(e => logger.error('notifyWithdrawalFailed error', e));
+
+      return { success: true, message: 'Withdrawal approved and processed', transaction: txn };
+    } catch (error) {
+      await resultSession.abortTransaction();
+      throw error;
+    } finally {
+      resultSession.endSession();
     }
   }
 

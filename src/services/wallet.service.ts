@@ -134,12 +134,14 @@ export class WalletService {
     providerData: Record<string, any>
   ): Promise<{ success: boolean; message: string }> {
     return runTransaction(async (session) => {
-      const transaction = await TransactionModel.findOne({ reference }).session(session);
+      const transaction = await TransactionModel.findOneAndUpdate(
+        { reference, status: { $in: ['pending', 'processing'] } },
+        { $set: { status: 'processing' } },
+        { session, new: true }
+      );
       if (!transaction) {
-        return { success: false, message: 'Transaction not found' };
-      }
-
-      if (transaction.status === 'completed') {
+        const existing = await TransactionModel.findOne({ reference }).session(session);
+        if (!existing) return { success: false, message: 'Transaction not found' };
         return { success: true, message: 'Already processed' };
       }
 
@@ -188,10 +190,18 @@ export class WalletService {
     }).limit(5);
 
     let recovered = 0;
-    for (const txn of pendingTransactions) {
-      const verification = await paymentService.verifyPaystackTransaction(txn.reference);
+    for (const pendingTxn of pendingTransactions) {
+      const verification = await paymentService.verifyPaystackTransaction(pendingTxn.reference);
       if (verification && verification.status === 'success') {
         const r = await runTransaction(async (session) => {
+          // Re-fetch inside transaction to prevent race conditions
+          const txn = await TransactionModel.findOneAndUpdate(
+            { reference: pendingTxn.reference, status: { $in: ['pending', 'processing'] } },
+            { $set: { status: 'processing' } },
+            { session, new: true }
+          );
+          if (!txn) return false;
+
           const wallet = await WalletModel.findById(txn.wallet).session(session);
           if (!wallet) return false;
           const newBalance = wallet.balance + txn.amount;
@@ -214,10 +224,11 @@ export class WalletService {
         if (r) recovered++;
       } else if (verification === null) {
         await runTransaction(async (session) => {
-          txn.status = 'failed';
-          txn.failureReason = 'Payment verification failed';
-          txn.failedAt = new Date();
-          await txn.save({ session });
+          const txn = await TransactionModel.findOneAndUpdate(
+            { reference: pendingTxn.reference, status: 'pending' },
+            { $set: { status: 'failed', failureReason: 'Payment verification failed', failedAt: new Date() } },
+            { session }
+          );
         });
       }
     }
@@ -230,12 +241,15 @@ export class WalletService {
 
   async verifyAndCreditDeposit(reference: string): Promise<{ success: boolean; message: string }> {
     return runTransaction(async (session) => {
-      const transaction = await TransactionModel.findOne({ reference }).session(session);
+      // Atomically claim the pending deposit to prevent race conditions
+      const transaction = await TransactionModel.findOneAndUpdate(
+        { reference, status: { $in: ['pending', 'processing'] } },
+        { $set: { status: 'processing' } },
+        { session, new: true }
+      );
       if (!transaction) {
-        return { success: false, message: 'Transaction not found' };
-      }
-
-      if (transaction.status === 'completed') {
+        const existing = await TransactionModel.findOne({ reference }).session(session);
+        if (!existing) return { success: false, message: 'Transaction not found' };
         return { success: true, message: 'Already processed' };
       }
 
@@ -250,6 +264,15 @@ export class WalletService {
         transaction.failedAt = new Date();
         await transaction.save({ session });
         return { success: false, message: 'Payment verification failed' };
+      }
+
+      // Verify Paystack-collected amount matches the stored transaction amount
+      if (verification.amount !== transaction.amount) {
+        transaction.status = 'failed';
+        transaction.failureReason = `Amount mismatch: transaction=${transaction.amount}, Paystack collected=${verification.amount}`;
+        transaction.failedAt = new Date();
+        await transaction.save({ session });
+        return { success: false, message: 'Amount mismatch' };
       }
 
       const wallet = await WalletModel.findById(transaction.wallet).session(session);
@@ -351,6 +374,18 @@ export class WalletService {
     }
     if (amount > 5_000_000) {
       return { success: false, reference: '', message: 'Maximum withdrawal is ₦5,000,000' };
+    }
+
+    // Enforce daily withdrawal limit (₦10,000,000)
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayAgg = await TransactionModel.aggregate([
+      { $match: { user: new mongoose.Types.ObjectId(userId), type: 'withdrawal', status: 'completed', createdAt: { $gte: todayStart } } },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]);
+    const todayWithdrawn = todayAgg[0]?.total || 0;
+    if (todayWithdrawn + amount > 10_000_000) {
+      return { success: false, reference: '', message: 'Daily withdrawal limit of ₦10,000,000 exceeded' };
     }
 
     return runTransaction(async (session) => {

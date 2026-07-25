@@ -26,7 +26,7 @@ router.post('/signup/complete', authLimiter, validateSignupComplete, authControl
 router.post('/login/request', authLimiter, validateLoginRequest, authController.requestLoginOTP);
 router.post('/login/verify', authLimiter, validateLoginVerify, authController.verifyLoginOTP);
 router.post('/login/pin', authLimiter, validateLoginPin, authController.loginWithPin);
-router.post('/setup/admin', authController.setupAdmin);
+router.post('/setup/admin', authLimiter, authController.setupAdmin);
 router.post('/login/email/request', authLimiter, validateLoginEmailRequest, authController.requestLoginEmailToken);
 router.post('/login/email/verify', authLimiter, validateLoginEmailVerify, authController.verifyLoginEmailToken);
 router.post('/otp/resend', authLimiter, authController.resendOTP);
