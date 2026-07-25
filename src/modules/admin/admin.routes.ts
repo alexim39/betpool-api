@@ -5,7 +5,6 @@ import { matchPoolController } from '../match-pools/match-pool.controller';
 import { podSyncController } from '../pods/pod-sync.controller';
 import { aiCurationController } from '../ai/ai-curation.controller';
 import { aiSettlementController } from '../ai/ai-settlement.controller';
-import { requestTimeout } from '../../middleware/timeout.middleware';
 import { aiKycController } from '../ai/ai-kyc.controller';
 import { aiRiskController } from '../ai/ai-risk.controller';
 import { aiBiController } from '../ai/ai-bi.controller';
@@ -44,7 +43,9 @@ router.post('/pods/:id/ai-settle', aiSettlementController.settlePod);
 router.post('/pods/:id/toggle-external-booking', adminController.toggleExternalBooking);
 router.post('/pods/:id/cancel', adminController.cancelPod);
 router.post('/pods/sync', podSyncController.sync);
-router.post('/ai/curate', requestTimeout(25000), aiCurationController.curate);
+router.post('/ai/curate', aiCurationController.curate);
+router.get('/ai/curate/status/:jobId', aiCurationController.getStatus);
+router.get('/ai/curate/latest', aiCurationController.getLatest);
 router.post('/ai/settle-all', aiSettlementController.settleAll);
 
 // User management
