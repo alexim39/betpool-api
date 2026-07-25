@@ -468,7 +468,7 @@ Rules:
 - Return ONLY the JSON object, no markdown or other text`;
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
       let response;
       try {
         response = await fetch(DEEPSEEK_API_URL, {
