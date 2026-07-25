@@ -24,7 +24,14 @@ class App {
     this.app.set('trust proxy', 1);
     const corsOrigins = ('http://localhost:4200,http://localhost:4201,http://localhost:4300,https://betpool.tech,http://betpool.tech,https://www.betpool.tech,https://mgt.betpool.tech,http://mgt.betpool.tech,https://www.mgt.betpool.tech').split(',');
     this.app.use(cors({
-      origin: corsOrigins,
+      origin: function (origin, callback) {
+        // Allow requests with no origin (server-to-server, curl, etc.)
+        if (!origin) return callback(null, true);
+        if (corsOrigins.includes(origin)) return callback(null, true);
+        // Also allow any *.betpool.tech subdomain
+        if (origin.endsWith('.betpool.tech')) return callback(null, true);
+        callback(null, false);
+      },
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
       credentials: true

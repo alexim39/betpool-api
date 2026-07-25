@@ -1,8 +1,20 @@
+import mongoose from 'mongoose';
 import { PodModel } from '../../models/pod.model';
 import { WalletModel } from '../../models/wallet.model';
 import { StakeModel } from '../../models/stake.model';
 import { createInAppNotification } from '../../services/notification.service';
 import { UserModel } from '../../models/user.model';
+
+const Schema = mongoose.Schema;
+
+const RiskStateSchema = new Schema({
+  _id: { type: String, default: 'risk_escalation' },
+  creationFrozen: { type: Boolean, default: false },
+  frozenAt: { type: String, default: null },
+  lastEscalationLevel: { type: String, enum: ['none', 'caution', 'warning', 'critical'], default: 'none' },
+  updatedAt: { type: Date, default: Date.now },
+});
+const RiskStateModel = mongoose.model('RiskState', RiskStateSchema);
 
 export interface PodRisk {
   podId: string;
@@ -85,8 +97,31 @@ export class AIRiskService {
     return this._creationFrozen;
   }
 
-  startScheduler(intervalMs = 15 * 60 * 1000) {
+  private async loadState(): Promise<void> {
+    try {
+      const state = await RiskStateModel.findById('risk_escalation').lean();
+      if (state) {
+        this._creationFrozen = state.creationFrozen;
+        this._frozenAt = state.frozenAt;
+        this._lastEscalationLevel = state.lastEscalationLevel;
+      }
+    } catch { /* first run — no state yet */ }
+  }
+
+  private async saveState(): Promise<void> {
+    try {
+      await RiskStateModel.findByIdAndUpdate('risk_escalation', {
+        creationFrozen: this._creationFrozen,
+        frozenAt: this._frozenAt,
+        lastEscalationLevel: this._lastEscalationLevel,
+        updatedAt: new Date(),
+      }, { upsert: true });
+    } catch { /* non-critical */ }
+  }
+
+  async startScheduler(intervalMs = 15 * 60 * 1000) {
     if (this.schedulerId) return;
+    await this.loadState();
     this.schedulerId = setInterval(() => this.runAutoEscalation(), intervalMs);
     console.log(`[Risk Management] Auto-escalation scheduler started — every ${intervalMs / 60000} minutes`);
     this.runAutoEscalation();
@@ -233,7 +268,17 @@ export class AIRiskService {
   }
 
   async applyAutoCaps(): Promise<{ adjusted: number; details: Array<{ podId: string; title: string; oldMax: number; newMax: number }> }> {
-    return { adjusted: 0, details: [] };
+    const report = await this.generateReport();
+    if (!report.autoCapActive) return { adjusted: 0, details: [] };
+
+    const details: Array<{ podId: string; title: string; oldMax: number; newMax: number }> = [];
+    for (const pod of report.podsAtRisk) {
+      if (pod.suggestedMaxStake < pod.maxStake) {
+        await PodModel.findByIdAndUpdate(pod.podId, { maxStake: pod.suggestedMaxStake });
+        details.push({ podId: pod.podId, title: pod.title, oldMax: pod.maxStake, newMax: pod.suggestedMaxStake });
+      }
+    }
+    return { adjusted: details.length, details };
   }
 
   async restoreCaps(): Promise<{ restored: number; details: Array<{ podId: string; title: string; oldMax: number; newMax: number }> }> {
@@ -268,12 +313,14 @@ export class AIRiskService {
     if (report.riskRatioPercent >= CREATION_FREEZE_THRESHOLD && !this._creationFrozen) {
       this._creationFrozen = true;
       this._frozenAt = new Date().toISOString();
+      await this.saveState();
       warnings.push(`CRITICAL: Pod creation FROZEN — risk ratio ${report.riskRatioPercent}% >= ${CREATION_FREEZE_THRESHOLD}%`);
       await this.notifyAdmins(`Pod Creation Frozen`,
         `Risk ratio reached ${report.riskRatioPercent}%. New pod creation has been frozen until risk drops below ${CREATION_FREEZE_THRESHOLD}%.`);
     } else if (report.riskRatioPercent < CREATION_FREEZE_THRESHOLD - 10 && this._creationFrozen) {
       this._creationFrozen = false;
       this._frozenAt = null;
+      await this.saveState();
       warnings.push(`Pod creation unfrozen — risk ratio dropped to ${report.riskRatioPercent}%.`);
       await this.notifyAdmins(`Pod Creation Unfrozen`,
         `Risk ratio dropped to ${report.riskRatioPercent}%. Pod creation is now allowed.`);
@@ -302,9 +349,15 @@ export class AIRiskService {
       report.riskRatioPercent >= CREATION_FREEZE_THRESHOLD ? 'warning' :
       report.riskRatioPercent >= this.autoCapThreshold ? 'caution' : 'none';
 
-    this._lastEscalationLevel = escalationLevel;
+    if (this._lastEscalationLevel !== escalationLevel) {
+      this._lastEscalationLevel = escalationLevel;
+      await this.saveState();
+    }
 
-    return { autoCapAdjusted: 0, podsSuspended, creationFrozen: this._creationFrozen, warnings, escalationLevel };
+    // Apply auto-caps when autoCap threshold is exceeded
+    const capResult = await this.applyAutoCaps();
+
+    return { autoCapAdjusted: capResult.adjusted, podsSuspended, creationFrozen: this._creationFrozen, warnings, escalationLevel };
   }
 
   private async calculateReserveProjection(

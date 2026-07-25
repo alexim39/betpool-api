@@ -455,30 +455,49 @@ export class WalletService {
       return { success: false, message: 'Payment provider not configured' };
     }
 
-    try {
-      const recipientCode = await paymentService.createTransferRecipient(accountName, accountNumber, bankCode);
-      const response = await fetch('https://api.paystack.co/transfer', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${secretKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          source: 'balance',
-          amount: transaction.netAmount * 100,
-          reference: transaction.reference,
-          recipient: recipientCode,
-          reason: narration || 'BetPool Withdrawal'
-        })
-      });
-      const data = await response.json();
-      if (data.status === true) {
-        return { success: true, providerData: data };
+    const recipientCode = await paymentService.createTransferRecipient(accountName, accountNumber, bankCode);
+    let lastError: any;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const response = await fetch('https://api.paystack.co/transfer', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${secretKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            source: 'balance',
+            amount: transaction.netAmount * 100,
+            reference: transaction.reference,
+            recipient: recipientCode,
+            reason: narration || 'BetPool Withdrawal'
+          })
+        });
+        const data = await response.json();
+        if (response.ok && data.status === true) {
+          return { success: true, providerData: data };
+        }
+        // Retry on 5xx (server error) or 429 (rate limit), fail fast on 4xx (client error)
+        const statusCode = response.status;
+        if (statusCode >= 500 || statusCode === 429) {
+          lastError = { message: `Paystack ${statusCode}: ${data.message || 'Server error'}`, providerData: data };
+          if (attempt < 3) {
+            const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+            await new Promise(r => setTimeout(r, delay));
+            continue;
+          }
+        }
+        return { success: false, message: data.message || `Paystack ${statusCode}`, providerData: data };
+      } catch (err: any) {
+        lastError = err;
+        if (attempt < 3) {
+          const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
       }
-      return { success: false, message: data.message || 'Transfer failed', providerData: data };
-    } catch (err: any) {
-      return { success: false, message: err.message || 'Transfer failed' };
     }
+    return { success: false, message: lastError?.message || 'Transfer failed after 3 attempts' };
   }
 
   async lockBalance(userId: string, amount: number, stakeId: string): Promise<boolean> {

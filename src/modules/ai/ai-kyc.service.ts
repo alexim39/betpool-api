@@ -35,10 +35,10 @@ export class AIKycService {
     const namesMatch = this.checkNamesMatch(registeredName, verifiedName);
 
     // Check for duplicate BVN/NIN across accounts
-    const dupField = user.kycType === 'bvn' ? 'kycData.bvn' : 'kycData.nin';
     const dupCount = await UserModel.countDocuments({
       _id: { $ne: user._id },
-      [dupField]: user.kycNumber,
+      kycNumber: user.kycNumber,
+      kycType: user.kycType,
     });
 
     // Account age
