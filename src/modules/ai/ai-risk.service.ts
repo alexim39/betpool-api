@@ -189,7 +189,7 @@ export class AIRiskService {
         exposurePercent,
         participantCount: p.currentParticipants || 0,
         status: p.status,
-        suggestedMaxStake: Math.max(100, Math.round((p.maxStake || 100000) * maxStakeReduction / 100) * 100),
+        suggestedMaxStake: Math.max(1000, Math.round((parseInt(process.env.POD_DEFAULT_MAX_STAKE || '100000', 10)) * maxStakeReduction / 100) * 100),
         riskLevel: podRiskLevel,
         riskSuspended: p.riskSuspended || false,
       };

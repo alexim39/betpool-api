@@ -37,7 +37,7 @@ export class AICurationController {
               marketType: fixture.isCombined ? 'parlay' as const : '1X2' as const,
               selection: bestPick.selection || fixture.selection || '',
               gainsMultiplier: fixture.multiplier || bestPick.recommendedMultiplier || 1.5,
-              minStake: 100,
+              minStake: 1000,
               maxStake: 100000,
               maxTotalExposure: 500000,
               opensAt: new Date(),
