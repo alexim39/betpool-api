@@ -9,6 +9,7 @@ const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 interface BSDEvent {
   id: number;
   league_id: number;
+  league?: { name: string };
   season_id: number;
   home_team_id: number;
   home_team: string;
@@ -411,7 +412,7 @@ export class AICurationService {
       const prompt = `Analyze this football match for BetPool's pod curation:
 
 MATCH: ${fixture.home_team} vs ${fixture.away_team}
-LEAGUE: ${fixture.league_id ? `League ID ${fixture.league_id}` : 'Unknown'} | Round: ${fixture.round_number || 'N/A'}
+LEAGUE: ${fixture.league?.name || `League ID ${fixture.league_id}`} | Round: ${fixture.round_number || 'N/A'}
 DATE: ${fixture.event_date}
 
 TEAM FORM:
@@ -511,7 +512,7 @@ Rules:
 
       const parsed = JSON.parse(content.replace(/```json\s*/gi, '').replace(/```\s*$/g, '').trim());
 
-      const leagueName = fixture.league_id?.toString() || '';
+      const leagueName = fixture.league?.name || fixture.league_id?.toString() || '';
 
       // Parse recommendations
       const recommendations: CurationSelection[] = (parsed.recommendations || []).map((r: any) => ({
@@ -566,7 +567,7 @@ Rules:
         fixtureId: fixture.id,
         homeTeam: fixture.home_team,
         awayTeam: fixture.away_team,
-        league: fixture.league_id?.toString() || '',
+        league: fixture.league?.name || fixture.league_id?.toString() || '',
         matchDate: fixture.event_date,
         verdict: 'SKIP',
         overallReasoning: `AI analysis failed: ${err.message}`,
