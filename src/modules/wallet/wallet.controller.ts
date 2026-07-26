@@ -193,15 +193,11 @@ export class WalletController {
         bankCode as string
       );
 
-      if (!result) {
-        res.status(404).json({ success: false, message: 'Account not found' });
-        return;
-      }
-
       res.json({ success: true, data: result });
-    } catch (error) {
+    } catch (error: any) {
       logger.error('Resolve account error', error);
-      res.status(500).json({ success: false, message: 'Failed to resolve account' });
+      const message = error?.response?.data?.message || error?.message || 'Failed to resolve account';
+      res.status(200).json({ success: false, message });
     }
   }
 
@@ -271,7 +267,7 @@ export class WalletController {
         min: 500,
         max: 5000000,
         dailyLimit: 10000000,
-        fee: '1.5% (max ₦50)'
+        fee: 'No fees'
       }
     });
   }

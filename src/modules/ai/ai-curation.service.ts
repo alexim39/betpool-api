@@ -113,6 +113,73 @@ export class AICurationService {
     return { 'Authorization': `Token ${this.apiKey}` };
   }
 
+  private static readonly LEAGUE_NAMES: Record<number, string> = {
+    1: 'Premier League',
+    2: 'UEFA Champions League',
+    3: 'La Liga',
+    4: 'Serie A',
+    5: 'Bundesliga',
+    6: 'Ligue 1',
+    7: 'Eredivisie',
+    8: 'Primeira Liga',
+    9: 'English Championship',
+    10: 'Scottish Premiership',
+    11: 'Belgian Pro League',
+    12: 'Super Lig',
+    13: 'Russian Premier League',
+    14: 'Austrian Bundesliga',
+    15: 'Swiss Super League',
+    16: 'Greek Super League',
+    17: 'Danish Superliga',
+    18: 'Eliteserien',
+    19: 'Allsvenskan',
+    20: 'Ekstraklasa',
+    21: 'Czech First League',
+    22: 'Croatian HNL',
+    23: 'Romanian Liga I',
+    24: 'Bulgarian First League',
+    25: 'MLS',
+    26: 'J1 League',
+    27: 'Saudi Pro League',
+    54: 'Eliteserien',
+    55: 'OBOS-ligaen',
+    88: 'Championship',
+    90: 'League One',
+    91: 'League Two',
+    94: 'Premier League 2',
+    101: 'UEFA Europa League',
+    102: 'UEFA Conference League',
+    103: 'FA Cup',
+    104: 'EFL Cup',
+    105: 'Super Cup',
+    106: 'Community Shield',
+    107: 'Copa del Rey',
+    108: 'DFB-Pokal',
+    109: 'Coppa Italia',
+    110: 'Coupe de France',
+    111: 'KNVB Cup',
+    112: 'Taça de Portugal',
+    113: 'Scottish Cup',
+    114: 'AFC Champions League',
+    115: 'CAF Champions League',
+    116: 'Copa Libertadores',
+    117: 'Copa Sudamericana',
+    118: 'CONCACAF Champions Cup',
+    119: 'FIFA Club World Cup',
+    120: 'FIFA World Cup',
+    121: 'UEFA Euro',
+    122: 'Copa America',
+    123: 'Africa Cup of Nations',
+    124: 'Asian Cup',
+    125: 'Gold Cup',
+    126: 'Olympics',
+  };
+
+  private leagueName(leagueId: number | undefined | null): string {
+    if (leagueId == null) return '';
+    return AICurationService.LEAGUE_NAMES[leagueId] || `League ${leagueId}`;
+  }
+
   async curate(): Promise<CurationResponse> {
     const result: CurationResponse = {
       success: true, total: 0, recommended: 0, skipped: 0,
@@ -412,7 +479,7 @@ export class AICurationService {
       const prompt = `Analyze this football match for BetPool's pod curation:
 
 MATCH: ${fixture.home_team} vs ${fixture.away_team}
-LEAGUE: ${fixture.league?.name || `League ID ${fixture.league_id}`} | Round: ${fixture.round_number || 'N/A'}
+LEAGUE: ${this.leagueName(fixture.league_id)} | Round: ${fixture.round_number || 'N/A'}
 DATE: ${fixture.event_date}
 
 TEAM FORM:
@@ -512,7 +579,7 @@ Rules:
 
       const parsed = JSON.parse(content.replace(/```json\s*/gi, '').replace(/```\s*$/g, '').trim());
 
-      const leagueName = fixture.league?.name || fixture.league_id?.toString() || '';
+      const leagueName = this.leagueName(fixture.league_id);
 
       // Parse recommendations
       const recommendations: CurationSelection[] = (parsed.recommendations || []).map((r: any) => ({
@@ -567,7 +634,7 @@ Rules:
         fixtureId: fixture.id,
         homeTeam: fixture.home_team,
         awayTeam: fixture.away_team,
-        league: fixture.league?.name || fixture.league_id?.toString() || '',
+        league: this.leagueName(fixture.league_id),
         matchDate: fixture.event_date,
         verdict: 'SKIP',
         overallReasoning: `AI analysis failed: ${err.message}`,

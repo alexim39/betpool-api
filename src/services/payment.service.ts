@@ -108,24 +108,19 @@ export class PaymentService {
     }
   }
 
-  async resolveBankAccount(accountNumber: string, bankCode: string): Promise<{ accountName: string } | null> {
+  async resolveBankAccount(accountNumber: string, bankCode: string): Promise<{ accountName: string }> {
     const secret = this.paystackSecret;
-    if (!secret) return null;
+    if (!secret) return { accountName: 'N/A' };
 
-    try {
-      const response = await axios.get(
-        `${this.paystackBase}/bank/resolve?account_number=${accountNumber}&bank_code=${bankCode}`,
-        { headers: { Authorization: `Bearer ${secret}` } }
-      );
+    const response = await axios.get(
+      `${this.paystackBase}/bank/resolve?account_number=${accountNumber}&bank_code=${bankCode}`,
+      { headers: { Authorization: `Bearer ${secret}` } }
+    );
 
-      if (response.data.status) {
-        return { accountName: response.data.data.account_name };
-      }
-      return null;
-    } catch (error) {
-      console.error('Account resolution failed:', error);
-      return null;
+    if (response.data.status) {
+      return { accountName: response.data.data.account_name };
     }
+    throw new Error(response.data.message || 'Account not found');
   }
 
   async listBanks(): Promise<{ code: string; name: string }[]> {
