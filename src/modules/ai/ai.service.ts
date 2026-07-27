@@ -11,8 +11,7 @@ interface ChatMessage {
 
 const BETPOOL_KNOWLEDGE = `# BetPool User Guide
 
-BetPool is a sports betting app. You can bet on sports, join group prize pools, and let Ora AI manage bets for you. Works on phone, tablet, and computer — the layout adjusts automatically.
-
+BetPool is an AI-powered betting platform. It lets you bet on Pods (AI-curated matche odds with a built-in stake-back guarantee), join Match Pools for shared prize pools, or let Ora AI manage your bets for you. Works on phone, tablet, and computer — the layout adjusts automatically.
 ## Account & Login
 
 **Sign up:** Enter your full legal name, Nigerian phone number, and optionally email. Agree to Terms of Service. You'll get a 6-digit code by SMS (and email if provided). Enter it to confirm. Choose a 6-digit PIN — you use this to log in and withdraw.
