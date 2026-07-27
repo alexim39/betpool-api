@@ -75,8 +75,13 @@ export class PodController {
 
   async getSports(req: Request, res: Response): Promise<void> {
     try {
-      const sports = await PodModel.distinct('sport', { status: 'active' });
-      res.json({ success: true, data: sports });
+      const sports = await PodModel.aggregate([
+        { $match: { status: 'active' } },
+        { $group: { _id: { $toLower: '$sport' }, original: { $first: '$sport' } } },
+        { $sort: { _id: 1 } },
+        { $project: { _id: 0, sport: '$original' } }
+      ]);
+      res.json({ success: true, data: sports.map(s => s.sport) });
     } catch (error) {
       console.error('Get sports error:', error);
       res.status(500).json({ success: false, message: 'Failed to fetch sports' });

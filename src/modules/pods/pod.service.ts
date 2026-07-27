@@ -90,11 +90,12 @@ export class PodService {
     cursor?: Date;
   } = {}): Promise<{ pods: IPod[]; total: number }> {
     const offset = options.offset ?? 0;
-    const cacheKey = `feed:${options.sport || 'all'}:${options.isLive !== undefined ? options.isLive : 'all'}`;
+    const sportKey = (options.sport || 'all').toLowerCase();
+    const cacheKey = `feed:${sportKey}:${options.isLive !== undefined ? options.isLive : 'all'}`;
     if (!options.cursor && offset === 0) {
-      const cached = cacheService.get<IPod[]>(cacheKey);
+      const cached = cacheService.get<{ items: IPod[]; total: number }>(cacheKey);
       logger.debug('getActiveFeed cache lookup', { cacheKey, cached: !!cached });
-      if (cached) return { pods: cached, total: cached.length };
+      if (cached) return { pods: cached.items, total: cached.total };
     }
 
     const now = new Date();
@@ -104,7 +105,7 @@ export class PodService {
       $expr: { $lt: ['$currentExposure', '$maxTotalExposure'] }
     };
 
-    if (options.sport) query.sport = options.sport;
+    if (options.sport) query.sport = new RegExp(`^${options.sport.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
     if (options.isLive !== undefined) query.isLive = options.isLive;
     if (options.cursor) query.opensAt = { $lt: options.cursor };
 
@@ -122,7 +123,7 @@ export class PodService {
 
     if (!options.cursor && offset === 0) {
       logger.debug('getActiveFeed setting cache', { cacheKey });
-      cacheService.set(cacheKey, result, 60_000);
+      cacheService.set(cacheKey, { items: result, total }, 60_000);
     }
 
     return { pods: result, total };
@@ -133,7 +134,8 @@ export class PodService {
     limit?: number;
     hoursAhead?: number;
   } = {}): Promise<IPod[]> {
-    const cacheKey = `upcoming:${options.sport || 'all'}:${options.hoursAhead || 24}`;
+    const sportKey = (options.sport || 'all').toLowerCase();
+    const cacheKey = `upcoming:${sportKey}:${options.hoursAhead || 24}`;
     const cached = cacheService.get<IPod[]>(cacheKey);
     if (cached) return cached;
 
@@ -145,7 +147,7 @@ export class PodService {
       opensAt: { $gt: now, $lte: endTime }
     };
 
-    if (options.sport) query.sport = options.sport;
+    if (options.sport) query.sport = new RegExp(`^${options.sport.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
 
     const pods = await PodModel.find(query)
       .sort({ opensAt: 1 })
@@ -159,7 +161,7 @@ export class PodService {
   }
 
   async getBySport(sport: string, options: { status?: string; limit?: number } = {}): Promise<IPod[]> {
-    const query: Record<string, any> = { sport };
+    const query: Record<string, any> = { sport: new RegExp(`^${sport.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') };
     if (options.status) query.status = options.status;
 
     return PodModel.find(query)
