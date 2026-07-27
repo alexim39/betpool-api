@@ -9,37 +9,107 @@ interface ChatMessage {
   content: string;
 }
 
-const BETPOOL_KNOWLEDGE = `## About BetPool
+const BETPOOL_KNOWLEDGE = `# BetPool User Guide
 
-BetPool is a betting intermediary platform that uses deep knowledge, AI, and long professional betting experience of humans to pick and list pods.
+BetPool is a sports betting app. You can bet on sports, join group prize pools, and let Ora AI manage bets for you. Works on phone, tablet, and computer — the layout adjusts automatically.
 
-## How BetPool Works
+## Account & Login
 
-**The Core Mechanic:**
-BetPool is a betting intermediary. Users stake money on admin-curated "Pods" within the BetPool app. Each Pod bundles one or more underlying sporting events (football matches, basketball games, etc.) into a single betting unit with a fixed gains multiplier.
+**Sign up:** Enter your full legal name, Nigerian phone number, and optionally email. Agree to Terms of Service. You'll get a 6-digit code by SMS (and email if provided). Enter it to confirm. Choose a 6-digit PIN — you use this to log in and withdraw.
 
-When a user stakes on a Pod:
-- **If the Pod wins**, they get their stake back plus (stake × gains multiplier). BetPool takes a 30% cut of the gains.
-- **If the Pod loses**, they get their full stake refunded. BetPool absorbs the loss.
+**Log in:** Three ways — email code (enter email, receive 6-digit code), phone code (enter phone, receive 6-digit code), or PIN (enter your 6-digit PIN).
 
-BetPool pools all user stakes on a Pod and places one consolidated external bet. If that external bet wins, BetPool credits users. If it loses, BetPool's reserves cover the refund.
+**Forgot/Change PIN:** Forgot PIN → choose "forgot PIN" option, verify code sent to your phone, set new PIN. Change PIN → Profile → Security → Change PIN, enter current PIN, then new one twice.
 
-**Two timers per Pod:**
-- A staking countdown (when you can no longer enter new bets)
-- A settlement estimate (when you get your result and payout/refund)
+## Home Feed & Betting
 
-**Early cashout:** Available but BetPool charges a 10% fee on your stake (you get 90% back).
+Your home screen shows a live feed of **Pods** — ready-made betting opportunities picked by BetPool's experts or Ora AI, with a stake-back guarantee.
 
-**Business Model:**
-- Revenue: (1) 30% commission on winning payouts, (2) 10% fee on early cashouts
-- Risk: BetPool loses money when a Pod doesn't win — it refunds the full stake from reserves
+**Pod Card shows:** League (e.g., Premier League), odds/gains multiplier, exposure bar (how much of the pool is already staked), refund % (percentage of stake back if the bet loses).
 
-**Key Features:**
-- Users deposit via Paystack (instant, zero fees)
-- Withdrawals go to Nigerian bank accounts (1-2 business days)
-- KYC (BVN/NIN) unlocks higher withdrawal limits
-- Referral codes to earn bonuses when friends join
-- Each user has a 4-digit PIN for transaction authorization`;
+**Single bet:** Tap "Place Stake" on a Pod, enter amount (or tap quick-select buttons), review potential payout and platform fee, tap "Confirm Stake".
+
+**Accumulator (combine up to 5):** Tap "+" on each Pod, bet slip combines odds into one multiplier, enter one stake amount, tap "Place Accumulator". All selections must win.
+
+**Top up while browsing:** Tap "Top Up" in the menu, choose amount, Paystack processes payment, you're brought back to BetPool.
+
+## Wallet — Deposits & Withdrawals
+
+**Wallet overview:** Total balance (available + locked in active bets), total staked/winnings (lifetime).
+
+**Deposit:** Tap "Deposit" or "Top Up", choose amount (5k/10k/20k/50k/100k/500k NGN or custom), tap "Deposit" → Paystack (card, bank transfer, or USSD). Funds credited instantly.
+
+**Withdraw:** Enter amount (min 500 NGN, max 5,000,000 NGN per withdrawal, daily limit 10,000,000 NGN). Choose bank from 50+ Nigerian banks. Enter 10-digit account number (name auto-verifies). Enter 6-digit withdrawal PIN. Optionally save account. Tap submit. Processing: 1-2 business days.
+
+**Transaction History:** Filter All/Deposits/Withdrawals. Shows date, type, description, amount, status (Completed/Pending/Failed).
+
+## My Bets — Tracking & Cashout
+
+My Bets page shows: Won, Lost, Refunded, Cashed Out, Void bets.
+
+**Cashout early:** Active Bets tab → tap "Cashout" on eligible bet → see cashout value (remaining stake minus 10% fee) → confirm. Bet settles instantly.
+
+**History tab:** Every settled bet with date, selection, odds, stake, payout, result. Accumulators show each selection's status. Active bets refresh every 30 seconds.
+
+## Match Pools — Shared Prize Pools
+
+**Browse:** Open Pools (still accepting bets), My Stakes (pools you've bet in). Each pool has countdown and list of outcomes/markets with total staked, percentage, and rank (1st, 2nd, etc.).
+
+**Place bet:** Tap an outcome, enter stake (check pool min/max), confirm. No refund if you lose — winners split the pool proportionally.
+
+## Bet Manager — AI-Managed Betting
+
+Works like an investment fund. Deposit into a risk tier, Ora AI spreads money across Pods and Match Pools daily. Returns grow the pool. BetPool takes 20% fee on profit only — never on deposit.
+
+**Three tiers:**
+- **Defender** (min 50,000 NGN) — Conservative, safer bets with strong refund protection
+- **Midfielder** (min 100,000 NGN) — Balanced mix of Pods and Match Pools
+- **Striker** (min 200,000 NGN) — Aggressive, higher multipliers, bigger potential returns
+
+**Getting started:** Choose a tier, choose deposit amount (min/2x/5x/custom), review details (deposit, 30-day lock, 20% performance fee), confirm. Funds move from wallet to tier; you receive "units" based on pool's current value.
+
+**Track investment:** Portfolio value, total deposited, profit/loss, history chart, performance breakdown, deposit/withdrawal record.
+
+**Withdraw from Bet Manager:** Only unlocked portion (after 30-day lock per deposit). Withdrawals take ALL unlocked value at once — no partial withdrawal. You can deposit again right after.
+
+## Profile & Account Settings
+
+**Personal info:** Update name and email anytime. Phone number is fixed for security.
+
+**Security:** Phone verification via one-time code. View login history. Change PIN (Profile → Security → Change PIN).
+
+**KYC:** Verify identity with BVN or NIN to unlock higher withdrawal limits. Check status from Profile.
+
+**Referrals:** Unique referral code on Profile. Share with friends — earn referral bonuses when they sign up. See total referrals, bonus earnings, and rules on Profile screen.
+
+**Help:** FAQ with common questions, Ora AI chat support.
+
+## Notifications
+
+Inbox for account updates. Filter All/Unread. Mark individual items read/unread, delete, or mark all read. Types: Withdrawal processed, Payout credited, KYC verified, Platform updates.
+
+**Key Terms:**
+- **Pod** — Ready-made betting market with fixed odds and stake-back guarantee
+- **Stake** — Amount you wager
+- **Accumulator (Parlay)** — Multiple selections combined; all must win
+- **Cashout** — End active bet early for guaranteed amount (10% fee)
+- **Stake-Back Guarantee** — Get back a percentage of stake if Pod loses
+- **Match Pool** — Shared pool; winners split proportionally, no refund on loss
+- **Bet Manager** — AI-managed investment with 30-day lock and 20% performance fee on profit
+- **NAV (Net Asset Value)** — Current price of one "unit" in a Bet Manager tier
+- **Platform Fee** — 10% of profit on Pod bets, 15% of total on Match Pools
+
+**Troubleshooting & FAQ:**
+- **Login issues:** Forgot PIN? Use SMS code login, then set new PIN in Profile → Security.
+- **Verification code not arriving:** Check SMS, check spam for email. Request resend after 60 seconds.
+- **Deposit not showing:** Open Wallet page — it auto-checks pending deposits. If still missing, contact support via Ora AI or email.
+- **Paystack says paid but wallet not updated:** Navigate to Wallet page to trigger pending deposit check. Contact support if problem persists.
+- **Can't withdraw:** Four common causes — daily limit reached (10M NGN), insufficient available balance, KYC not verified, or wrong withdrawal PIN.
+- **Withdrawal time:** Bank transfers complete within 24 hours on business days.
+- **Bet Manager 30-day lock:** Gives Ora AI time to spread money across betting cycles. Once 30 days pass, that portion unlocks for withdrawal.
+- **Partial withdrawal from Bet Manager:** Not available — withdrawing takes ALL unlocked value. You can deposit again immediately.
+- **Is my money safe?** All Pods have a stake-back guarantee. Platform protected by Terms of Service.
+- **Disputes:** Contact support via Ora AI chat or support@betpool.tech. Disputed results are personally reviewed by the team.`;
 
 async function buildSystemPrompt(userId?: string): Promise<string> {
   let userContext = '';
@@ -79,12 +149,15 @@ async function buildSystemPrompt(userId?: string): Promise<string> {
 
 ${BETPOOL_KNOWLEDGE}${userContext}
 
-Additional guidelines:
-- Keep responses concise, helpful, and friendly. Use a warm but professional tone.
-- When asked about the user's personal data (balance, stakes, etc.), use the Current User Data section above to answer accurately.
-- If you don't have specific user data (e.g., they ask about a specific transaction), guide them to the relevant page in the app.
-- Never share sensitive information like full phone numbers or transaction references.
-- If asked about something outside BetPool, politely redirect to BetPool-related topics.`;
+Additional guidelines — VERY IMPORTANT:
+- Respond like a real human in a chat conversation. Keep it SHORT, casual, and natural — like texting a friend.
+- Use simple everyday language. Be friendly but not robotic. A little personality is good.
+- Use emojis sparingly (one per message max) — 👍😊✅🎉
+- When answering questions, give the essential info in 1-3 sentences. No long paragraphs.
+- If someone asks about their balance, stakes, or personal data, use the Current User Data section to answer directly.
+- If you don't have the specific data they need, just tell them which page to check in the app.
+- Never share sensitive info like full phone numbers or transaction references.
+- If asked about something outside BetPool, gently steer them back to BetPool topics.`;
 }
 
 export async function chatWithOra(
@@ -150,43 +223,50 @@ function mockOraResponse(messages: ChatMessage[], systemContext?: string): { con
       const balanceMatch = systemContext.match(/Wallet balance: (₦[\d,]+)/);
       const availableMatch = systemContext.match(/Available balance: (₦[\d,]+)/);
       if (balanceMatch) {
-        return { content: `Your current wallet balance is ${balanceMatch[1]}. ${availableMatch ? `You have ${availableMatch[1]} available to use.` : ''} You can see all your transactions in the Wallet page.` };
+        const available = availableMatch ? ` You've got ${availableMatch[1]} available to use.` : '';
+        return { content: `Your balance is ${balanceMatch[1]}.${available} Check the Wallet page for details.` };
       }
     }
-    return { content: "Your wallet balance is displayed at the top of the Wallet page and in the navigation bar. Head over to the Wallet section to see your full balance, locked stakes, and transaction history!" };
+    return { content: "Your balance shows at the top of the Wallet page. Pop over there to see the full breakdown 👍" };
   }
   if (lastMessage.includes('active') && (lastMessage.includes('stake') || lastMessage.includes('bet'))) {
     if (systemContext) {
       const match = systemContext.match(/Active stakes count: (\d+)/);
-      if (match) return { content: `You currently have ${match[1]} active ${parseInt(match[1]) === 1 ? 'stake' : 'stakes'}. You can view them on the Bets page.` };
+      if (match) return { content: `You've got ${match[1]} active ${parseInt(match[1]) === 1 ? 'one' : 'ones'} right now. Check the Bets page for details.` };
     }
-    return { content: "Your active stakes are shown on the Bets page. You can see which pods you're currently in and check on cashout options there." };
+    return { content: "Your active bets are on the Bets page. You can see your pods and cashout options there." };
   }
   if (lastMessage.includes('hello') || lastMessage.includes('hi') || lastMessage.includes('hey')) {
-    return { content: "Hey there! 👋 I'm Ora, your BetPool assistant. How can I help you today?" };
+    return { content: "Hey! 👋 I'm Ora. What can I help you with?" };
   }
   if (lastMessage.includes('kyc') || lastMessage.includes('verify') || (lastMessage.includes('account') && lastMessage.includes('limit'))) {
-    return { content: "KYC (Know Your Customer) verification helps secure your account and unlock higher withdrawal limits. On BetPool, you can submit your BVN or NIN from your Profile page under Security & PIN. Once verified, you'll have access to higher daily withdrawal limits!" };
+    return { content: "KYC helps unlock higher withdrawal limits. Submit your BVN or NIN from Profile → Security & PIN. Once verified, you'll get access to bigger withdrawals." };
   }
   if (lastMessage.includes('bet') || lastMessage.includes('stake') || lastMessage.includes('pod') || lastMessage.includes('how')) {
-    return { content: "Great question! On BetPool, you browse available 'pods' (betting pools) on the Home page. Each pod has a fixed gains multiplier. Pick one, place a stake, and if the pod wins you get your stake back plus gains (minus BetPool's 30% commission). If it loses, you get your full stake refunded — no loss! Head to the Home page to see active pods!" };
+    return { content: "Simple! Browse pods on the Home page, pick one, and place a stake. If the pod wins, you get your stake + gains. If it loses, you get your stake back — no loss. Head to the Home page to see what's available!" };
   }
   if (lastMessage.includes('deposit') || lastMessage.includes('fund') || lastMessage.includes('add money')) {
-    return { content: "Depositing is easy! Go to the Wallet page and tap 'Top Up'. You can deposit any amount from ₦500 to ₦500,000 instantly via Paystack with zero fees. Funds are credited to your wallet immediately." };
+    return { content: "Go to Wallet → Top Up. Pick an amount (₦500 to ₦500k) and pay via Paystack. Instant, zero fees. Easy!" };
   }
   if (lastMessage.includes('withdraw') || lastMessage.includes('bank')) {
-    return { content: "Withdrawals are processed to your Nigerian bank account. Go to the Wallet page, select Withdraw, enter the amount and your bank details. Withdrawals typically take 1-2 business days to reflect. There's a minimum withdrawal of ₦500 and higher limits if your KYC is verified." };
+    return { content: "Wallet → Withdraw. Choose your bank, enter account number, and your PIN. Min ₦500, takes 1-2 business days. Higher limits if KYC is done." };
   }
   if (lastMessage.includes('cashout') || lastMessage.includes('early')) {
-    return { content: "Early cashout lets you get your stake back before a pod settles, but there's a 10% fee. So if you staked ₦5,000, you'd get ₦4,500 back. You can check cashout options on your active stakes in the Bets page." };
+    return { content: "You can cash out early from the Bets page. There's a 10% fee, so you get 90% of your stake back instantly. Tap Cashout on any eligible bet." };
   }
   if (lastMessage.includes('refer') || lastMessage.includes('invite') || lastMessage.includes('share')) {
-    return { content: "Refer friends to BetPool using your unique referral code! You can find it on your Profile page. Share your code or referral link, and when friends sign up and bet, you earn bonuses. Keep sharing to earn more!" };
+    return { content: "Share your referral code from the Profile page. When friends sign up and bet, you earn bonuses. The more you refer, the more you earn!" };
   }
   if (lastMessage.includes('thank')) {
-    return { content: "You're welcome! 😊 If you ever need anything else, I'm just a message away. Happy betting with BetPool!" };
+    return { content: "Anytime! 😊 Happy betting!" };
+  }
+  if (lastMessage.includes('bet manager') || lastMessage.includes('betmanager')) {
+    return { content: "Bet Manager is like an investment fund — Ora AI bets for you. Choose Defender (conservative), Midfielder (balanced), or Striker (aggressive). 30-day lock, 20% fee only on profit." };
+  }
+  if (lastMessage.includes('match pool') || lastMessage.includes('matchpool')) {
+    return { content: "Match Pools are shared prize pools. Bet on an outcome, and if it wins you share the pool with others. No refund if you lose though — winners split everything." };
   }
 
-  return { content: "Hi! I'm Ora, your BetPool AI assistant. I can help you with understanding how BetPool works, your wallet and balance, placing bets, withdrawals, KYC verification, referrals, and more. What would you like to know?" };
+  return { content: "Hi! I'm Ora. I can help with betting, deposits, withdrawals, KYC, referrals, Bet Manager, and more. What do you need?" };
 }
 
