@@ -88,6 +88,7 @@ router.get('/ai/settlement/pending-count', aiSettlementController.countPendingRe
 router.get('/stakes', adminController.listStakes);
 router.get('/stakes/:id', adminController.getStake);
 router.post('/stakes/:id/settle', adminController.settleStake);
+router.post('/stakes/:id/leg/:legIndex/settle', adminController.settleStakeLeg);
 router.post('/stakes/:id/void', adminController.voidStake);
 
 // Transaction management

@@ -259,6 +259,31 @@ export class AdminController {
     }
   }
 
+  async settleStakeLeg(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const { id, legIndex } = req.params;
+      const { result } = req.body;
+      const userId = req.user!.userId;
+
+      if (!['win', 'loss', 'void'].includes(result)) {
+        res.status(400).json({ success: false, message: 'Invalid result. Must be: win, loss, or void' });
+        return;
+      }
+
+      const legIdx = parseInt(legIndex, 10);
+      if (isNaN(legIdx) || legIdx < 0) {
+        res.status(400).json({ success: false, message: 'Invalid leg index' });
+        return;
+      }
+
+      const stake = await adminService.settleStakeLeg(id, legIdx, result, userId);
+      res.json({ success: true, data: stake });
+    } catch (error: any) {
+      logger.error('Admin settle leg error', error);
+      res.status(400).json({ success: false, message: error.message || 'Failed to settle leg' });
+    }
+  }
+
   async voidStake(req: AuthRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;

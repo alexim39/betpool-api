@@ -1034,6 +1034,105 @@ export class AdminService {
     return this.settleStake(stakeId, 'void', settledBy, 'Voided by admin');
   }
 
+  async settleStakeLeg(stakeId: string, legIndex: number, result: 'win' | 'loss' | 'void', settledBy: string): Promise<IStake | null> {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const stake = await StakeModel.findById(stakeId).session(session);
+      if (!stake) throw new Error('Stake not found');
+      if (!stake.isParlay || !stake.items) throw new Error('Not a parlay stake');
+      if (legIndex < 0 || legIndex >= stake.items.length) throw new Error('Invalid leg index');
+
+      const leg = stake.items[legIndex];
+      if (leg.status !== 'pending') throw new Error(`Leg ${legIndex + 1} already settled as ${leg.status}`);
+
+      leg.status = result === 'win' ? 'won' : result === 'void' ? 'void' : 'lost';
+      leg.settledAt = new Date();
+
+      const allSettled = stake.items.every(item => item.status !== 'pending');
+
+      if (allSettled) {
+        const anyLost = stake.items.some(item => item.status === 'lost');
+        const allVoid = stake.items.every(item => item.status === 'void');
+        const allWon = stake.items.every(item => item.status === 'won');
+
+        const wallet = await WalletModel.findOne({ user: stake.user }).session(session);
+        if (!wallet) throw new Error('Wallet not found');
+
+        let payoutAmount = 0;
+        let newStatus: IStake['status'];
+        let txType = 'refund';
+        let txDescription = '';
+
+        if (allWon) {
+          payoutAmount = stake.netPayout;
+          wallet.balance += payoutAmount;
+          wallet.totalWon += payoutAmount;
+          newStatus = 'won';
+          txType = 'payout';
+          txDescription = 'Parlay won (admin)';
+        } else if (allVoid) {
+          payoutAmount = stake.stakeAmount;
+          wallet.balance += payoutAmount;
+          newStatus = 'void';
+          txDescription = 'Parlay voided (admin)';
+        } else if (anyLost) {
+          payoutAmount = 0;
+          newStatus = 'lost';
+          txDescription = 'Parlay lost - leg(s) lost';
+        } else {
+          payoutAmount = 0;
+          newStatus = 'lost';
+          txDescription = 'Parlay lost - mixed outcome';
+        }
+
+        wallet.lastTransactionAt = new Date();
+        await wallet.save({ session });
+
+        if (payoutAmount > 0) {
+          await TransactionModel.create([{
+            user: stake.user,
+            wallet: wallet._id,
+            type: txType,
+            status: 'completed',
+            amount: payoutAmount,
+            fee: allWon ? stake.platformFee : 0,
+            netAmount: payoutAmount,
+            balanceBefore: wallet.balance - payoutAmount,
+            balanceAfter: wallet.balance,
+            currency: 'NGN',
+            reference: `PLEG_${stake._id}_${legIndex}`,
+            provider: 'internal',
+            metadata: { description: txDescription, isParlay: true, legCount: stake.items.length, settledLeg: legIndex }
+          }], { session });
+        }
+
+        stake.status = newStatus;
+        stake.settledAt = new Date();
+        stake.settledBy = new mongoose.Types.ObjectId(settledBy);
+        stake.settlementNotes = `Leg ${legIndex + 1} ${result} — ${txDescription}`;
+        stake.settledOdds = stake.combinedMultiplier;
+      } else {
+        stake.settlementNotes = `Leg ${legIndex + 1} settled as ${result} — ${stake.items.filter(i => i.status !== 'pending').length}/${stake.items.length} legs done`;
+        stake.markModified('items');
+      }
+
+      await stake.save({ session });
+      await session.commitTransaction();
+
+      const populated = await StakeModel.findById(stake._id)
+        .populate('user', 'phone fullName email')
+        .populate('pod');
+      return populated;
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
+  }
+
   async listTransactions(query: PaginationQuery): Promise<PaginatedResult<any>> {
     const page = Math.max(1, query.page || 1);
     const limit = Math.min(Math.max(1, query.limit || 20), 100);
