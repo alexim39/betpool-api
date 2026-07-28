@@ -40,9 +40,10 @@ export class AIAutomationService {
       // Step 1: Curate + create + publish pods
       const adminUser = await this.getSystemAdmin();
       const activePodCount = await PodModel.countDocuments({ status: 'active' });
-      if (activePodCount >= 10) {
-        logger.info(`[Ora Automation] Curation SKIPPED — ${activePodCount} active pods already (max 10)`);
-        result.settlement.errors.push(`Pod creation skipped: ${activePodCount} active pods already live (max 10)`);
+      const maxActivePods = parseInt(process.env.MAX_ACTIVE_PODS || '300', 10);
+      if (activePodCount >= maxActivePods) {
+        logger.info(`[Ora Automation] Curation SKIPPED — ${activePodCount} active pods already (max ${maxActivePods})`);
+        result.settlement.errors.push(`Pod creation skipped: ${activePodCount} active pods already live (max ${maxActivePods})`);
       } else if (!adminUser) {
         logger.warn('[Ora Automation] Curation SKIPPED — no admin user found');
         result.settlement.errors.push('Pod creation skipped: no admin user found');
