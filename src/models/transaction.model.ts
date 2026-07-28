@@ -42,6 +42,11 @@ export interface ITransaction extends mongoose.Document {
     description?: string;
     ipAddress?: string;
     userAgent?: string;
+    bankCode?: string;
+    bankName?: string;
+    accountNumber?: string;
+    accountName?: string;
+    narration?: string;
   };
   completedAt?: Date;
   failedAt?: Date;
@@ -132,7 +137,12 @@ const TransactionSchema = new Schema({
     stakeId: { type: Schema.Types.ObjectId, ref: 'Stake' },
     description: { type: String, trim: true },
     ipAddress: { type: String },
-    userAgent: { type: String }
+    userAgent: { type: String },
+    bankCode: { type: String },
+    bankName: { type: String },
+    accountNumber: { type: String },
+    accountName: { type: String },
+    narration: { type: String }
   },
   completedAt: { type: Date },
   failedAt: { type: Date },

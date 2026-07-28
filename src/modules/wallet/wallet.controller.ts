@@ -157,7 +157,7 @@ export class WalletController {
         return;
       }
 
-      const { amount, bankCode, accountNumber, accountName, pin, narration } = req.body;
+      const { amount, bankCode, bankName, accountNumber, accountName, pin, narration } = req.body;
       if (!amount || !bankCode || !accountNumber || !accountName || !pin) {
         res.status(400).json({ success: false, message: 'All bank details and PIN required' });
         return;
@@ -167,6 +167,7 @@ export class WalletController {
         userId,
         Number(amount),
         bankCode,
+        bankName,
         accountNumber,
         accountName,
         pin,

@@ -357,6 +357,7 @@ export class WalletService {
     userId: string,
     amount: number,
     bankCode: string,
+    bankName: string | undefined,
     accountNumber: string,
     accountName: string,
     pin: string,
@@ -380,7 +381,7 @@ export class WalletService {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     const todayAgg = await TransactionModel.aggregate([
-      { $match: { user: new mongoose.Types.ObjectId(userId), type: 'withdrawal', status: 'completed', createdAt: { $gte: todayStart } } },
+      { $match: { user: new mongoose.Types.ObjectId(userId), type: 'withdrawal', status: { $in: ['completed', 'processing'] }, createdAt: { $gte: todayStart } } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
     const todayWithdrawn = todayAgg[0]?.total || 0;
@@ -388,7 +389,8 @@ export class WalletService {
       return { success: false, reference: '', message: 'Daily withdrawal limit of ₦10,000,000 exceeded' };
     }
 
-    return runTransaction(async (session) => {
+    // Phase 1: Deduct balance and create pending transaction
+    const phase1 = await runTransaction(async (session) => {
       const wallet = await WalletModel.findOneAndUpdate(
         {
           user: userId,
@@ -401,11 +403,9 @@ export class WalletService {
         { new: true, session }
       );
 
-      if (!wallet) {
-        return { success: false, reference: '', message: 'Insufficient balance' };
-      }
+      if (!wallet) return null;
 
-      await TransactionModel.create([{
+      const [txn] = await TransactionModel.create([{
         user: userId,
         wallet: wallet._id,
         type: 'withdrawal',
@@ -421,16 +421,59 @@ export class WalletService {
         metadata: {
           description: 'Withdrawal to bank account',
           bankCode,
+          bankName: bankName || '',
           accountNumber,
           accountName,
           narration: narration || 'BetPool Withdrawal'
         }
       }], { session });
 
-      await notifyWithdrawalSubmitted(userId, amount, `${accountName} - ${accountNumber}`).catch(e => logger.error('notifyWithdrawalSubmitted error', e));
-
-      return { success: true, reference, message: 'Withdrawal submitted for approval' };
+      return { txn, walletBalance: wallet.balance };
     });
+
+    if (!phase1) {
+      return { success: false, reference: '', message: 'Insufficient balance' };
+    }
+
+    const { txn: transaction } = phase1;
+
+    notifyWithdrawalSubmitted(userId, amount, `${accountName} - ${accountNumber}`).catch(e => logger.error('notifyWithdrawalSubmitted error', e));
+
+    // Phase 2: Call Paystack outside DB transaction
+    const transferResult = await this.processPaystackTransfer(
+      transaction as any, bankCode, accountNumber, accountName, narration
+    );
+
+    // Phase 3: Record the result in a new DB transaction
+    if (!transferResult.success) {
+      await runTransaction(async (session) => {
+        const txn = await TransactionModel.findById(transaction._id).session(session);
+        if (!txn || txn.status !== 'pending') return;
+        await WalletModel.findOneAndUpdate(
+          { user: txn.user },
+          { $inc: { balance: txn.amount, totalWithdrawn: -txn.amount } },
+          { session }
+        );
+        txn.status = 'failed';
+        txn.failureReason = transferResult.message || 'Transfer failed';
+        txn.failedAt = new Date();
+        txn.providerData = { ...(txn.providerData || {}), ...(transferResult.providerData || {}) };
+        await txn.save({ session });
+      });
+      notifyWithdrawalFailed(userId, amount, transferResult.message || 'Transfer failed').catch(e => logger.error('notifyWithdrawalFailed error', e));
+      return { success: false, reference, message: transferResult.message || 'Transfer failed' };
+    }
+
+    // Transfer initiated successfully — mark as processing; webhook will finalize
+    await runTransaction(async (session) => {
+      const txn = await TransactionModel.findById(transaction._id).session(session);
+      if (!txn || txn.status !== 'pending') return;
+      txn.status = 'processing';
+      txn.providerData = { ...(txn.providerData || {}), ...(transferResult.providerData || {}) };
+      await txn.save({ session });
+    });
+
+    return { success: true, reference, message: 'Withdrawal is being processed' };
   }
 
   private async processBankTransfer(
