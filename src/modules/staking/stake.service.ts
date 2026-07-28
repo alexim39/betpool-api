@@ -183,6 +183,22 @@ export class StakeService {
     }
   }
 
+  private attachVirtuals(stake: any): any {
+    const items = stake.items && stake.items.length > 0 ? stake.items : undefined;
+    return {
+      ...stake,
+      items,
+      isParlay: Array.isArray(items) && items.length > 1,
+      isSettled: ['won', 'lost', 'void', 'refunded', 'cashed_out'].includes(stake.status),
+      isActive: ['pending', 'confirmed'].includes(stake.status),
+      profit: stake.status === 'won'
+        ? (stake.netPayout || 0) - (stake.stakeAmount || 0)
+        : stake.status === 'lost'
+          ? (stake.refundAmount || 0) - (stake.stakeAmount || 0)
+          : 0
+    };
+  }
+
   async getUserStakes(
     userId: string,
     options: { 
@@ -201,33 +217,35 @@ export class StakeService {
     const page = options.page || 1;
     const limit = Math.min(options.limit || 20, 100);
 
-    const [stakes, total] = await Promise.all([
+    const [docs, total] = await Promise.all([
       StakeModel.find(query)
         .populate('pod')
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
-        .lean() as unknown as Promise<IStake[]>,
+        .lean(),
       StakeModel.countDocuments(query)
     ]);
 
-    return { stakes, total };
+    return { stakes: (docs as any[]).map(s => this.attachVirtuals(s)), total };
   }
 
   async getActiveStakes(userId: string): Promise<IStake[]> {
-    return StakeModel.find({ 
+    const docs = await StakeModel.find({ 
       user: userId, 
       status: { $in: ['pending', 'confirmed'] } 
     })
       .populate('pod')
       .sort({ createdAt: -1 })
-      .lean() as unknown as Promise<IStake[]>;
+      .lean();
+    return (docs as any[]).map(s => this.attachVirtuals(s));
   }
 
   async getStakeById(stakeId: string, userId?: string): Promise<IStake | null> {
     const query: Record<string, any> = { _id: stakeId };
     if (userId) query.user = userId;
-    return StakeModel.findOne(query).populate('pod').lean() as unknown as Promise<IStake | null>;
+    const doc = await StakeModel.findOne(query).populate('pod').lean();
+    return doc ? this.attachVirtuals(doc) : null;
   }
 
   async placeAccumulator(data: PlaceMultiStakeData): Promise<StakeResult> {
