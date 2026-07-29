@@ -143,5 +143,6 @@ router.get('/bet-manager/cycles', betManagerAdminController.getCycles);
 router.get('/bet-manager/tier/:tier', betManagerAdminController.getTierDetail);
 router.post('/bet-manager/settle-cycle', betManagerAdminController.settleCycle);
 router.post('/bet-manager/reconcile', betManagerAdminController.runReconcile);
+router.post('/bet-manager/pools/top-up', betManagerAdminController.topUpPool);
 
 export default router;

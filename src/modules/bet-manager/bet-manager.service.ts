@@ -16,7 +16,7 @@ const TIER_CONFIG = {
   striker: { minDeposit: 200_000, maxAllocPct: 0.9, minMultiplier: 2.0, maxMultiplier: 5.0, platformFee: 500 },
 };
 
-const POOL_WALLET_IDS: Record<BetManagerTier, mongoose.Types.ObjectId> = {
+export const POOL_WALLET_IDS: Record<BetManagerTier, mongoose.Types.ObjectId> = {
   goalkeeper: new mongoose.Types.ObjectId('000000000000000000000004'),
   defender: new mongoose.Types.ObjectId('000000000000000000000001'),
   midfielder: new mongoose.Types.ObjectId('000000000000000000000002'),
@@ -24,7 +24,7 @@ const POOL_WALLET_IDS: Record<BetManagerTier, mongoose.Types.ObjectId> = {
 };
 
 export class BetManagerService {
-  private async getOrCreatePoolWallet(tier: BetManagerTier): Promise<mongoose.Types.ObjectId> {
+  async getOrCreatePoolWallet(tier: BetManagerTier): Promise<mongoose.Types.ObjectId> {
     const walletId = POOL_WALLET_IDS[tier];
     const existing = await WalletModel.findById(walletId);
     if (existing) return walletId;

@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { AuthRequest } from '../../middleware/auth.middleware';
-import { betManagerService } from './bet-manager.service';
+import { betManagerService, POOL_WALLET_IDS } from './bet-manager.service';
 import { BetManagerTier } from '../../models/bet-manager-account.model';
 import { BetManagerCycleModel } from '../../models/bet-manager-cycle.model';
 import { BetManagerAccountModel } from '../../models/bet-manager-account.model';
@@ -54,7 +54,7 @@ export class BetManagerAdminController {
   async getPools(req: AuthRequest, res: Response): Promise<void> {
     try {
       const pools = await Promise.all(VALID_TIERS.map(async (tier) => {
-        const wallet = await WalletModel.findById(`00000000000000000000000${VALID_TIERS.indexOf(tier) + 1}`);
+        const wallet = await WalletModel.findById(POOL_WALLET_IDS[tier]);
         return { tier, balance: wallet?.balance || 0, walletId: wallet?._id };
       }));
       res.json({ success: true, data: pools });
@@ -86,7 +86,7 @@ export class BetManagerAdminController {
       const activeCycle = await BetManagerCycleModel.findOne({ tier, status: 'active' }).sort({ cycleNumber: -1 }).lean();
       const totalAccounts = await BetManagerAccountModel.countDocuments({ tier, status: 'active' });
       const totalDeposits = await BetManagerDepositModel.countDocuments({ tier, type: 'deposit' });
-      const wallet = await WalletModel.findById(`00000000000000000000000${VALID_TIERS.indexOf(tier) + 1}`);
+      const wallet = await WalletModel.findById(POOL_WALLET_IDS[tier]);
       const activeAllocs = await BetManagerAllocationModel.countDocuments({ tier, status: 'active' });
       const settledCycles = await BetManagerCycleModel.find({ tier, status: 'settled' }).sort({ cycleNumber: -1 }).limit(12).lean();
       const totalFees = settledCycles.reduce((sum, c) => sum + (c.platformFee || 0) + (c.performanceFee || 0), 0);
@@ -128,6 +128,27 @@ export class BetManagerAdminController {
     } catch (error: any) {
       logger.error('BetManager admin reconcile error', error);
       res.status(500).json({ success: false, message: error.message || 'Failed to reconcile' });
+    }
+  }
+
+  async topUpPool(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const { tier, amount } = req.body;
+      if (!VALID_TIERS.includes(tier)) { res.status(400).json({ success: false, message: 'Invalid tier' }); return; }
+      if (!amount || amount <= 0) { res.status(400).json({ success: false, message: 'Invalid amount' }); return; }
+
+      const walletId = await betManagerService.getOrCreatePoolWallet(tier);
+      const wallet = await WalletModel.findByIdAndUpdate(
+        walletId,
+        { $inc: { balance: amount } },
+        { new: true }
+      );
+
+      logger.info(`[BetManager] Pool topped up: ${tier} +₦${amount} by admin ${req.user?.userId}`);
+      res.json({ success: true, message: `${tier} pool topped up with ₦${amount.toLocaleString()}`, data: { balance: wallet.balance } });
+    } catch (error: any) {
+      logger.error('BetManager admin topUpPool error', error);
+      res.status(500).json({ success: false, message: error.message || 'Failed to top up pool' });
     }
   }
 

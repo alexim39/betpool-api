@@ -80,8 +80,8 @@ export interface RiskReport {
 }
 
 const DEFAULT_AUTO_CAP_THRESHOLD = 50;
-const CREATION_FREEZE_THRESHOLD = 70;
-const POD_SUSPEND_THRESHOLD = 80;
+const DEFAULT_CREATION_FREEZE_THRESHOLD = 70;
+const DEFAULT_POD_SUSPEND_THRESHOLD = 80;
 
 export class AIRiskService {
   private schedulerId: ReturnType<typeof setInterval> | null = null;
@@ -91,6 +91,14 @@ export class AIRiskService {
 
   private get autoCapThreshold(): number {
     return parseInt(process.env.RISK_AUTO_CAP_THRESHOLD || String(DEFAULT_AUTO_CAP_THRESHOLD), 10);
+  }
+
+  private get creationFreezeThreshold(): number {
+    return parseInt(process.env.RISK_CREATION_FREEZE_THRESHOLD || String(DEFAULT_CREATION_FREEZE_THRESHOLD), 10);
+  }
+
+  private get podSuspendThreshold(): number {
+    return parseInt(process.env.RISK_POD_SUSPEND_THRESHOLD || String(DEFAULT_POD_SUSPEND_THRESHOLD), 10);
   }
 
   isCreationFrozen(): boolean {
@@ -309,15 +317,15 @@ export class AIRiskService {
     const warnings: string[] = [];
     let podsSuspended = 0;
 
-    // T3: Threshold escalation — freeze creation at 70%
-    if (report.riskRatioPercent >= CREATION_FREEZE_THRESHOLD && !this._creationFrozen) {
+    // T3: Threshold escalation — freeze creation
+    if (report.riskRatioPercent >= this.creationFreezeThreshold && !this._creationFrozen) {
       this._creationFrozen = true;
       this._frozenAt = new Date().toISOString();
       await this.saveState();
-      warnings.push(`CRITICAL: Pod creation FROZEN — risk ratio ${report.riskRatioPercent}% >= ${CREATION_FREEZE_THRESHOLD}%`);
+      warnings.push(`CRITICAL: Pod creation FROZEN — risk ratio ${report.riskRatioPercent}% >= ${this.creationFreezeThreshold}%`);
       await this.notifyAdmins(`Pod Creation Frozen`,
-        `Risk ratio reached ${report.riskRatioPercent}%. New pod creation has been frozen until risk drops below ${CREATION_FREEZE_THRESHOLD}%.`);
-    } else if (report.riskRatioPercent < CREATION_FREEZE_THRESHOLD - 10 && this._creationFrozen) {
+        `Risk ratio reached ${report.riskRatioPercent}%. New pod creation has been frozen until risk drops below ${this.creationFreezeThreshold}%.`);
+    } else if (report.riskRatioPercent < this.creationFreezeThreshold - 10 && this._creationFrozen) {
       this._creationFrozen = false;
       this._frozenAt = null;
       await this.saveState();
@@ -326,14 +334,14 @@ export class AIRiskService {
         `Risk ratio dropped to ${report.riskRatioPercent}%. Pod creation is now allowed.`);
     }
 
-    // T3: Threshold escalation — suspend high-exposure pods at 80%
-    if (report.riskRatioPercent >= POD_SUSPEND_THRESHOLD) {
+    // T3: Threshold escalation — suspend high-exposure pods
+    if (report.riskRatioPercent >= this.podSuspendThreshold) {
       const highRiskPods = report.podsAtRisk.filter(p => p.riskLevel === 'high' && !p.riskSuspended);
       for (const pod of highRiskPods) {
         await PodModel.findByIdAndUpdate(pod.podId, { riskSuspended: true });
         podsSuspended++;
       }
-    } else if (report.riskRatioPercent < POD_SUSPEND_THRESHOLD - 10) {
+    } else if (report.riskRatioPercent < this.podSuspendThreshold - 10) {
       const suspendedPods = await PodModel.find({ riskSuspended: true });
       for (const pod of suspendedPods) {
         await PodModel.findByIdAndUpdate(pod._id, { riskSuspended: false });
@@ -345,8 +353,8 @@ export class AIRiskService {
     }
 
     const escalationLevel: 'none' | 'caution' | 'warning' | 'critical' =
-      report.riskRatioPercent >= POD_SUSPEND_THRESHOLD ? 'critical' :
-      report.riskRatioPercent >= CREATION_FREEZE_THRESHOLD ? 'warning' :
+      report.riskRatioPercent >= this.podSuspendThreshold ? 'critical' :
+      report.riskRatioPercent >= this.creationFreezeThreshold ? 'warning' :
       report.riskRatioPercent >= this.autoCapThreshold ? 'caution' : 'none';
 
     if (this._lastEscalationLevel !== escalationLevel) {
