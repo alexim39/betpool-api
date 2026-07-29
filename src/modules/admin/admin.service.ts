@@ -630,10 +630,10 @@ export class AdminService {
     return updated as unknown as IPod;
   }
 
-  async listUsers(query: PaginationQuery): Promise<PaginatedResult<IUser>> {
+  async listUsers(query: PaginationQuery): Promise<PaginatedResult<IUser> & { stats: { total: number; active: number; suspended: number; kycVerified: number; kycPending: number } }> {
     const page = Math.max(1, query.page || 1);
-    const limit = Math.min(Math.max(1, query.limit || 20), 100);
-    const filter: Record<string, any> = {};
+    const limit = Math.min(Math.max(1, query.limit || 20), 200);
+    const filter: any = {};
 
     if (query.search) {
       const regex = new RegExp(query.search, 'i');
@@ -644,16 +644,68 @@ export class AdminService {
       ];
     }
 
-    const [items, total] = await Promise.all([
-      UserModel.find(filter)
-        .select('-pinHash')
-        .sort({ createdAt: -1 })
-        .skip((page - 1) * limit)
-        .limit(limit),
-      UserModel.countDocuments(filter)
+    if (query.status === 'suspended') filter.isSuspended = true;
+    else if (query.status === 'active') filter.isSuspended = false;
+    else if (query.status === 'kyc_verified') filter.kycVerified = true;
+    else if (query.status === 'kyc_pending') filter.kycVerified = false;
+
+    if (query.dateFrom || query.dateTo) {
+      filter.createdAt = {};
+      if (query.dateFrom) filter.createdAt.$gte = new Date(query.dateFrom);
+      if (query.dateTo) filter.createdAt.$lte = new Date(query.dateTo + 'T23:59:59.999Z');
+    }
+
+    const sortField = query.sortBy || 'createdAt';
+    const sortOrder = query.sortOrder === 'asc' ? 1 : -1;
+    const sortObj: any = {};
+    sortObj[sortField] = sortOrder;
+
+    const [items, total, stats] = await Promise.all([
+      UserModel.aggregate([
+        { $match: filter },
+        { $sort: sortObj },
+        { $skip: (page - 1) * limit },
+        { $limit: limit },
+        {
+          $lookup: {
+            from: 'wallets',
+            localField: '_id',
+            foreignField: 'user',
+            as: 'wallet',
+          },
+        },
+        {
+          $addFields: {
+            walletBalance: { $ifNull: [{ $arrayElemAt: ['$wallet.balance', 0] }, 0] },
+          },
+        },
+        { $addFields: { id: '$_id' } },
+        { $project: { pinHash: 0, wallet: 0 } },
+      ]),
+      UserModel.countDocuments(filter),
+      Promise.all([
+        UserModel.countDocuments({ role: 'user' }),
+        UserModel.countDocuments({ isSuspended: false, role: 'user' }),
+        UserModel.countDocuments({ isSuspended: true, role: 'user' }),
+        UserModel.countDocuments({ kycVerified: true, role: 'user' }),
+        UserModel.countDocuments({ kycVerified: false, role: 'user' }),
+      ]),
     ]);
 
-    return { items: items as unknown as IUser[], total, page, limit, totalPages: Math.ceil(total / limit) };
+    return {
+      items: items as unknown as IUser[],
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      stats: {
+        total: stats[0],
+        active: stats[1],
+        suspended: stats[2],
+        kycVerified: stats[3],
+        kycPending: stats[4],
+      },
+    };
   }
 
   async getUser(id: string): Promise<{
@@ -1237,7 +1289,7 @@ export class AdminService {
     }
   }
 
-  async listTransactions(query: PaginationQuery): Promise<PaginatedResult<any>> {
+  async listTransactions(query: PaginationQuery): Promise<PaginatedResult<any> & { stats: any }> {
     const page = Math.max(1, query.page || 1);
     const limit = Math.min(Math.max(1, query.limit || 20), 100);
     const filter: Record<string, any> = {};
@@ -1245,17 +1297,70 @@ export class AdminService {
     if (query.type) filter.type = query.type;
     if (query.status) filter.status = query.status;
     if (query.userId) filter.user = new mongoose.Types.ObjectId(query.userId);
+    if (query.search) {
+      const escaped = query.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const userIds = await UserModel.find({ phone: { $regex: escaped, $options: 'i' } }).distinct('_id');
+      filter.$or = [
+        { reference: { $regex: escaped, $options: 'i' } },
+        { user: { $in: userIds } }
+      ];
+    }
+    if (query.dateFrom || query.dateTo) {
+      filter.createdAt = {};
+      if (query.dateFrom) filter.createdAt.$gte = new Date(query.dateFrom);
+      if (query.dateTo) filter.createdAt.$lte = new Date(query.dateTo);
+    }
 
-    const [items, total] = await Promise.all([
+    const sortField = query.sortBy || 'createdAt';
+    const sortOrder = query.sortOrder === 'asc' ? 1 : -1;
+
+    const [items, total, stats] = await Promise.all([
       TransactionModel.find(filter)
-        .sort({ createdAt: -1 })
+        .sort({ [sortField]: sortOrder })
         .skip((page - 1) * limit)
         .limit(limit)
         .populate('user', 'phone fullName'),
-      TransactionModel.countDocuments(filter)
+      TransactionModel.countDocuments(filter),
+      TransactionModel.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: null,
+            totalVolume: { $sum: '$amount' },
+            totalFee: { $sum: '$fee' },
+            depositCount: { $sum: { $cond: [{ $eq: ['$type', 'deposit'] }, 1, 0] } },
+            depositVolume: { $sum: { $cond: [{ $eq: ['$type', 'deposit'] }, '$amount', 0] } },
+            withdrawalCount: { $sum: { $cond: [{ $eq: ['$type', 'withdrawal'] }, 1, 0] } },
+            withdrawalVolume: { $sum: { $cond: [{ $eq: ['$type', 'withdrawal'] }, '$amount', 0] } },
+            stakeCount: { $sum: { $cond: [{ $eq: ['$type', 'stake'] }, 1, 0] } },
+            payoutCount: { $sum: { $cond: [{ $eq: ['$type', 'payout'] }, 1, 0] } },
+            pendingCount: { $sum: { $cond: [{ $eq: ['$status', 'pending'] }, 1, 0] } },
+            completedCount: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+            failedCount: { $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] } },
+            refundCount: { $sum: { $cond: [{ $eq: ['$status', 'refunded'] }, 1, 0] } }
+          }
+        }
+      ])
     ]);
 
-    return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
+    const s = stats[0] || {};
+    return {
+      items, total, page, limit, totalPages: Math.ceil(total / limit),
+      stats: {
+        totalVolume: s.totalVolume || 0,
+        totalFee: s.totalFee || 0,
+        depositCount: s.depositCount || 0,
+        depositVolume: s.depositVolume || 0,
+        withdrawalCount: s.withdrawalCount || 0,
+        withdrawalVolume: s.withdrawalVolume || 0,
+        stakeCount: s.stakeCount || 0,
+        payoutCount: s.payoutCount || 0,
+        pendingCount: s.pendingCount || 0,
+        completedCount: s.completedCount || 0,
+        failedCount: s.failedCount || 0,
+        refundCount: s.refundCount || 0
+      }
+    };
   }
 
   async listLoans(query: PaginationQuery): Promise<PaginatedResult<any>> {

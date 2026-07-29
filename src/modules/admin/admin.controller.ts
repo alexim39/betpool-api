@@ -149,11 +149,16 @@ export class AdminController {
 
   async listUsers(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const { page, limit, search } = req.query;
+      const { page, limit, search, status, dateFrom, dateTo, sortBy, sortOrder } = req.query;
       const result = await adminService.listUsers({
         page: page ? parseInt(page as string) : 1,
         limit: limit ? parseInt(limit as string) : 20,
-        search: search as string
+        search: search as string,
+        status: status as string,
+        dateFrom: dateFrom as string,
+        dateTo: dateTo as string,
+        sortBy: sortBy as string,
+        sortOrder: sortOrder as 'asc' | 'desc',
       });
       res.json({ success: true, data: result });
     } catch (error) {
@@ -303,13 +308,18 @@ export class AdminController {
 
   async listTransactions(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const { page, limit, type, status, userId } = req.query;
+      const { page, limit, type, status, userId, search, dateFrom, dateTo, sortBy, sortOrder } = req.query;
       const result = await adminService.listTransactions({
         page: page ? parseInt(page as string) : 1,
         limit: limit ? parseInt(limit as string) : 20,
         type: type as string,
         status: status as string,
-        userId: userId as string
+        userId: userId as string,
+        search: search as string,
+        dateFrom: dateFrom as string,
+        dateTo: dateTo as string,
+        sortBy: sortBy as string,
+        sortOrder: sortOrder as 'asc' | 'desc'
       });
       res.json({ success: true, data: result });
     } catch (error) {
