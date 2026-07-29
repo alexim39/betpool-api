@@ -1,7 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IBetManagerCycle extends Document {
-  tier: 'defender' | 'midfielder' | 'striker';
+  tier: 'defender' | 'midfielder' | 'striker' | 'goalkeeper';
   cycleNumber: number;
   startDate: Date;
   endDate: Date;
@@ -20,7 +20,7 @@ export interface IBetManagerCycle extends Document {
 }
 
 const BetManagerCycleSchema = new Schema<IBetManagerCycle>({
-  tier: { type: String, enum: ['defender', 'midfielder', 'striker'], required: true },
+  tier: { type: String, enum: ['defender', 'midfielder', 'striker', 'goalkeeper'], required: true },
   cycleNumber: { type: Number, required: true },
   startDate: { type: Date, required: true },
   endDate: { type: Date, required: true },

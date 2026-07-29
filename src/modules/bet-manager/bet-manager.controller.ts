@@ -4,7 +4,7 @@ import { betManagerService } from './bet-manager.service';
 import { BetManagerTier } from '../../models/bet-manager-account.model';
 import { logger } from '../../services/logger.service';
 
-const VALID_TIERS: BetManagerTier[] = ['defender', 'midfielder', 'striker'];
+const VALID_TIERS: BetManagerTier[] = ['goalkeeper', 'defender', 'midfielder', 'striker'];
 
 function parseTier(tier: string): BetManagerTier | null {
   return VALID_TIERS.includes(tier as BetManagerTier) ? (tier as BetManagerTier) : null;
@@ -32,7 +32,7 @@ export class BetManagerController {
         res.json({ success: true, data: null, message: 'No account for this tier' });
         return;
       }
-      const minDeposit = tier === 'defender' ? 50_000 : tier === 'midfielder' ? 100_000 : 200_000;
+      const minDeposit = tier === 'goalkeeper' ? 20_000 : tier === 'defender' ? 50_000 : tier === 'midfielder' ? 100_000 : 200_000;
       res.json({ success: true, data: { ...summary, tier, tierConfig: { minDeposit, platformFee: 500, lockDays: 30 } } });
     } catch (error: any) {
       logger.error('BetManager getAccount error', error);

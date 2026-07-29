@@ -10,12 +10,14 @@ import { logger } from '../../services/logger.service';
 import { runTransaction } from '../../utils/transaction';
 
 const TIER_CONFIG = {
+  goalkeeper: { minDeposit: 20_000, maxAllocPct: 0.7, minMultiplier: 1.1, maxMultiplier: 1.5, platformFee: 300 },
   defender: { minDeposit: 50_000, maxAllocPct: 0.8, minMultiplier: 1.2, maxMultiplier: 1.8, platformFee: 500 },
   midfielder: { minDeposit: 100_000, maxAllocPct: 0.85, minMultiplier: 1.5, maxMultiplier: 2.5, platformFee: 500 },
   striker: { minDeposit: 200_000, maxAllocPct: 0.9, minMultiplier: 2.0, maxMultiplier: 5.0, platformFee: 500 },
 };
 
 const POOL_WALLET_IDS: Record<BetManagerTier, mongoose.Types.ObjectId> = {
+  goalkeeper: new mongoose.Types.ObjectId('000000000000000000000004'),
   defender: new mongoose.Types.ObjectId('000000000000000000000001'),
   midfielder: new mongoose.Types.ObjectId('000000000000000000000002'),
   striker: new mongoose.Types.ObjectId('000000000000000000000003'),
@@ -128,7 +130,7 @@ export class BetManagerService {
     totalDeposited: number;
     totalProfit: number;
   }>> {
-    const tiers: BetManagerTier[] = ['defender', 'midfielder', 'striker'];
+    const tiers: BetManagerTier[] = ['goalkeeper', 'defender', 'midfielder', 'striker'];
     const results = [];
     for (const tier of tiers) {
       const account = await BetManagerAccountModel.findOne({ userId, tier });
@@ -352,7 +354,7 @@ export class BetManagerService {
   }
 
   async allocateDaily(): Promise<void> {
-    const tiers: BetManagerTier[] = ['defender', 'midfielder', 'striker'];
+    const tiers: BetManagerTier[] = ['goalkeeper', 'defender', 'midfielder', 'striker'];
     for (const tier of tiers) {
       try {
         const cycle = await BetManagerCycleModel.findOne({ tier, status: 'active' }).sort({ cycleNumber: -1 });
@@ -538,7 +540,7 @@ export class BetManagerService {
     accountsByTier: Record<string, number>;
     aumByTier: Record<string, number>;
   }> {
-    const tiers: BetManagerTier[] = ['defender', 'midfielder', 'striker'];
+    const tiers: BetManagerTier[] = ['goalkeeper', 'defender', 'midfielder', 'striker'];
     const poolBalances: Record<string, number> = {};
     const accountsByTier: Record<string, number> = {};
     const aumByTier: Record<string, number> = {};
@@ -573,7 +575,7 @@ export class BetManagerService {
 
   async listAllAccounts(page = 1, limit = 20, tier?: string, search?: string): Promise<{ accounts: any[]; total: number; page: number; totalPages: number }> {
     const match: any = { status: 'active' };
-    if (tier && ['defender', 'midfielder', 'striker'].includes(tier)) match.tier = tier;
+    if (tier && ['goalkeeper', 'defender', 'midfielder', 'striker'].includes(tier)) match.tier = tier;
 
     let userIds: string[] | undefined;
     if (search) {

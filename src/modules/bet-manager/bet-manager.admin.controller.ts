@@ -9,7 +9,7 @@ import { BetManagerAllocationModel } from '../../models/bet-manager-allocation.m
 import { WalletModel } from '../../models/wallet.model';
 import { logger } from '../../services/logger.service';
 
-const VALID_TIERS: BetManagerTier[] = ['defender', 'midfielder', 'striker'];
+const VALID_TIERS: BetManagerTier[] = ['goalkeeper', 'defender', 'midfielder', 'striker'];
 
 export class BetManagerAdminController {
   async getStats(req: AuthRequest, res: Response): Promise<void> {

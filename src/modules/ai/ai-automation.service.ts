@@ -163,7 +163,7 @@ export class AIAutomationService {
         const unlocked = await betManagerService.unlockDeposits();
         if (unlocked > 0) logger.info('BetManager deposits unlocked', { count: unlocked });
         await betManagerService.reconcileAllocations();
-        for (const tier of ['defender', 'midfielder', 'striker'] as const) {
+        for (const tier of ['goalkeeper', 'defender', 'midfielder', 'striker'] as const) {
           await betManagerService.settleCycle(tier);
         }
         await betManagerService.allocateDaily();
