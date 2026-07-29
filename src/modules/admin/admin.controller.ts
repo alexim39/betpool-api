@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthRequest } from '../../middleware/auth.middleware';
 import { adminService } from './admin.service';
+import { aiAutomationService } from '../ai/ai-automation.service';
 import { aiSettlementService } from '../ai';
 import { LoanModel } from './loan.model';
 import { logger } from '../../services/logger.service';
@@ -388,6 +389,30 @@ export class AdminController {
     }
   }
 
+  async reverseWithdrawal(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const adminId = req.user!.userId;
+      const result = await adminService.reverseWithdrawal(id, adminId);
+      res.json({ success: true, data: result });
+    } catch (error: any) {
+      logger.error('Admin reverse withdrawal error', error);
+      res.status(400).json({ success: false, message: error.message || 'Failed to reverse withdrawal' });
+    }
+  }
+
+  async retryWithdrawal(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const adminId = req.user!.userId;
+      const result = await adminService.retryWithdrawal(id, adminId);
+      res.json({ success: true, data: result });
+    } catch (error: any) {
+      logger.error('Admin retry withdrawal error', error);
+      res.status(400).json({ success: false, message: error.message || 'Failed to retry withdrawal' });
+    }
+  }
+
   async listLoans(req: AuthRequest, res: Response): Promise<void> {
     try {
       const { page, limit, status, userId } = req.query;
@@ -551,6 +576,16 @@ export class AdminController {
     } catch (error) {
       logger.error('Reserve consumption error', error);
       res.status(500).json({ success: false, message: 'Failed to fetch reserve consumption' });
+    }
+  }
+
+  async getAutomationStatus(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const status = aiAutomationService.getStatus();
+      res.json({ success: true, data: status });
+    } catch (error) {
+      logger.error('Automation status error', error);
+      res.status(500).json({ success: false, message: 'Failed to fetch automation status' });
     }
   }
 }

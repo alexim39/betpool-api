@@ -719,10 +719,11 @@ export class AdminService {
 
   async listWithdrawals(query: PaginationQuery): Promise<PaginatedResult<any>> {
     const page = Math.max(1, query.page || 1);
-    const limit = Math.min(Math.max(1, query.limit || 20), 100);
+    const limit = Math.min(Math.max(1, query.limit || 20), 200);
     const filter: Record<string, any> = { type: 'withdrawal' };
 
     if (query.status) filter.status = query.status;
+    if (query.userId) filter.user = new mongoose.Types.ObjectId(query.userId);
 
     const [items, total] = await Promise.all([
       TransactionModel.find(filter)
@@ -792,19 +793,12 @@ export class AdminService {
         return { success: false, message: transferResult.message || 'Transfer failed', transaction: txn };
       }
 
-      txn.status = 'completed';
-      txn.completedAt = new Date();
+      txn.status = 'processing';
       txn.providerData = { ...(txn.providerData || {}), ...(transferResult.providerData || {}) };
       await txn.save({ session: resultSession });
       await resultSession.commitTransaction();
 
-      notifyWithdrawalCompleted(
-        txn.user.toString(),
-        txn.amount,
-        `${meta.accountName} - ${meta.accountNumber}`
-      ).catch(e => logger.error('notifyWithdrawalFailed error', e));
-
-      return { success: true, message: 'Withdrawal approved and processed', transaction: txn };
+      return { success: true, message: 'Withdrawal approved — awaiting Paystack confirmation', transaction: txn };
     } catch (error) {
       await resultSession.abortTransaction();
       throw error;
@@ -854,9 +848,118 @@ export class AdminService {
     }
   }
 
+  async reverseWithdrawal(id: string, adminId: string): Promise<any> {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    try {
+      const transaction = await TransactionModel.findById(id).session(session);
+      if (!transaction) throw new AppError('Transaction not found', 404);
+      if (transaction.type !== 'withdrawal') throw new AppError('Not a withdrawal transaction', 400);
+      if (transaction.status !== 'processing' && transaction.status !== 'pending') {
+        throw new AppError('Only processing or pending withdrawals can be reversed', 400);
+      }
+
+      const wallet = await WalletModel.findOne({ user: transaction.user }).session(session);
+      if (!wallet) throw new AppError('Wallet not found', 404);
+
+      const refundAmount = transaction.amount;
+      wallet.balance += refundAmount;
+      wallet.totalWithdrawn = Math.max(0, (wallet.totalWithdrawn || 0) - refundAmount);
+      wallet.lastTransactionAt = new Date();
+      await wallet.save({ session });
+
+      transaction.status = 'failed';
+      transaction.failedAt = new Date();
+      transaction.failureReason = 'Reversed by admin — Paystack transfer did not complete';
+      transaction.providerData = {
+        ...(transaction.providerData || {}),
+        reversedBy: adminId,
+        reversedAt: new Date().toISOString(),
+        reversalType: 'admin_force_fail'
+      };
+      transaction.balanceAfter = wallet.balance;
+      await transaction.save({ session });
+
+      await session.commitTransaction();
+
+      notifyWithdrawalFailed(
+        transaction.user.toString(),
+        transaction.amount,
+        'Withdrawal reversed by admin — funds returned to your wallet'
+      ).catch(e => logger.error('notifyWithdrawalFailed error', e));
+
+      return { success: true, message: 'Withdrawal reversed, wallet re-credited', transaction };
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
+  }
+
+  async retryWithdrawal(id: string, adminId: string): Promise<any> {
+    const transaction = await TransactionModel.findById(id).populate('user', 'phone fullName');
+    if (!transaction) throw new AppError('Transaction not found', 404);
+    if (transaction.type !== 'withdrawal') throw new AppError('Not a withdrawal transaction', 400);
+    if (transaction.status !== 'failed') throw new AppError('Only failed withdrawals can be retried', 400);
+
+    const meta = (transaction.metadata || {}) as any;
+    if (!meta.bankCode || !meta.accountNumber || !meta.accountName) {
+      throw new AppError('Incomplete withdrawal metadata — missing bank details', 400);
+    }
+
+    const transferResult = await walletService.processPaystackTransfer(
+      transaction, meta.bankCode, meta.accountNumber, meta.accountName, meta.narration || 'BetPool Withdrawal'
+    );
+
+    const resultSession = await mongoose.startSession();
+    resultSession.startTransaction();
+    try {
+      const txn = await TransactionModel.findById(id).session(resultSession);
+      if (!txn) throw new AppError('Transaction not found', 404);
+
+      if (!transferResult.success) {
+        txn.failureReason = transferResult.message || 'Retry failed';
+        txn.providerData = { ...(txn.providerData || {}), ...(transferResult.providerData || {}), retryAttemptAt: new Date().toISOString(), retryBy: adminId };
+        await txn.save({ session: resultSession });
+        await resultSession.commitTransaction();
+        return { success: false, message: transferResult.message || 'Retry failed', transaction: txn };
+      }
+
+      txn.status = 'processing';
+      txn.failureReason = undefined;
+      txn.failedAt = undefined;
+      txn.providerData = { ...(txn.providerData || {}), ...(transferResult.providerData || {}), retryAttemptAt: new Date().toISOString(), retryBy: adminId };
+      await txn.save({ session: resultSession });
+      await resultSession.commitTransaction();
+
+      return { success: true, message: 'Withdrawal retried — awaiting Paystack confirmation', transaction: txn };
+    } catch (error) {
+      await resultSession.abortTransaction();
+      throw error;
+    } finally {
+      resultSession.endSession();
+    }
+  }
+
+  private attachStakeVirtuals(stake: any): any {
+    if (!stake) return stake;
+    const isParlay = !!(stake.items && stake.items.length > 1);
+    stake.isParlay = isParlay;
+    const settledStatuses = ['won', 'lost', 'void', 'refunded', 'cancelled'];
+    stake.isSettled = settledStatuses.includes(stake.status);
+    stake.isActive = !stake.isSettled && stake.status !== 'pending' && stake.status !== 'confirmed';
+    stake.profit = stake.isSettled && stake.status === 'won'
+      ? (stake.netPayout || 0) - stake.stakeAmount
+      : stake.isSettled
+        ? -stake.stakeAmount
+        : 0;
+    return stake;
+  }
+
   async listStakes(query: PaginationQuery): Promise<PaginatedResult<IStake>> {
     const page = Math.max(1, query.page || 1);
-    const limit = Math.min(Math.max(1, query.limit || 20), 100);
+    const limit = Math.min(Math.max(1, query.limit || 20), 200);
     const filter: Record<string, any> = {};
 
     if (query.status) filter.status = query.status;
@@ -874,7 +977,8 @@ export class AdminService {
       StakeModel.countDocuments(filter)
     ]);
 
-    return { items: items as unknown as IStake[], total, page, limit, totalPages: Math.ceil(total / limit) };
+    const enriched = items.map(s => this.attachStakeVirtuals(s));
+    return { items: enriched as unknown as IStake[], total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   async getStake(id: string): Promise<IStake | null> {

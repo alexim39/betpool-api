@@ -10,9 +10,15 @@ import { betManagerService } from '../bet-manager/bet-manager.service';
 export class AIAutomationService {
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private running = false;
+  private startedAt: Date | null = null;
+  private lastRunAt: Date | null = null;
+  private lastResult: { curation: { recommended: number; created: number }; settlement: { settled: number; errors: string[] } } | null = null;
 
   start(intervalMs = 6 * 60 * 60 * 1000) {
     if (this.intervalId) return;
+    this.startedAt = new Date();
+    this.lastRunAt = null;
+    this.lastResult = null;
     this.intervalId = setInterval(() => this.runCycle(), intervalMs);
     logger.info(`Ora Automation started — cycle every ${intervalMs / 60000} minutes`);
   }
@@ -23,6 +29,18 @@ export class AIAutomationService {
       this.intervalId = null;
     }
     this.running = false;
+    this.startedAt = null;
+  }
+
+  getStatus() {
+    return {
+      enabled: this.intervalId !== null,
+      running: this.running,
+      startedAt: this.startedAt,
+      lastRunAt: this.lastRunAt,
+      lastResult: this.lastResult,
+      intervalMs: this.intervalId ? 2 * 60 * 60 * 1000 : null,
+    };
   }
 
   async runCycle(): Promise<{
@@ -128,6 +146,12 @@ export class AIAutomationService {
     } finally {
       this.running = false;
     }
+
+    this.lastRunAt = new Date();
+    this.lastResult = {
+      curation: { ...result.curation },
+      settlement: { ...result.settlement, errors: [...result.settlement.errors] },
+    };
 
     return result;
   }

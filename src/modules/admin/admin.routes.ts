@@ -15,6 +15,9 @@ import { betManagerAdminController } from '../bet-manager/bet-manager.admin.cont
 
 const router = Router();
 
+// Automation status
+router.get('/automation/status', adminController.getAutomationStatus);
+
 // Dashboard
 router.get('/dashboard', adminController.getDashboard);
 
@@ -99,6 +102,8 @@ router.get('/withdrawals', adminController.listWithdrawals);
 router.get('/withdrawals/:id', adminController.getWithdrawal);
 router.post('/withdrawals/:id/approve', adminController.approveWithdrawal);
 router.post('/withdrawals/:id/reject', adminController.rejectWithdrawal);
+router.post('/withdrawals/:id/reverse', adminController.reverseWithdrawal);
+router.post('/withdrawals/:id/retry', adminController.retryWithdrawal);
 
 // Loan management
 router.get('/loans', adminController.listLoans);

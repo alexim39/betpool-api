@@ -517,7 +517,7 @@ export class WalletService {
           })
         });
         const data = await response.json();
-        if (response.ok && data.status === true) {
+        if (response.ok && data.status === true && data.data?.status && ['pending', 'otp'].includes(data.data.status)) {
           return { success: true, providerData: data };
         }
         // Retry on 5xx (server error) or 429 (rate limit), fail fast on 4xx (client error)
