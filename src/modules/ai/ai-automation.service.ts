@@ -3,7 +3,6 @@ import { aiSettlementService } from './ai-settlement.service';
 import { aiRiskService } from './ai-risk.service';
 import { adminService } from '../admin/admin.service';
 import { PodModel } from '../../models/pod.model';
-import { StakeModel } from '../../models/stake.model';
 import { logger } from '../../services/logger.service';
 import { betManagerService } from '../bet-manager/bet-manager.service';
 
@@ -123,6 +122,39 @@ export class AIAutomationService {
             }
           }
           logger.info(`[Ora Automation] Published ${result.curation.created} pods`);
+        }
+
+        // Retry: if DeepSeek was unreachable, re-run with odds-based evaluation as fallback
+        if (result.curation.created < 3 && curation.errors.some((e: string) => e.includes('DeepSeek'))) {
+          logger.info(`[Ora Automation] Retry with odds-based fallback — DeepSeek unreachable`);
+          const fallbackResult = await aiCurationService.basicFallbackCurate();
+          if (fallbackResult.recommended > 0) {
+            for (const fixture of fallbackResult.fixtures) {
+              if (fixture.verdict !== 'RECOMMEND') continue;
+              const bestPick = fixture.recommendations[0];
+              if (!bestPick) continue;
+              try {
+                const matchDate = new Date(fixture.matchDate);
+                const stakingClosesAt = new Date(matchDate.getTime() - 24 * 60 * 60 * 1000);
+                const settlementEstimateAt = new Date(matchDate.getTime() + 24 * 60 * 60 * 1000);
+                await adminService.createPod({
+                  title: `${fixture.homeTeam} vs ${fixture.awayTeam}`,
+                  sport: 'football', league: fixture.league,
+                  homeTeam: fixture.homeTeam, awayTeam: fixture.awayTeam, matchDate,
+                  marketType: '1X2', selection: bestPick.selection,
+                  gainsMultiplier: bestPick.recommendedMultiplier,
+                  minStake: 1000, maxStake: 100000, maxTotalExposure: 500000,
+                  opensAt: new Date(), stakingClosesAt, settlementEstimateAt,
+                  settlementEstimateLabel: settlementEstimateAt.toLocaleDateString('en-NG', { month: 'short', day: 'numeric', year: 'numeric' }),
+                  status: 'active', legs: [], metadata: { oraCurated: true, fallback: 'odds-based', fixtureId: fixture.fixtureId },
+                }, adminUser);
+                result.curation.created++;
+              } catch (err: any) {
+                result.settlement.errors.push(`Fallback pod create error: ${err.message}`);
+              }
+            }
+            logger.info(`[Ora Automation] Fallback: ${fallbackResult.recommended} odds-based pods published`);
+          }
         }
       }
 

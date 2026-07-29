@@ -642,6 +642,116 @@ Rules:
       };
     }
   }
+
+  async basicFallbackCurate(): Promise<CurationResponse> {
+    const result: CurationResponse = {
+      success: true, total: 0, recommended: 0, skipped: 0,
+      fixtures: [], errors: [], apiLog: [], skippedReason: null,
+      oraWinRate: 50, oraTotalPods: 0, oraWon: 0, confidenceThreshold: 65,
+    };
+
+    if (!this.apiKey || this.apiKey === 'your_api_key_here') {
+      result.errors.push('SPORTSAPI_KEY not configured');
+      return result;
+    }
+
+    const today = new Date();
+    const dateFrom = today.toISOString().split('T')[0];
+    const dateTo = new Date(today.getTime() + 7 * 86400000).toISOString().split('T')[0];
+
+    const fixtures: BSDEvent[] = [];
+    for (const leagueId of this.leagues) {
+      try {
+        const res = await axios.get(`${this.baseUrl}/events/`, {
+          headers: this.headers,
+          params: { status: 'notstarted', date_from: dateFrom, date_to: dateTo, league: leagueId },
+          timeout: 20000,
+        });
+        const events: BSDEvent[] = res.data?.results || [];
+        for (const ev of events) {
+          if (!ev.id || !ev.home_team || !ev.away_team || !ev.event_date) continue;
+          if (['finished', 'postponed', 'cancelled'].includes(ev.status)) continue;
+          fixtures.push(ev);
+        }
+      } catch {
+        // per-league errors are non-fatal
+      }
+    }
+
+    result.total = fixtures.length;
+    if (fixtures.length === 0) {
+      result.skippedReason = 'No upcoming fixtures found in configured leagues.';
+      return result;
+    }
+
+    // Batch-fetch odds for all fixtures
+    const oddsCache = new Map<number, OddsMarket[]>();
+    await Promise.all(fixtures.map(async (f) => {
+      try {
+        const res = await axios.get(`${this.baseUrl}/events/${f.id}/odds/comparison/`, {
+          headers: this.headers, timeout: 10000,
+        });
+        const data = res.data;
+        const markets: OddsMarket[] = data?.markets || data?.comparison || [];
+        if (markets.length) oddsCache.set(f.id, markets);
+      } catch {
+        // odds unavailable for this fixture
+      }
+    }));
+
+    for (const fixture of fixtures) {
+      const odds = oddsCache.get(fixture.id) || [];
+      const _1x2 = odds.find(m => m.code === '1x2' || m.code === '1X2');
+      if (!_1x2?.outcomes?.length) {
+        result.skipped++;
+        result.fixtures.push({
+          fixtureId: fixture.id, homeTeam: fixture.home_team, awayTeam: fixture.away_team,
+          league: this.leagueName(fixture.league_id), matchDate: fixture.event_date,
+          verdict: 'SKIP', overallReasoning: 'No 1X2 odds data', recommendations: [],
+        });
+        continue;
+      }
+
+      const filtered = _1x2.outcomes
+        .map(o => ({
+          selection: o.name || o.code || '',
+          rawOdds: o.best_odds || o.max_odds || o.odds || 0,
+        }))
+        .filter(o => o.selection && o.rawOdds >= 1.3 && (1 / o.rawOdds) >= 0.80)
+        .sort((a, b) => (1 / b.rawOdds) - (1 / a.rawOdds));
+
+      if (filtered.length === 0) {
+        result.skipped++;
+        result.fixtures.push({
+          fixtureId: fixture.id, homeTeam: fixture.home_team, awayTeam: fixture.away_team,
+          league: this.leagueName(fixture.league_id), matchDate: fixture.event_date,
+          verdict: 'SKIP', overallReasoning: 'No outcome met 80% implied probability threshold',
+          recommendations: [],
+        });
+        continue;
+      }
+
+      const best = filtered[0];
+      const impliedPct = Math.round((1 / best.rawOdds) * 100);
+      result.recommended++;
+      result.fixtures.push({
+        fixtureId: fixture.id, homeTeam: fixture.home_team, awayTeam: fixture.away_team,
+        league: this.leagueName(fixture.league_id), matchDate: fixture.event_date,
+        verdict: 'RECOMMEND',
+        overallReasoning: `Odds-based: ${best.selection} @ ${best.rawOdds.toFixed(2)}x (${impliedPct}% implied)`,
+        recommendations: [{
+          selection: best.selection,
+          confidence: Math.min(impliedPct, 75),
+          recommendedMultiplier: Math.round(best.rawOdds * 100) / 100,
+          reasoning: `Odds-based fallback — implied probability ${impliedPct}%`,
+        }],
+        multiplier: best.rawOdds,
+        selection: best.selection,
+      });
+    }
+
+    return result;
+  }
 }
 
 export const aiCurationService = new AICurationService();
