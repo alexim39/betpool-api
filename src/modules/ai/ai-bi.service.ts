@@ -7,6 +7,23 @@ import { createInAppNotification } from '../../services/notification.service';
 
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 
+interface CacheEntry<T> { data: T; expiresAt: number; }
+
+// Simple in-memory TTL cache for expensive report computations
+const reportCache = new Map<string, CacheEntry<any>>();
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function getCachedOrFetch<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
+  const cached = reportCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return Promise.resolve(cached.data);
+  }
+  return fetcher().then(data => {
+    reportCache.set(key, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+    return data;
+  });
+}
+
 export interface ForecastMetric {
   current: number;
   previous: number;
@@ -91,6 +108,10 @@ export class AIBIService {
   private get deepseekKey(): string { return process.env.DEEPSEEK_API_KEY || ''; }
 
   async generateReport(days: number = 30): Promise<BIReport> {
+    return getCachedOrFetch(`report_${days}`, () => this._generateReport(days));
+  }
+
+  private async _generateReport(days: number): Promise<BIReport> {
     const now = new Date();
     const dateTo = now.toISOString();
     const periodStart = new Date(now.getTime() - days * 86400000);
@@ -393,13 +414,9 @@ Return ONLY a JSON object:
 
   async generateT4Advisory(): Promise<T4Advisory> {
     const report = await this.generateReport(30);
-    const prevReport = await this.generateReport(60);
 
     const profitMargin = report.overview.totalRevenue > 0
       ? Math.round((report.overview.netProfit / report.overview.totalRevenue) * 100)
-      : 0;
-    const prevProfitMargin = prevReport.overview.totalRevenue > 0
-      ? Math.round((prevReport.overview.netProfit / prevReport.overview.totalRevenue) * 100)
       : 0;
 
     const userGrowth = report.overview.totalUsers > 0
@@ -444,11 +461,6 @@ Return ONLY a JSON object:
     const healthLabel: 'good' | 'fair' | 'needs_attention' | 'critical' =
       healthScore >= 70 ? 'good' : healthScore >= 50 ? 'fair' : healthScore >= 25 ? 'needs_attention' : 'critical';
 
-    const healthScorePrev = prevReport.overview.totalRevenue > 0 ? healthScore - 5 : healthScore; // approximate
-    const healthChange: 'improving' | 'stable' | 'deteriorating' =
-      healthScore > healthScorePrev + 5 ? 'improving' :
-      healthScore < healthScorePrev - 5 ? 'deteriorating' : 'stable';
-
     const warnings: string[] = [];
     const recommendations: string[] = [];
 
@@ -478,6 +490,9 @@ Return ONLY a JSON object:
     }
 
     const previousHealthScore = await this.getPreviousHealthScore();
+    const healthChange: 'improving' | 'stable' | 'deteriorating' =
+      healthScore > previousHealthScore + 5 ? 'improving' :
+      healthScore < previousHealthScore - 5 ? 'deteriorating' : 'stable';
 
     return {
       timestamp: new Date().toISOString(),
