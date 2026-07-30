@@ -439,27 +439,22 @@ export class WalletService {
 
     notifyWithdrawalSubmitted(userId, amount, `${accountName} - ${accountNumber}`).catch(e => logger.error('notifyWithdrawalSubmitted error', e));
 
-    // Phase 2: Call Paystack outside DB transaction
-    const transferResult = await this.processPaystackTransfer(
-      transaction as any, bankCode, accountNumber, accountName, narration
-    );
+    // Phase 2: Call Paystack outside DB transaction (wrapped in try-catch to prevent stuck deductions)
+    let transferResult: { success: boolean; message?: string; providerData?: any };
+    try {
+      transferResult = await this.processPaystackTransfer(
+        transaction as any, bankCode, accountNumber, accountName, narration
+      );
+    } catch (err: any) {
+      logger.error('processPaystackTransfer threw unexpectedly — refunding wallet', { transactionId: transaction._id, error: err.message });
+      await this.refundWithdrawal(transaction._id.toString(), err.message || 'Transfer failed');
+      notifyWithdrawalFailed(userId, amount, 'Transfer failed — funds returned to wallet').catch(e => logger.error('notifyWithdrawalFailed error', e));
+      return { success: false, reference, message: 'Transfer failed — funds returned to wallet' };
+    }
 
     // Phase 3: Record the result in a new DB transaction
     if (!transferResult.success) {
-      await runTransaction(async (session) => {
-        const txn = await TransactionModel.findById(transaction._id).session(session);
-        if (!txn || txn.status !== 'pending') return;
-        await WalletModel.findOneAndUpdate(
-          { user: txn.user },
-          { $inc: { balance: txn.amount, totalWithdrawn: -txn.amount } },
-          { session }
-        );
-        txn.status = 'failed';
-        txn.failureReason = transferResult.message || 'Transfer failed';
-        txn.failedAt = new Date();
-        txn.providerData = { ...(txn.providerData || {}), ...(transferResult.providerData || {}) };
-        await txn.save({ session });
-      });
+      await this.refundWithdrawal(transaction._id.toString(), transferResult.message || 'Transfer failed');
       notifyWithdrawalFailed(userId, amount, transferResult.message || 'Transfer failed').catch(e => logger.error('notifyWithdrawalFailed error', e));
       return { success: false, reference, message: transferResult.message || 'Transfer failed' };
     }
@@ -498,10 +493,10 @@ export class WalletService {
       return { success: false, message: 'Payment provider not configured' };
     }
 
-    const recipientCode = await paymentService.createTransferRecipient(accountName, accountNumber, bankCode);
     let lastError: any;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
+        const recipientCode = await paymentService.createTransferRecipient(accountName, accountNumber, bankCode);
         const response = await fetch('https://api.paystack.co/transfer', {
           method: 'POST',
           headers: {
@@ -519,14 +514,20 @@ export class WalletService {
         const data = await response.json();
         if (response.ok && data.status === true && data.data?.status) {
           const transferStatus = data.data.status;
+          const transferCode = data.data.transfer_code || data.data.code;
           if (['pending', 'otp', 'success'].includes(transferStatus)) {
+            // Verify transfer status immediately to catch risk-engine blocks
+            const verified = await this.verifyPaystackTransferStatus(transferCode);
+            if (verified && ['blocked', 'rejected', 'failed'].includes(verified.status)) {
+              logger.warn(`Paystack transfer ${transferCode} returned ${transferStatus} at initiate but verified as ${verified.status} — rejecting`, { reference: transaction.reference });
+              return { success: false, message: `Transfer ${verified.status}`, providerData: data };
+            }
             return { success: true, providerData: data };
           }
           if (['blocked', 'rejected', 'failed'].includes(transferStatus)) {
             return { success: false, message: data.message || `Transfer ${transferStatus}`, providerData: data };
           }
         }
-        // Retry on 5xx (server error) or 429 (rate limit), fail fast on 4xx (client error)
         const statusCode = response.status;
         if (statusCode >= 500 || statusCode === 429) {
           lastError = { message: `Paystack ${statusCode}: ${data.message || 'Server error'}`, providerData: data };
@@ -547,6 +548,41 @@ export class WalletService {
       }
     }
     return { success: false, message: lastError?.message || 'Transfer failed after 3 attempts' };
+  }
+
+  private async verifyPaystackTransferStatus(transferCode: string): Promise<{ status: string; reference: string } | null> {
+    if (!transferCode) return null;
+    const secretKey = process.env.PAYSTACK_SECRET_KEY;
+    if (!secretKey) return null;
+    try {
+      const response = await fetch(`https://api.paystack.co/transfer/${transferCode}`, {
+        headers: { 'Authorization': `Bearer ${secretKey}` }
+      });
+      const data = await response.json();
+      if (response.ok && data.status === true && data.data?.status) {
+        return { status: data.data.status, reference: data.data.reference || '' };
+      }
+      return null;
+    } catch (err) {
+      logger.error('Paystack transfer verification failed', { transferCode, error: err });
+      return null;
+    }
+  }
+
+  private async refundWithdrawal(transactionId: string, reason: string): Promise<void> {
+    await runTransaction(async (session) => {
+      const txn = await TransactionModel.findById(transactionId).session(session);
+      if (!txn || txn.status !== 'pending') return;
+      await WalletModel.findOneAndUpdate(
+        { user: txn.user },
+        { $inc: { balance: txn.amount, totalWithdrawn: -txn.amount } },
+        { session }
+      );
+      txn.status = 'failed';
+      txn.failureReason = reason;
+      txn.failedAt = new Date();
+      await txn.save({ session });
+    });
   }
 
   async lockBalance(userId: string, amount: number, stakeId: string): Promise<boolean> {
