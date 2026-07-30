@@ -9,5 +9,6 @@ router.put('/read-all', authMiddleware, notificationController.markAllAsRead);
 router.put('/:id/read', authMiddleware, notificationController.markAsRead);
 router.put('/:id/unread', authMiddleware, notificationController.markAsUnread);
 router.delete('/:id', authMiddleware, notificationController.deleteNotification);
+router.post('/bulk-delete', authMiddleware, notificationController.bulkDelete);
 
 export default router;

@@ -20,5 +20,7 @@ const NotificationSchema = new Schema<INotification>({
 }, { timestamps: true });
 
 NotificationSchema.index({ user: 1, createdAt: -1 });
+NotificationSchema.index({ user: 1, type: 1, createdAt: -1 });
+NotificationSchema.index({ user: 1, read: 1, createdAt: -1 });
 
 export default mongoose.model<INotification>('Notification', NotificationSchema);
