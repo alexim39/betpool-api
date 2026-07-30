@@ -594,10 +594,17 @@ export class WalletService {
       });
       const data = await response.json();
       if (response.ok && data.status === true && data.data?.status) {
+        const failures = data.data.failures;
+        let failReason: string | undefined;
+        if (failures && Array.isArray(failures) && failures.length > 0) {
+          failReason = failures.map((f: any) => f.reason || f.message || JSON.stringify(f)).join('; ');
+        } else if (data.data.failure_reason) {
+          failReason = data.data.failure_reason;
+        }
         return {
           status: data.data.status,
           reference: data.data.reference || '',
-          failureReason: data.data.reason || data.data.failure_reason || data.data.failureReason || undefined
+          failureReason: failReason
         };
       }
       return null;
