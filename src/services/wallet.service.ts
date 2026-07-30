@@ -515,7 +515,7 @@ export class WalletService {
         if (response.ok && data.status === true && data.data?.status) {
           const transferStatus = data.data.status;
           const transferCode = data.data.transfer_code || data.data.code;
-          if (['pending', 'otp', 'success'].includes(transferStatus)) {
+          if (['received', 'pending', 'otp', 'success'].includes(transferStatus)) {
             // Verify transfer status immediately to catch risk-engine blocks
             const verified = await this.verifyPaystackTransferStatus(transferCode);
             if (verified && ['blocked', 'rejected', 'failed'].includes(verified.status)) {
