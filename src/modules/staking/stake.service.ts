@@ -5,6 +5,7 @@ import { WalletModel } from '../../models/wallet.model';
 import { TransactionModel } from '../../models/transaction.model';
 import { walletService } from '../../services/wallet.service';
 import { notifyStakePlaced, notifyStakeWon, notifyStakeLost, notifyStakeCashedOut } from '../../services/notification.service';
+import { userService } from '../../services/user.service';
 
 // Type helper to cast Mongoose lean queries
 function toLeanArray<T>(): (query: any) => Promise<T[]> {
@@ -164,6 +165,8 @@ export class StakeService {
       }], { session });
 
       await session.commitTransaction();
+
+      userService.payReferralBonusOnStake(data.userId).catch(e => console.error('Referral bonus error', e));
       
       await notifyStakePlaced(data.userId, pod.title || 'Pod', data.stakeAmount, potentialPayout).catch(e => console.error(e));
       

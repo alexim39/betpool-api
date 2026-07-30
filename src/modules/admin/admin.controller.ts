@@ -361,11 +361,16 @@ export class AdminController {
 
   async listWithdrawals(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const { page, limit, status } = req.query;
+      const { page, limit, status, search, dateFrom, dateTo, sortBy, sortOrder } = req.query;
       const result = await adminService.listWithdrawals({
         page: page ? parseInt(page as string) : 1,
         limit: limit ? parseInt(limit as string) : 20,
-        status: status as string
+        status: status as string,
+        search: search as string,
+        dateFrom: dateFrom as string,
+        dateTo: dateTo as string,
+        sortBy: sortBy as string,
+        sortOrder: sortOrder as 'asc' | 'desc'
       });
       res.json({ success: true, data: result });
     } catch (error) {

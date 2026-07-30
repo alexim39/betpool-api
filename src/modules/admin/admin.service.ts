@@ -777,9 +777,27 @@ export class AdminService {
     if (query.status) filter.status = query.status;
     if (query.userId) filter.user = new mongoose.Types.ObjectId(query.userId);
 
+    if (query.search) {
+      const escaped = query.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const userIds = await UserModel.find({ phone: { $regex: escaped, $options: 'i' } }).distinct('_id');
+      filter.$or = [
+        { reference: { $regex: escaped, $options: 'i' } },
+        { user: { $in: userIds } }
+      ];
+    }
+
+    if (query.dateFrom || query.dateTo) {
+      filter.createdAt = {};
+      if (query.dateFrom) filter.createdAt.$gte = new Date(query.dateFrom);
+      if (query.dateTo) filter.createdAt.$lte = new Date(query.dateTo);
+    }
+
+    const sortField = query.sortBy || 'createdAt';
+    const sortOrder = query.sortOrder === 'asc' ? 1 : -1;
+
     const [items, total] = await Promise.all([
       TransactionModel.find(filter)
-        .sort({ createdAt: -1 })
+        .sort({ [sortField]: sortOrder })
         .skip((page - 1) * limit)
         .limit(limit)
         .populate('user', 'phone fullName email')

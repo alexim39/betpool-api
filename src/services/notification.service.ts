@@ -283,10 +283,21 @@ export async function notifyStakeCashedOut(userId: string, podTitle: string, cas
 
 export async function notifyReferralUsed(userId: string, referredName: string) {
   const user = await getUser(userId);
-  const message = `${referredName} signed up using your referral code!`;
-  await createInAppNotification(userId, 'referral', 'Referral Used', `🎉 ${message}`, { referredName });
+  const message = `${referredName} signed up using your referral code! You'll earn ₦500 when they place their first bet.`;
+  await createInAppNotification(userId, 'referral', 'New Referral', `🎉 ${message}`, { referredName });
   if (user?.email) {
-    const html = wrapEmail('Referral Used', `<p>Hi ${user.fullName || 'there'},</p><p>${message}</p><p>Keep sharing your code to earn more!</p>`);
-    await sendEmailIfConfigured(user.email, 'Someone Used Your Referral Code!', html);
+    const html = wrapEmail('New Referral Signup', `<p>Hi ${user.fullName || 'there'},</p><p>${message}</p><p>Keep sharing your code!</p>`);
+    await sendEmailIfConfigured(user.email, `${referredName} Used Your Referral Code!`, html);
+  }
+}
+
+export async function notifyReferralBonusPaid(userId: string, referredName: string, amount: number) {
+  const user = await getUser(userId);
+  const formattedAmount = formatAmount(amount);
+  const message = `You earned ${formattedAmount} referral bonus because ${referredName} placed their first bet!`;
+  await createInAppNotification(userId, 'referral', 'Referral Bonus Paid', `💰 ${message}`, { referredName, amount });
+  if (user?.email) {
+    const html = wrapEmail('Referral Bonus Earned!', `<p>Hi ${user.fullName || 'there'},</p><p>${message}</p><p>Your wallet has been credited.</p>`);
+    await sendEmailIfConfigured(user.email, `💰 ${formattedAmount} Referral Bonus Earned!`, html);
   }
 }

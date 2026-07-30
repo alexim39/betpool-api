@@ -146,27 +146,6 @@ export class UserService {
       }], { session });
       logger.info('Wallet created', wallet._id);
 
-      // Credit referrer bonus
-      if (referredBy) {
-        const BONUS_AMOUNT = 500;
-        const referrerWallet = await WalletModel.findOneAndUpdate(
-          { user: referredBy },
-          { $inc: { balance: BONUS_AMOUNT }, $set: { lastTransactionAt: new Date() } },
-          { session, new: true }
-        );
-        if (referrerWallet) {
-          await TransactionModel.create([{
-            user: referredBy,
-            type: 'bonus',
-            status: 'completed',
-            amount: BONUS_AMOUNT,
-            netAmount: BONUS_AMOUNT,
-            description: `Referral bonus — ${data.fullName} signed up using your code`,
-            reference: `REFBONUS-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
-          }], { session });
-        }
-      }
-
       user.lastLoginAt = new Date();
       await user.save({ session });
 
@@ -357,6 +336,53 @@ export class UserService {
     if (!decoded) return null;
 
     return UserModel.findById(decoded.userId).select('-pinHash');
+  }
+
+  async payReferralBonusOnStake(userId: string): Promise<void> {
+    const user = await UserModel.findById(userId).select('referredBy referralBonusPaid');
+    if (!user || !user.referredBy || user.referralBonusPaid) return;
+
+    const BONUS_AMOUNT = 500;
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    try {
+      const referrerWallet = await WalletModel.findOneAndUpdate(
+        { user: user.referredBy },
+        { $inc: { balance: BONUS_AMOUNT }, $set: { lastTransactionAt: new Date() } },
+        { session, new: true }
+      );
+      if (!referrerWallet) {
+        await session.abortTransaction();
+        return;
+      }
+
+      await TransactionModel.create([{
+        user: user.referredBy,
+        type: 'bonus',
+        status: 'completed',
+        amount: BONUS_AMOUNT,
+        netAmount: BONUS_AMOUNT,
+        description: `Referral bonus — ${user.fullName} placed their first bet!`,
+        reference: `REFBONUS-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+        balanceBefore: referrerWallet.balance - BONUS_AMOUNT,
+        balanceAfter: referrerWallet.balance
+      }], { session });
+
+      user.referralBonusPaid = true;
+      await user.save({ session });
+
+      await session.commitTransaction();
+
+      const { notifyReferralBonusPaid } = await import('./notification.service');
+      notifyReferralBonusPaid(user.referredBy.toString(), user.fullName, BONUS_AMOUNT)
+        .catch(e => logger.error('notifyReferralBonusPaid error', e));
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
   }
 
   async getReferralStats(userId: string): Promise<{
