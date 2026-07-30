@@ -114,6 +114,15 @@ export class WalletController {
   async paystackWebhook(req: Request, res: Response): Promise<void> {
     try {
       const signature = req.headers['x-paystack-signature'] as string;
+      logger.info(`Paystack webhook received`, {
+        path: req.path,
+        signature: signature ? `${signature.substring(0, 12)}...` : 'MISSING',
+        contentType: req.headers['content-type'],
+        bodyType: typeof req.body,
+        isBuffer: req.body instanceof Buffer,
+        bodyPreview: req.body instanceof Buffer ? req.body.toString('utf8').substring(0, 200) : JSON.stringify(req.body).substring(0, 200)
+      });
+
       if (!signature) {
         res.status(400).json({ success: false, message: 'Missing signature' });
         return;
