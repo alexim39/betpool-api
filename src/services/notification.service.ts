@@ -24,6 +24,14 @@ async function getUser(userId: string) {
   return UserModel.findById(userId).select('email phone fullName');
 }
 
+function formatAmount(amount: number): string {
+  return '₦' + amount.toLocaleString('en-US');
+}
+
+function formatSmsAmount(amount: number): string {
+  return 'NGN' + amount.toLocaleString('en-US');
+}
+
 async function sendEmailIfConfigured(to: string, subject: string, html: string) {
   if (!process.env.EMAIL_HOST || !process.env.EMAIL_USER) {
     logger.debug('Email skipped - SMTP not configured', { subject, to });
@@ -113,7 +121,7 @@ export async function notifyKycRejected(userId: string, reason: string) {
 
 export async function notifyDepositSuccess(userId: string, amount: number, reference: string) {
   const user = await getUser(userId);
-  const formatted = '₦' + amount.toLocaleString('en-US');
+  const formatted = formatAmount(amount);
   const message = `Deposit of ${formatted} was successful! Ref: ${reference}`;
   
   await createInAppNotification(userId, 'deposit', 'Deposit Received', `💵 ${formatted} credited to your wallet.`, { amount, reference });
@@ -130,13 +138,14 @@ export async function notifyDepositSuccess(userId: string, amount: number, refer
     await sendEmailIfConfigured(user.email, `Deposit Successful — ${formatted}`, html);
   }
   if (user?.phone) {
-    await sendSmsIfConfigured(user.phone, `BetPool: ${formatted} deposited successfully. Ref: ${reference}. Stake now!`);
+    const smsFormatted = formatSmsAmount(amount);
+    await sendSmsIfConfigured(user.phone, `BetPool: ${smsFormatted} deposited successfully. Ref: ${reference}. Stake now!`);
   }
 }
 
 export async function notifyDepositFailed(userId: string, amount: number, reason: string) {
   const user = await getUser(userId);
-  const formatted = '₦' + amount.toLocaleString('en-US');
+  const formatted = formatAmount(amount);
   const message = `Deposit of ${formatted} failed. ${reason}`;
   await createInAppNotification(userId, 'deposit', 'Deposit Failed', message, { amount, reason });
   if (user?.email) {
@@ -151,7 +160,7 @@ export async function notifyDepositFailed(userId: string, amount: number, reason
 
 export async function notifyWithdrawalSubmitted(userId: string, amount: number, accountInfo: string) {
   const user = await getUser(userId);
-  const formatted = '₦' + amount.toLocaleString('en-US');
+  const formatted = formatAmount(amount);
   const message = `Withdrawal of ${formatted} to ${accountInfo} is being processed.`;
   await createInAppNotification(userId, 'withdrawal', 'Withdrawal Submitted', message, { amount, accountInfo });
   if (user?.email) {
@@ -162,7 +171,7 @@ export async function notifyWithdrawalSubmitted(userId: string, amount: number, 
 
 export async function notifyWithdrawalCompleted(userId: string, amount: number, accountInfo: string) {
   const user = await getUser(userId);
-  const formatted = '₦' + amount.toLocaleString('en-US');
+  const formatted = formatAmount(amount);
   const message = `Withdrawal of ${formatted} to ${accountInfo} has been completed!`;
   await createInAppNotification(userId, 'withdrawal', 'Withdrawal Completed', `✅ ${formatted} sent to your bank.`, { amount, accountInfo });
   if (user?.email) {
@@ -177,13 +186,14 @@ export async function notifyWithdrawalCompleted(userId: string, amount: number, 
     await sendEmailIfConfigured(user.email, `Withdrawal Completed — ${formatted}`, html);
   }
   if (user?.phone) {
-    await sendSmsIfConfigured(user.phone, `BetPool: ${formatted} sent to your bank (${accountInfo}). May take 1-2 business days.`);
+    const smsFormatted = formatSmsAmount(amount);
+    await sendSmsIfConfigured(user.phone, `BetPool: ${smsFormatted} sent to your bank (${accountInfo}). May take 1-2 business days.`);
   }
 }
 
 export async function notifyWithdrawalFailed(userId: string, amount: number, reason: string) {
   const user = await getUser(userId);
-  const formatted = '₦' + amount.toLocaleString('en-US');
+  const formatted = formatAmount(amount);
   const message = `Withdrawal of ${formatted} failed. ${reason}. The amount has been refunded to your wallet.`;
   await createInAppNotification(userId, 'withdrawal', 'Withdrawal Failed', message, { amount, reason });
   if (user?.email) {
@@ -191,7 +201,8 @@ export async function notifyWithdrawalFailed(userId: string, amount: number, rea
     await sendEmailIfConfigured(user.email, 'Withdrawal Failed', html);
   }
   if (user?.phone) {
-    await sendSmsIfConfigured(user.phone, `BetPool: Withdrawal of ${formatted} failed. ${reason.substring(0, 60)}. Funds refunded.`);
+    const smsFormatted = formatSmsAmount(amount);
+    await sendSmsIfConfigured(user.phone, `BetPool: Withdrawal of ${smsFormatted} failed. ${reason.substring(0, 60)}. Funds refunded.`);
   }
 }
 
@@ -201,8 +212,8 @@ export async function notifyWithdrawalFailed(userId: string, amount: number, rea
 
 export async function notifyStakePlaced(userId: string, podTitle: string, amount: number, potentialPayout: number) {
   const user = await getUser(userId);
-  const formatted = '₦' + amount.toLocaleString('en-US');
-  const formattedPayout = '₦' + potentialPayout.toLocaleString('en-US');
+  const formatted = formatAmount(amount);
+  const formattedPayout = formatAmount(potentialPayout);
   const message = `Stake of ${formatted} placed on "${podTitle}". Potential payout: ${formattedPayout}`;
   await createInAppNotification(userId, 'stake', 'Stake Placed', `🎯 ${formatted} on "${podTitle}"`, { podTitle, amount, potentialPayout });
   if (user?.email) {
@@ -224,7 +235,7 @@ export async function notifyStakePlaced(userId: string, podTitle: string, amount
 
 export async function notifyStakeWon(userId: string, podTitle: string, payout: number) {
   const user = await getUser(userId);
-  const formatted = '₦' + payout.toLocaleString('en-US');
+  const formatted = formatAmount(payout);
   const message = `You won ${formatted} on "${podTitle}"! Payout credited to your wallet.`;
   await createInAppNotification(userId, 'payout', 'Bet Won! 🎉', `🏆 ${formatted} credited from "${podTitle}"`, { podTitle, payout });
   if (user?.email) {
@@ -239,13 +250,14 @@ export async function notifyStakeWon(userId: string, podTitle: string, payout: n
     await sendEmailIfConfigured(user.email, `You Won! ${formatted} Credited`, html);
   }
   if (user?.phone) {
-    await sendSmsIfConfigured(user.phone, `BetPool: Congratulations! You won ${formatted} on "${podTitle}". Login to see your updated balance.`);
+    const smsFormatted = formatSmsAmount(payout);
+    await sendSmsIfConfigured(user.phone, `BetPool: Congratulations! You won ${smsFormatted} on "${podTitle}". Login to see your updated balance.`);
   }
 }
 
 export async function notifyStakeLost(userId: string, podTitle: string, amount: number) {
   const user = await getUser(userId);
-  const formatted = '₦' + amount.toLocaleString('en-US');
+  const formatted = formatAmount(amount);
   const message = `Your bet on "${podTitle}" did not win. ${formatted} has been settled.`;
   await createInAppNotification(userId, 'stake', 'Bet Settled', `❌ "${podTitle}" — ${formatted}`, { podTitle, amount });
   if (user?.email) {
@@ -256,7 +268,7 @@ export async function notifyStakeLost(userId: string, podTitle: string, amount: 
 
 export async function notifyStakeCashedOut(userId: string, podTitle: string, cashoutAmount: number) {
   const user = await getUser(userId);
-  const formatted = '₦' + cashoutAmount.toLocaleString('en-US');
+  const formatted = formatAmount(cashoutAmount);
   const message = `You cashed out ${formatted} from "${podTitle}".`;
   await createInAppNotification(userId, 'stake', 'Cashout Received', `💰 ${formatted} from "${podTitle}"`, { podTitle, cashoutAmount });
   if (user?.email) {

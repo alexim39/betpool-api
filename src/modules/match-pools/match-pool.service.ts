@@ -27,6 +27,8 @@ interface StakeInput {
 interface PaginationQuery {
   page?: number;
   limit?: number;
+  search?: string;
+  status?: string;
 }
 
 interface PaginatedResult<T> {
@@ -57,9 +59,17 @@ export class MatchPoolService {
   async listOpenPools(query: PaginationQuery = {}): Promise<PaginatedResult<IMatchPool>> {
     const page = Math.max(1, query.page || 1);
     const limit = Math.min(Math.max(1, query.limit || 20), 100);
-    const now = new Date();
 
-    const filter = { status: 'open' as const, stakingClosesAt: { $gt: now } };
+    const filter: Record<string, any> = {};
+    if (query.status && query.status !== 'all') {
+      filter.status = query.status;
+    } else {
+      filter.status = { $in: ['open', 'staking_closed', 'settled', 'cancelled'] };
+    }
+    if (query.search) {
+      filter.eventTitle = { $regex: query.search, $options: 'i' };
+    }
+
     const [items, total] = await Promise.all([
       MatchPoolModel.find(filter)
         .sort({ createdAt: -1 })
