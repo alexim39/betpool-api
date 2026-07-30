@@ -138,7 +138,7 @@ export class WalletController {
         await walletService.verifyAndCreditDeposit(event.reference);
       } else if (payload.event === 'transfer.success') {
         await walletService.confirmWithdrawal(event.reference);
-      } else if (payload.event === 'transfer.failed') {
+      } else if (payload.event === 'transfer.failed' || payload.event === 'transfer.reversed') {
         await walletService.failWithdrawal(event.reference);
       }
 

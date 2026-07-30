@@ -517,8 +517,14 @@ export class WalletService {
           })
         });
         const data = await response.json();
-        if (response.ok && data.status === true && data.data?.status && ['pending', 'otp'].includes(data.data.status)) {
-          return { success: true, providerData: data };
+        if (response.ok && data.status === true && data.data?.status) {
+          const transferStatus = data.data.status;
+          if (['pending', 'otp', 'success'].includes(transferStatus)) {
+            return { success: true, providerData: data };
+          }
+          if (['blocked', 'rejected', 'failed'].includes(transferStatus)) {
+            return { success: false, message: data.message || `Transfer ${transferStatus}`, providerData: data };
+          }
         }
         // Retry on 5xx (server error) or 429 (rate limit), fail fast on 4xx (client error)
         const statusCode = response.status;
