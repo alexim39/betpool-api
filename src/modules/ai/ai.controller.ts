@@ -103,7 +103,7 @@ export const chat = async (req: Request, res: Response) => {
       }
     }
 
-    return res.json({ success: true, data: { content: result.content, usage: result.usage } });
+    return res.json({ success: true, data: { content: result.content, action: result.action || null, usage: result.usage } });
   } catch (error) {
     logger.error('AI chat error', error);
     return res.status(500).json({ success: false, message: 'Failed to process chat' });

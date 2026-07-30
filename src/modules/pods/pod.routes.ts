@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import { podController } from './pod.controller';
 import { apiLimiter } from '../../middleware/rateLimit.middleware';
+import { optionalAuth } from '../../middleware/auth.middleware';
 
 const router = Router();
 
-router.get('/feed', apiLimiter, podController.getActiveFeed);
+router.get('/feed', optionalAuth, apiLimiter, podController.getActiveFeed);
 router.get('/feed/debug', apiLimiter, podController.getActiveFeedDebug);
 router.get('/upcoming', apiLimiter, podController.getUpcoming);
 router.get('/sports', apiLimiter, podController.getSports);

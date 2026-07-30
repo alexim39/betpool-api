@@ -1,11 +1,12 @@
 import { Request, Response } from 'express';
+import { AuthRequest } from '../../middleware/auth.middleware';
 import { podService } from './pod.service';
 import { PodModel } from '../../models/pod.model';
 
 export class PodController {
-  async getActiveFeed(req: Request, res: Response): Promise<void> {
+  async getActiveFeed(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const { sport, isLive, limit, offset, cursor } = req.query;
+      const { sport, isLive, limit, offset, cursor, personalized } = req.query;
       const limitNum = limit ? parseInt(limit as string) : 20;
       const offsetNum = offset ? parseInt(offset as string) : 0;
       const { pods, total } = await podService.getActiveFeed({
@@ -13,7 +14,8 @@ export class PodController {
         isLive: isLive !== undefined ? isLive === 'true' : undefined,
         limit: limitNum,
         offset: offsetNum,
-        cursor: cursor ? new Date(cursor as string) : undefined
+        cursor: cursor ? new Date(cursor as string) : undefined,
+        personalized: personalized === 'true' ? req.user?.userId : undefined
       });
       res.json({
         success: true,

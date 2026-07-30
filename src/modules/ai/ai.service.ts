@@ -4,6 +4,25 @@ import { StakeModel } from '../../models/stake.model';
 
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 
+export interface ChatAction {
+  type: 'confirm_stake';
+  data: {
+    podId: string;
+    podTitle: string;
+    amount: number;
+    gainsMultiplier: number;
+    potentialPayout: number;
+    platformFee: number;
+    netPayout: number;
+  };
+}
+
+export interface ChatResult {
+  content: string;
+  action?: ChatAction;
+  usage?: any;
+}
+
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
@@ -156,13 +175,42 @@ Additional guidelines — VERY IMPORTANT:
 - If someone asks about their balance, stakes, or personal data, use the Current User Data section to answer directly.
 - If you don't have the specific data they need, just tell them which page to check in the app.
 - Never share sensitive info like full phone numbers or transaction references.
-- If asked about something outside BetPool, gently steer them back to BetPool topics.`;
+- If asked about something outside BetPool, gently steer them back to BetPool topics.
+- If a user asks to place a bet or says something like "put X on [team]", respond naturally, ask a quick confirmation question like "You want to bet ₦X on [team]?", and include a [STAKE] JSON block at the very end of your message with the stake details. Example: "Sure! You want to bet ₦5,000 on Arsenal to win, right? [STAKE]{\"podTitle\":\"Arsenal vs Chelsea\",\"amount\":5000}[/STAKE]"`;
+}
+
+function parseStakeAction(text: string, userId?: string): ChatAction | undefined {
+  const match = text.match(/\[STAKE\](\{.*?\})\[\/STAKE\]/);
+  if (!match) return undefined;
+
+  try {
+    const raw = JSON.parse(match[1]);
+    if (!raw.amount || !raw.podTitle) return undefined;
+    return {
+      type: 'confirm_stake',
+      data: {
+        podId: raw.podId || '',
+        podTitle: raw.podTitle,
+        amount: raw.amount,
+        gainsMultiplier: raw.gainsMultiplier || 1.5,
+        potentialPayout: raw.potentialPayout || raw.amount * (raw.gainsMultiplier || 1.5),
+        platformFee: raw.platformFee || Math.round((raw.amount * (raw.gainsMultiplier || 1.5) - raw.amount) * 0.1),
+        netPayout: raw.netPayout || raw.amount * (raw.gainsMultiplier || 1.5) - (raw.platformFee || 0),
+      }
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function stripStakeTag(text: string): string {
+  return text.replace(/\s*\[STAKE\]\{.*?\}\[\/STAKE\]\s*/g, ' ').trim();
 }
 
 export async function chatWithOra(
   messages: ChatMessage[],
   userId?: string
-): Promise<{ content: string; usage?: any }> {
+): Promise<ChatResult> {
   const apiKey = process.env.DEEPSEEK_API_KEY;
 
   const systemPrompt: ChatMessage = {
@@ -171,7 +219,9 @@ export async function chatWithOra(
   };
 
   if (!apiKey || apiKey === 'your_deepseek_api_key_here') {
-    return mockOraResponse(messages, systemPrompt.content);
+    const mock = mockOraResponse(messages, systemPrompt.content);
+    const action = parseStakeAction(mock.content, userId);
+    return { content: action ? stripStakeTag(mock.content) : mock.content, action };
   }
 
   try {
@@ -200,17 +250,24 @@ export async function chatWithOra(
     if (!response.ok) {
       const errorText = await response.text();
       console.error('DeepSeek API error:', response.status, errorText);
-      return mockOraResponse(messages, systemPrompt.content);
+      const mock = mockOraResponse(messages, systemPrompt.content);
+      const action = parseStakeAction(mock.content, userId);
+      return { content: action ? stripStakeTag(mock.content) : mock.content, action };
     }
 
     const data = await response.json();
+    const rawContent = data.choices[0].message.content;
+    const action = parseStakeAction(rawContent, userId);
     return {
-      content: data.choices[0].message.content,
+      content: action ? stripStakeTag(rawContent) : rawContent,
+      action,
       usage: data.usage
     };
   } catch (err) {
     console.error('DeepSeek fetch failed:', err);
-    return mockOraResponse(messages, systemPrompt.content);
+    const mock = mockOraResponse(messages, systemPrompt.content);
+    const action = parseStakeAction(mock.content, userId);
+    return { content: action ? stripStakeTag(mock.content) : mock.content, action };
   }
 }
 

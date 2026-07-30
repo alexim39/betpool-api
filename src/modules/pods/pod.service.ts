@@ -88,11 +88,12 @@ export class PodService {
     limit?: number;
     offset?: number;
     cursor?: Date;
+    personalized?: string;
   } = {}): Promise<{ pods: IPod[]; total: number }> {
     const offset = options.offset ?? 0;
     const sportKey = (options.sport || 'all').toLowerCase();
     const cacheKey = `feed:${sportKey}:${options.isLive !== undefined ? options.isLive : 'all'}`;
-    if (!options.cursor && offset === 0) {
+    if (!options.cursor && offset === 0 && !options.personalized) {
       const cached = cacheService.get<{ items: IPod[]; total: number }>(cacheKey);
       logger.debug('getActiveFeed cache lookup', { cacheKey, cached: !!cached });
       if (cached) return { pods: cached.items, total: cached.total };
@@ -109,24 +110,44 @@ export class PodService {
     if (options.isLive !== undefined) query.isLive = options.isLive;
     if (options.cursor) query.opensAt = { $lt: options.cursor };
 
-    const [pods, total] = await Promise.all([
-      PodModel.find(query)
-        .sort({ isLive: -1, displayOrder: 1, opensAt: 1 })
-        .skip(offset)
-        .limit(options.limit || 20)
-        .select('-legs -marketOdds')
-        .lean() as unknown as Promise<IPod[]>,
-      PodModel.countDocuments(query)
-    ]);
+    const baseQuery = PodModel.find(query).select('-legs -marketOdds').lean();
+    const total = await PodModel.countDocuments(query);
 
-    const result = await pods;
+    if (options.personalized) {
+      const userId = options.personalized;
+      const userSports = await StakeModel.aggregate([
+        { $match: { user: new mongoose.Types.ObjectId(userId) } },
+        { $lookup: { from: 'pods', localField: 'pod', foreignField: '_id', as: 'pod' } },
+        { $unwind: '$pod' },
+        { $group: { _id: '$pod.sport', count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 3 }
+      ]);
+      const preferredSports = new Set(userSports.map((s: any) => s._id));
+
+      const pods = await baseQuery as unknown as IPod[];
+      const scored = pods.map(p => {
+        const oraConf = (p.metadata?.oraConfidence as number) || 0;
+        const sportBonus = preferredSports.has(p.sport) ? 20 : 0;
+        return { pod: p, score: oraConf + sportBonus };
+      });
+      scored.sort((a, b) => b.score - a.score);
+
+      const paginated = scored.slice(offset, offset + (options.limit || 20));
+      return { pods: paginated.map(s => s.pod), total };
+    }
+
+    const pods = await baseQuery
+      .sort({ isLive: -1, displayOrder: 1, opensAt: 1 })
+      .skip(offset)
+      .limit(options.limit || 20) as unknown as IPod[];
 
     if (!options.cursor && offset === 0) {
       logger.debug('getActiveFeed setting cache', { cacheKey });
-      cacheService.set(cacheKey, { items: result, total }, 60_000);
+      cacheService.set(cacheKey, { items: pods, total }, 60_000);
     }
 
-    return { pods: result, total };
+    return { pods, total };
   }
 
   async getUpcoming(options: {

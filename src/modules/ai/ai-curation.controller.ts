@@ -49,6 +49,7 @@ export class AICurationController {
               metadata: {
                 oraCurated: true,
                 oraConfidence: bestPick.confidence,
+                oraReasoning: fixture.overallReasoning,
                 fixtureId: fixture.fixtureId,
                 combined: fixture.isCombined,
                 legMarkets: fixture.combinedLegs?.map(l => l.marketType),
