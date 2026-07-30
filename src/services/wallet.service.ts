@@ -540,19 +540,21 @@ export class WalletService {
           if (['received', 'pending', 'otp', 'success'].includes(transferStatus)) {
             // Poll transfer status — Paystack may reject "received" transfers seconds later
             let finalStatus = transferStatus;
+            let lastVerified: Awaited<ReturnType<typeof this.verifyPaystackTransferStatus>> = null;
             const delays = [0, 2000, 3000];
             for (const delay of delays) {
               if (delay > 0) await new Promise(r => setTimeout(r, delay));
-              const verified = await this.verifyPaystackTransferStatus(transferCode);
-              if (verified && ['blocked', 'rejected', 'failed'].includes(verified.status)) {
-                finalStatus = verified.status;
+              lastVerified = await this.verifyPaystackTransferStatus(transferCode);
+              if (lastVerified && ['blocked', 'rejected', 'failed'].includes(lastVerified.status)) {
+                finalStatus = lastVerified.status;
                 break;
               }
-              if (verified) finalStatus = verified.status;
+              if (lastVerified) finalStatus = lastVerified.status;
             }
             if (['blocked', 'rejected', 'failed'].includes(finalStatus)) {
-              logger.warn(`Paystack transfer ${transferCode} returned ${transferStatus} at initiate but finalised as ${finalStatus} — rejecting`, { reference: transaction.reference });
-              return { success: false, message: `Transfer ${finalStatus}`, providerData: data };
+              const failReason = lastVerified?.failureReason || 'unknown';
+              logger.warn(`Paystack transfer ${transferCode} ${finalStatus} — ${failReason}`, { reference: transaction.reference, transferCode, status: finalStatus, failureReason: failReason });
+              return { success: false, message: data.message || `Transfer ${finalStatus}: ${failReason}`, providerData: data };
             }
             return { success: true, providerData: data };
           }
@@ -582,7 +584,7 @@ export class WalletService {
     return { success: false, message: lastError?.message || 'Transfer failed after 3 attempts' };
   }
 
-  private async verifyPaystackTransferStatus(transferCode: string): Promise<{ status: string; reference: string } | null> {
+  private async verifyPaystackTransferStatus(transferCode: string): Promise<{ status: string; reference: string; failureReason?: string } | null> {
     if (!transferCode) return null;
     const secretKey = process.env.PAYSTACK_SECRET_KEY;
     if (!secretKey) return null;
@@ -592,7 +594,11 @@ export class WalletService {
       });
       const data = await response.json();
       if (response.ok && data.status === true && data.data?.status) {
-        return { status: data.data.status, reference: data.data.reference || '' };
+        return {
+          status: data.data.status,
+          reference: data.data.reference || '',
+          failureReason: data.data.reason || data.data.failure_reason || data.data.failureReason || undefined
+        };
       }
       return null;
     } catch (err) {
@@ -865,8 +871,9 @@ export class WalletService {
         continue;
       }
       if (['blocked', 'rejected', 'failed'].includes(verified.status)) {
-        logger.warn(`Stuck withdrawal resolved as ${verified.status} — refunding`, { transactionId: txn._id, transferCode, status: verified.status });
-        await this.refundWithdrawal(txn._id.toString(), `Transfer ${verified.status} — reconciled`);
+        const failReason = verified.failureReason || 'unknown';
+        logger.warn(`Stuck withdrawal resolved as ${verified.status}: ${failReason} — refunding`, { transactionId: txn._id, transferCode, status: verified.status, failureReason: failReason });
+        await this.refundWithdrawal(txn._id.toString(), `Transfer ${verified.status}: ${failReason}`);
         reconciled++;
       } else if (verified.status === 'success') {
         await runTransaction(async (session) => {
