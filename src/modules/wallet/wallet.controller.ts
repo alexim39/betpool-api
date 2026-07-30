@@ -143,6 +143,8 @@ export class WalletController {
         return;
       }
 
+      logger.info(`Paystack webhook event matched: ${payload.event}`, { reference: event.reference, amount: event.amount });
+
       if (payload.event === 'charge.success' && event.status === 'success') {
         await walletService.verifyAndCreditDeposit(event.reference);
       } else if (payload.event === 'transfer.success') {

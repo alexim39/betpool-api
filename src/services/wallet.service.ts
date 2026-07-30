@@ -439,11 +439,28 @@ export class WalletService {
 
     notifyWithdrawalSubmitted(userId, amount, `${accountName} - ${accountNumber}`).catch(e => logger.error('notifyWithdrawalSubmitted error', e));
 
+    // Look up or create Paystack recipient code to avoid duplicates
+    let recipientCode: string | undefined;
+    try {
+      const savedAccount = await BankAccountModel.findOne({ userId: new mongoose.Types.ObjectId(userId), bankCode, accountNumber });
+      if (savedAccount?.recipientCode) {
+        recipientCode = savedAccount.recipientCode;
+      } else {
+        const code = await paymentService.createTransferRecipient(accountName, accountNumber, bankCode);
+        if (savedAccount) {
+          await BankAccountModel.updateOne({ _id: savedAccount._id }, { $set: { recipientCode: code } });
+        }
+        recipientCode = code;
+      }
+    } catch (err: any) {
+      logger.warn('Failed to get/create Paystack recipient code, will retry inside transfer loop', { error: err.message });
+    }
+
     // Phase 2: Call Paystack outside DB transaction (wrapped in try-catch to prevent stuck deductions)
     let transferResult: { success: boolean; message?: string; providerData?: any };
     try {
       transferResult = await this.processPaystackTransfer(
-        transaction as any, bankCode, accountNumber, accountName, narration
+        transaction as any, bankCode, accountNumber, accountName, narration, recipientCode
       );
     } catch (err: any) {
       logger.error('processPaystackTransfer threw unexpectedly — refunding wallet', { transactionId: transaction._id, error: err.message });
@@ -476,9 +493,10 @@ export class WalletService {
     bankCode: string,
     accountNumber: string,
     accountName: string,
-    narration?: string
+    narration?: string,
+    existingRecipientCode?: string
   ): Promise<{ success: boolean; message?: string; providerData?: any }> {
-    return this.processPaystackTransfer(transaction, bankCode, accountNumber, accountName, narration);
+    return this.processPaystackTransfer(transaction, bankCode, accountNumber, accountName, narration, existingRecipientCode);
   }
 
   async processPaystackTransfer(
@@ -486,7 +504,8 @@ export class WalletService {
     bankCode: string,
     accountNumber: string,
     accountName: string,
-    narration?: string
+    narration?: string,
+    existingRecipientCode?: string
   ): Promise<{ success: boolean; message?: string; providerData?: any }> {
     const secretKey = process.env.PAYSTACK_SECRET_KEY;
     if (!secretKey) {
@@ -494,9 +513,12 @@ export class WalletService {
     }
 
     let lastError: any;
+    let recipientCode = existingRecipientCode || '';
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        const recipientCode = await paymentService.createTransferRecipient(accountName, accountNumber, bankCode);
+        if (!recipientCode) {
+          recipientCode = await paymentService.createTransferRecipient(accountName, accountNumber, bankCode);
+        }
         const response = await fetch('https://api.paystack.co/transfer', {
           method: 'POST',
           headers: {
@@ -516,11 +538,21 @@ export class WalletService {
           const transferStatus = data.data.status;
           const transferCode = data.data.transfer_code || data.data.code;
           if (['received', 'pending', 'otp', 'success'].includes(transferStatus)) {
-            // Verify transfer status immediately to catch risk-engine blocks
-            const verified = await this.verifyPaystackTransferStatus(transferCode);
-            if (verified && ['blocked', 'rejected', 'failed'].includes(verified.status)) {
-              logger.warn(`Paystack transfer ${transferCode} returned ${transferStatus} at initiate but verified as ${verified.status} — rejecting`, { reference: transaction.reference });
-              return { success: false, message: `Transfer ${verified.status}`, providerData: data };
+            // Poll transfer status — Paystack may reject "received" transfers seconds later
+            let finalStatus = transferStatus;
+            const delays = [0, 2000, 3000];
+            for (const delay of delays) {
+              if (delay > 0) await new Promise(r => setTimeout(r, delay));
+              const verified = await this.verifyPaystackTransferStatus(transferCode);
+              if (verified && ['blocked', 'rejected', 'failed'].includes(verified.status)) {
+                finalStatus = verified.status;
+                break;
+              }
+              if (verified) finalStatus = verified.status;
+            }
+            if (['blocked', 'rejected', 'failed'].includes(finalStatus)) {
+              logger.warn(`Paystack transfer ${transferCode} returned ${transferStatus} at initiate but finalised as ${finalStatus} — rejecting`, { reference: transaction.reference });
+              return { success: false, message: `Transfer ${finalStatus}`, providerData: data };
             }
             return { success: true, providerData: data };
           }
@@ -572,7 +604,7 @@ export class WalletService {
   private async refundWithdrawal(transactionId: string, reason: string): Promise<void> {
     await runTransaction(async (session) => {
       const txn = await TransactionModel.findById(transactionId).session(session);
-      if (!txn || txn.status !== 'pending') return;
+      if (!txn || (txn.status !== 'pending' && txn.status !== 'processing')) return;
       await WalletModel.findOneAndUpdate(
         { user: txn.user },
         { $inc: { balance: txn.amount, totalWithdrawn: -txn.amount } },
@@ -806,6 +838,52 @@ export class WalletService {
     await BankAccountModel.updateMany({ userId }, { isDefault: false });
     acct.isDefault = true;
     await acct.save();
+  }
+
+  async reconcileStuckWithdrawals(): Promise<number> {
+    const cutoff = new Date(Date.now() - 5 * 60 * 1000);
+    const stuck = await TransactionModel.find({
+      type: 'withdrawal',
+      status: 'processing',
+      createdAt: { $lte: cutoff }
+    }).limit(20);
+
+    let reconciled = 0;
+    for (const txn of stuck) {
+      const pd = txn.providerData as any;
+      const transferCode = pd?.data?.transfer_code || pd?.data?.code || pd?.transfer_code;
+      if (!transferCode) {
+        // No transfer code — mark as failed with refund
+        logger.warn('Stuck withdrawal has no transfer code — refunding', { transactionId: txn._id, reference: txn.reference });
+        await this.refundWithdrawal(txn._id.toString(), 'No transfer code from provider');
+        reconciled++;
+        continue;
+      }
+      const verified = await this.verifyPaystackTransferStatus(transferCode);
+      if (!verified) {
+        logger.warn('Stuck withdrawal verification returned null — skipping', { transactionId: txn._id, transferCode });
+        continue;
+      }
+      if (['blocked', 'rejected', 'failed'].includes(verified.status)) {
+        logger.warn(`Stuck withdrawal resolved as ${verified.status} — refunding`, { transactionId: txn._id, transferCode, status: verified.status });
+        await this.refundWithdrawal(txn._id.toString(), `Transfer ${verified.status} — reconciled`);
+        reconciled++;
+      } else if (verified.status === 'success') {
+        await runTransaction(async (session) => {
+          const t = await TransactionModel.findById(txn._id).session(session);
+          if (!t || t.status !== 'processing') return;
+          t.status = 'completed';
+          t.completedAt = new Date();
+          await t.save({ session });
+          await notifyWithdrawalCompleted(t.user.toString(), t.amount, t.reference).catch(e => logger.error('notifyWithdrawalCompleted error', e));
+        });
+        reconciled++;
+      }
+    }
+    if (reconciled > 0) {
+      logger.info(`Reconciliation: ${reconciled}/${stuck.length} stuck withdrawals resolved`);
+    }
+    return reconciled;
   }
 }
 

@@ -250,7 +250,7 @@ export class PaymentService {
         amount: payload.data.amount / 100
       };
     }
-    if (payload.event === 'transfer.failed') {
+    if (payload.event === 'transfer.failed' || payload.event === 'transfer.reversed') {
       return {
         reference: payload.data.reference,
         status: 'failed',

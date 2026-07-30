@@ -7,6 +7,7 @@ export interface IBankAccount extends Document {
   accountNumber: string;
   accountName: string;
   isDefault: boolean;
+  recipientCode?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -17,7 +18,8 @@ const BankAccountSchema = new Schema<IBankAccount>({
   bankCode: { type: String, required: true },
   accountNumber: { type: String, required: true },
   accountName: { type: String, required: true },
-  isDefault: { type: Boolean, default: false }
+  isDefault: { type: Boolean, default: false },
+  recipientCode: { type: String, sparse: true }
 }, { timestamps: true });
 
 BankAccountSchema.index({ userId: 1, bankCode: 1, accountNumber: 1 }, { unique: true });

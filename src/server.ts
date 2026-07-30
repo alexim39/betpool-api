@@ -3,6 +3,7 @@ import app from "./app";
 import { aiAutomationService } from './modules/ai/ai-automation.service';
 import { aiRiskService } from './modules/ai/ai-risk.service';
 import { aiBiService } from './modules/ai/ai-bi.service';
+import { walletService } from './services/wallet.service';
 import { logger } from './services/logger.service';
 
 // set environment configs
@@ -35,5 +36,16 @@ app.listen(port, () => {
             }).catch(e => logger.error('[T4 Advisory] Check failed', e));
         }, 6 * 60 * 60 * 1000);
         logger.info('[T4 Advisory] Background check started — every 6 hours');
+    }
+    // Start withdrawal reconciliation (every 5 minutes)
+    if (process.env.WITHDRAWAL_RECONCILIATION !== 'disabled') {
+        setInterval(async () => {
+            try {
+                await walletService.reconcileStuckWithdrawals();
+            } catch (e) {
+                logger.error('[Withdrawal Reconciliation] Error', e);
+            }
+        }, 5 * 60 * 1000);
+        logger.info('[Withdrawal Reconciliation] Background check started — every 5 minutes');
     }
 })
