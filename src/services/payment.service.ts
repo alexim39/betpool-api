@@ -40,6 +40,13 @@ export class PaymentService {
     return hash === signature;
   }
 
+  verifyPaystackWebhookSignatureFallback(rawBody: string, signature: string): boolean {
+    const apiKey = this.paystackSecret;
+    if (!apiKey) return false;
+    const hash = crypto.createHmac('sha512', apiKey).update(rawBody).digest('hex');
+    return hash === signature;
+  }
+
   async initializePaystackDeposit(
     email: string,
     amount: number,

@@ -4,7 +4,7 @@ import mongoose from 'mongoose';
 import { authRoutes } from '../modules/auth';
 import { podRoutes } from '../modules/pods';
 import { stakeRoutes } from '../modules/staking';
-import { walletRoutes, walletController } from '../modules/wallet';
+import { walletRoutes } from '../modules/wallet';
 import { aiRoutes } from '../modules/ai';
 import { notificationRoutes } from '../modules/notifications';
 import { matchPoolRoutes } from '../modules/match-pools';
@@ -43,8 +43,5 @@ router.use('/featured-games', featuredBannerRoutes);
 
 // Admin routes (auth + admin middleware applied at this level)
 router.use('/admin', authMiddleware, adminMiddleware, adminLimiter, adminRoutes);
-
-// Payment webhook (no auth — signature verified inside handler)
-router.post('/webhook/paystack', walletController.paystackWebhook);
 
 export default router;

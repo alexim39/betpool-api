@@ -114,26 +114,27 @@ export class WalletController {
   async paystackWebhook(req: Request, res: Response): Promise<void> {
     try {
       const signature = req.headers['x-paystack-signature'] as string;
+      const rawBody = (req as any).rawBody || '';
+      const payload = req.body;
+
       logger.info(`Paystack webhook received`, {
-        path: req.path,
+        event: payload?.event,
         signature: signature ? `${signature.substring(0, 12)}...` : 'MISSING',
-        contentType: req.headers['content-type'],
-        bodyType: typeof req.body,
-        isBuffer: req.body instanceof Buffer,
-        bodyPreview: req.body instanceof Buffer ? req.body.toString('utf8').substring(0, 200) : JSON.stringify(req.body).substring(0, 200)
+        bodyPreview: JSON.stringify(payload).substring(0, 300)
       });
 
       if (!signature) {
-        res.status(400).json({ success: false, message: 'Missing signature' });
+        res.status(200).json({ success: true, message: 'No signature' });
         return;
       }
 
-      const rawBody = req.body instanceof Buffer ? req.body.toString() : JSON.stringify(req.body);
-      const payload = JSON.parse(rawBody);
+      // Try SHA-256 with webhook secret first, fall back to SHA-512 with API key
+      const isValid = paymentService.verifyPaystackWebhookSignature(rawBody, signature)
+        || paymentService.verifyPaystackWebhookSignatureFallback(rawBody, signature);
 
-      const isValid = paymentService.verifyPaystackWebhookSignature(rawBody, signature);
       if (!isValid) {
-        res.status(401).json({ success: false, message: 'Invalid signature' });
+        logger.warn('Paystack webhook signature verification failed', { signature: signature.substring(0, 12) + '...' });
+        res.status(200).json({ success: true, message: 'Webhook received' });
         return;
       }
 
@@ -153,10 +154,10 @@ export class WalletController {
         await walletService.failWithdrawal(event.reference);
       }
 
-      res.status(200).json({ success: true });
+      res.status(200).send('OK');
     } catch (error) {
       logger.error('Paystack webhook error', error);
-      res.status(200).json({ success: true, message: 'Webhook received' });
+      res.status(200).send('OK');
     }
   }
 

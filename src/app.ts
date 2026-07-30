@@ -7,6 +7,7 @@ import helmet from 'helmet';
 import routes from './routes';
 import { errorHandler } from './middleware/error.middleware';
 import { logger } from './services/logger.service';
+import { walletController } from './modules/wallet';
 
 dotenv.config({ path: './.env' });
 
@@ -25,10 +26,8 @@ class App {
     const corsOrigins = ('http://localhost:4200,http://localhost:4201,http://localhost:4300,https://betpool.tech,http://betpool.tech,https://www.betpool.tech,https://mgt.betpool.tech,http://mgt.betpool.tech,https://www.mgt.betpool.tech').split(',');
     this.app.use(cors({
       origin: function (origin, callback) {
-        // Allow requests with no origin (server-to-server, curl, etc.)
         if (!origin) return callback(null, true);
         if (corsOrigins.includes(origin)) return callback(null, true);
-        // Also allow any *.betpool.tech subdomain
         if (origin.endsWith('.betpool.tech')) return callback(null, true);
         callback(null, false);
       },
@@ -37,9 +36,23 @@ class App {
       credentials: true
     }));
     this.app.use(helmet());
+    // Webhook route — MUST be before body parsers to capture raw body for HMAC verification
+    this.app.post('/api/webhook/paystack', (req, res) => {
+      let data = '';
+      req.setEncoding('utf8');
+      req.on('data', chunk => { data += chunk; });
+      req.on('end', () => {
+        (req as any).rawBody = data;
+        try {
+          req.body = JSON.parse(data);
+          walletController.paystackWebhook(req, res);
+        } catch (e) {
+          logger.error('Paystack webhook JSON parse error', e);
+          res.status(400).json({ error: 'Invalid JSON' });
+        }
+      });
+    });
     this.app.use(bodyParser.urlencoded({ extended: false }));
-    // Raw body parser for webhook (HMAC must verify original payload bytes)
-    this.app.use('/api/webhook/paystack', bodyParser.raw({ type: 'application/json' }));
     this.app.use(bodyParser.json({ limit: '10kb' }));
   }
 
