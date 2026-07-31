@@ -149,7 +149,7 @@ export class AdminController {
 
   async listUsers(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const { page, limit, search, status, dateFrom, dateTo, sortBy, sortOrder } = req.query;
+      const { page, limit, search, status, dateFrom, dateTo, sortBy, sortOrder, role } = req.query;
       const result = await adminService.listUsers({
         page: page ? parseInt(page as string) : 1,
         limit: limit ? parseInt(limit as string) : 20,
@@ -159,6 +159,7 @@ export class AdminController {
         dateTo: dateTo as string,
         sortBy: sortBy as string,
         sortOrder: sortOrder as 'asc' | 'desc',
+        role: role as 'user' | 'admin',
       });
       res.json({ success: true, data: result });
     } catch (error) {
@@ -539,7 +540,7 @@ export class AdminController {
 
   async listPodsReadyForBetting(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const { page, limit, search, sport, booked, sortBy, sortOrder, listStatus } = req.query;
+      const { page, limit, search, sport, booked, sortBy, sortOrder, listStatus, dateFrom, dateTo } = req.query;
       const result = await adminService.listPodsReadyForBetting({
         page: page ? parseInt(page as string) : 1,
         limit: limit ? parseInt(limit as string) : 20,
@@ -549,6 +550,8 @@ export class AdminController {
         sortBy: sortBy as string,
         sortOrder: sortOrder as string,
         listStatus: listStatus as string,
+        dateFrom: dateFrom as string,
+        dateTo: dateTo as string,
       });
       res.json({ success: true, data: result });
     } catch (error) {

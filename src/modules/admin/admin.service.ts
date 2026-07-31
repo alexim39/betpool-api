@@ -26,6 +26,7 @@ interface PaginationQuery {
   sortOrder?: 'asc' | 'desc';
   dateFrom?: string;
   dateTo?: string;
+  role?: 'user' | 'admin';
 }
 
 interface PaginatedResult<T> {
@@ -583,6 +584,16 @@ export class AdminService {
       filter.bookedExternally = { $ne: true };
     }
 
+    if (query.dateFrom || query.dateTo) {
+      filter.matchDate = {};
+      if (query.dateFrom) filter.matchDate.$gte = new Date(query.dateFrom);
+      if (query.dateTo) {
+        const end = new Date(query.dateTo);
+        end.setHours(23, 59, 59, 999);
+        filter.matchDate.$lte = end;
+      }
+    }
+
     const sortField = query.sortBy || 'stakingClosesAt';
     const sortOrder = query.sortOrder === 'asc' ? 1 : -1;
     const allowedSortFields: Record<string, string> = {
@@ -630,10 +641,10 @@ export class AdminService {
     return updated as unknown as IPod;
   }
 
-  async listUsers(query: PaginationQuery): Promise<PaginatedResult<IUser> & { stats: { total: number; active: number; suspended: number; kycVerified: number; kycPending: number } }> {
+  async listUsers(query: PaginationQuery): Promise<PaginatedResult<IUser> & { stats: { total: number; active: number; suspended: number; kycVerified: number; kycPending: number; admins: number } }> {
     const page = Math.max(1, query.page || 1);
     const limit = Math.min(Math.max(1, query.limit || 20), 200);
-    const filter: any = { role: 'user' };
+    const filter: any = { role: query.role === 'admin' ? 'admin' : 'user' };
 
     if (query.search) {
       const regex = new RegExp(query.search, 'i');
@@ -702,6 +713,7 @@ export class AdminService {
           await UserModel.countDocuments({
             kycVerified: false, kycSubmittedAt: { $exists: true }, role: 'user',
           }),
+          await UserModel.countDocuments({ role: 'admin' }),
         ];
       })(),
     ]);
@@ -718,6 +730,7 @@ export class AdminService {
         suspended: stats[2],
         kycVerified: stats[3],
         kycPending: stats[4],
+        admins: stats[5],
       },
     };
   }

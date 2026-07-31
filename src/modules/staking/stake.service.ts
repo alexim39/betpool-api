@@ -202,6 +202,34 @@ export class StakeService {
     };
   }
 
+  private async attachLegScores(stakes: any[]): Promise<any[]> {
+    const podIds = new Set<string>();
+    for (const s of stakes) {
+      if (s.isParlay && Array.isArray(s.items) && s.items.length) {
+        for (const item of s.items) {
+          if (item?.pod) podIds.add(item.pod.toString());
+        }
+      }
+    }
+    if (podIds.size > 0) {
+      const pods = await PodModel.find({ _id: { $in: [...podIds] } })
+        .select('_id homeScore awayScore')
+        .lean();
+      const scoreMap = new Map(pods.map(p => [p._id.toString(), p]));
+      for (const s of stakes) {
+        if (!s.isParlay || !Array.isArray(s.items)) continue;
+        for (const item of s.items) {
+          const pod = item?.pod ? scoreMap.get(item.pod.toString()) : undefined;
+          if (pod) {
+            item.homeScore = pod.homeScore ?? null;
+            item.awayScore = pod.awayScore ?? null;
+          }
+        }
+      }
+    }
+    return stakes;
+  }
+
   async getUserStakes(
     userId: string,
     options: { 
@@ -230,7 +258,8 @@ export class StakeService {
       StakeModel.countDocuments(query)
     ]);
 
-    return { stakes: (docs as any[]).map(s => this.attachVirtuals(s)), total };
+    const stakes = (docs as any[]).map(s => this.attachVirtuals(s));
+    return { stakes: await this.attachLegScores(stakes), total };
   }
 
   async getActiveStakes(userId: string): Promise<IStake[]> {
@@ -241,14 +270,15 @@ export class StakeService {
       .populate('pod')
       .sort({ createdAt: -1 })
       .lean();
-    return (docs as any[]).map(s => this.attachVirtuals(s));
+    return this.attachLegScores((docs as any[]).map(s => this.attachVirtuals(s)));
   }
 
   async getStakeById(stakeId: string, userId?: string): Promise<IStake | null> {
     const query: Record<string, any> = { _id: stakeId };
     if (userId) query.user = userId;
     const doc = await StakeModel.findOne(query).populate('pod').lean();
-    return doc ? this.attachVirtuals(doc) : null;
+    const attached = doc ? this.attachVirtuals(doc) : null;
+    return attached ? (await this.attachLegScores([attached]))[0] : null;
   }
 
   async placeAccumulator(data: PlaceMultiStakeData): Promise<StakeResult> {
