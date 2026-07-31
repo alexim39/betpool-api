@@ -633,7 +633,7 @@ export class AdminService {
   async listUsers(query: PaginationQuery): Promise<PaginatedResult<IUser> & { stats: { total: number; active: number; suspended: number; kycVerified: number; kycPending: number } }> {
     const page = Math.max(1, query.page || 1);
     const limit = Math.min(Math.max(1, query.limit || 20), 200);
-    const filter: any = {};
+    const filter: any = { role: 'user' };
 
     if (query.search) {
       const regex = new RegExp(query.search, 'i');
@@ -683,13 +683,27 @@ export class AdminService {
         { $project: { pinHash: 0, wallet: 0 } },
       ]),
       UserModel.countDocuments(filter),
-      Promise.all([
-        UserModel.countDocuments({ role: 'user' }),
-        UserModel.countDocuments({ isSuspended: false, role: 'user' }),
-        UserModel.countDocuments({ isSuspended: true, role: 'user' }),
-        UserModel.countDocuments({ kycVerified: true, role: 'user' }),
-        UserModel.countDocuments({ kycVerified: false, role: 'user' }),
-      ]),
+      (async () => {
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000);
+
+        const activeUserIds = await UserModel.distinct('_id', {
+          role: 'user', isSuspended: false,
+          $or: [
+            { lastLoginAt: { $gte: thirtyDaysAgo } },
+            { _id: { $in: await StakeModel.distinct('user', { createdAt: { $gte: thirtyDaysAgo } }) } },
+          ],
+        });
+
+        return [
+          await UserModel.countDocuments({ role: 'user' }),
+          activeUserIds.length,
+          await UserModel.countDocuments({ isSuspended: true, role: 'user' }),
+          await UserModel.countDocuments({ kycVerified: true, role: 'user' }),
+          await UserModel.countDocuments({
+            kycVerified: false, kycSubmittedAt: { $exists: true }, role: 'user',
+          }),
+        ];
+      })(),
     ]);
 
     return {
