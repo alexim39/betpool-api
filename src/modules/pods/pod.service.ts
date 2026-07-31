@@ -3,6 +3,7 @@ import { PodModel, IPod } from '../../models/pod.model';
 import { StakeModel, IStake } from '../../models/stake.model';
 import { cacheService } from '../../services/cache.service';
 import { logger } from '../../services/logger.service';
+import { aiPersonalizationService } from '../ai/ai-personalization.service';
 
 export interface CreatePodData {
   title: string;
@@ -114,23 +115,9 @@ export class PodService {
     const total = await PodModel.countDocuments(query);
 
     if (options.personalized) {
-      const userId = options.personalized;
-      const userSports = await StakeModel.aggregate([
-        { $match: { user: new mongoose.Types.ObjectId(userId) } },
-        { $lookup: { from: 'pods', localField: 'pod', foreignField: '_id', as: 'pod' } },
-        { $unwind: '$pod' },
-        { $group: { _id: '$pod.sport', count: { $sum: 1 } } },
-        { $sort: { count: -1 } },
-        { $limit: 3 }
-      ]);
-      const preferredSports = new Set(userSports.map((s: any) => s._id));
-
+      const profile = await aiPersonalizationService.getProfile(options.personalized);
       const pods = await baseQuery as unknown as IPod[];
-      const scored = pods.map(p => {
-        const oraConf = (p.metadata?.oraConfidence as number) || 0;
-        const sportBonus = preferredSports.has(p.sport) ? 20 : 0;
-        return { pod: p, score: oraConf + sportBonus };
-      });
+      const scored = pods.map(p => ({ pod: p, score: aiPersonalizationService.scorePod(p, profile) }));
       scored.sort((a, b) => b.score - a.score);
 
       const paginated = scored.slice(offset, offset + (options.limit || 20));

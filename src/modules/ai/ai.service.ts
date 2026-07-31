@@ -1,6 +1,7 @@
 import { UserModel } from '../../models/user.model';
 import { WalletModel } from '../../models/wallet.model';
 import { StakeModel } from '../../models/stake.model';
+import { PodModel } from '../../models/pod.model';
 
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 
@@ -180,7 +181,7 @@ Additional guidelines — VERY IMPORTANT:
 }
 
 function parseStakeAction(text: string, userId?: string): ChatAction | undefined {
-  const match = text.match(/\[STAKE\](\{.*?\})\[\/STAKE\]/);
+  const match = text.match(/\[STAKE\](\{[\s\S]*?\})\[\/STAKE\]/);
   if (!match) return undefined;
 
   try {
@@ -204,7 +205,7 @@ function parseStakeAction(text: string, userId?: string): ChatAction | undefined
 }
 
 function stripStakeTag(text: string): string {
-  return text.replace(/\s*\[STAKE\]\{.*?\}\[\/STAKE\]\s*/g, ' ').trim();
+  return text.replace(/\s*\[STAKE\]\{[\s\S]*?\}\[\/STAKE\]\s*/g, ' ').trim();
 }
 
 export async function chatWithOra(
@@ -219,7 +220,7 @@ export async function chatWithOra(
   };
 
   if (!apiKey || apiKey === 'your_deepseek_api_key_here') {
-    const mock = mockOraResponse(messages, systemPrompt.content);
+    const mock = await mockOraResponse(messages, systemPrompt.content);
     const action = parseStakeAction(mock.content, userId);
     return { content: action ? stripStakeTag(mock.content) : mock.content, action };
   }
@@ -250,7 +251,7 @@ export async function chatWithOra(
     if (!response.ok) {
       const errorText = await response.text();
       console.error('DeepSeek API error:', response.status, errorText);
-      const mock = mockOraResponse(messages, systemPrompt.content);
+      const mock = await mockOraResponse(messages, systemPrompt.content);
       const action = parseStakeAction(mock.content, userId);
       return { content: action ? stripStakeTag(mock.content) : mock.content, action };
     }
@@ -265,14 +266,71 @@ export async function chatWithOra(
     };
   } catch (err) {
     console.error('DeepSeek fetch failed:', err);
-    const mock = mockOraResponse(messages, systemPrompt.content);
+    const mock = await mockOraResponse(messages, systemPrompt.content);
     const action = parseStakeAction(mock.content, userId);
     return { content: action ? stripStakeTag(mock.content) : mock.content, action };
   }
 }
 
-function mockOraResponse(messages: ChatMessage[], systemContext?: string): { content: string } {
+function parseStakeIntent(text: string): { amount: number; teams: string[] } | null {
+  const m = text.match(/(?:place|put|bet|stake|wager)\s+(?:a\s+)?(?:bet\s+)?(?:of\s+)?(?:₦|n|ngn)?\s*([\d,]+(?:\s*k)?)/i);
+  if (!m) return null;
+  const raw = m[1].replace(/\s/g, '');
+  let amount = parseFloat(raw.replace(/,/g, ''));
+  if (/k/i.test(raw)) amount *= 1000;
+  if (!amount || amount <= 0) return null;
+  const after = text.slice((m.index || 0) + m[0].length);
+  const teams = after
+    .replace(/^\s*(?:on|to win|for|in|with|at)\s*/i, '')
+    .split(/\s+(?:and|vs|to win|to beat|winning)\s+/i)
+    .map(s => s.trim().replace(/[?!.]/g, ''))
+    .filter(s => s.length >= 3);
+  return { amount, teams };
+}
+
+function podMatches(pod: any, teams: string[]): boolean {
+  const haystack = `${pod.title || ''} ${pod.homeTeam || ''} ${pod.awayTeam || ''}`.toLowerCase();
+  return teams.some(t => t.toLowerCase().split(/\s+/).some(word => word.length >= 3 && haystack.includes(word)));
+}
+
+async function mockOraResponse(messages: ChatMessage[], systemContext?: string): Promise<{ content: string }> {
   const lastMessage = messages[messages.length - 1]?.content?.toLowerCase() || '';
+
+  // Bet placement intent → build a real [STAKE] action card from live pods
+  const intent = parseStakeIntent(lastMessage);
+  if (intent) {
+    try {
+      const pods = await PodModel.find({ status: 'active', stakingClosesAt: { $gte: new Date() } })
+        .select('title homeTeam awayTeam gainsMultiplier minStake maxStake')
+        .sort({ 'metadata.oraConfidence': -1 })
+        .limit(40)
+        .lean();
+      const target = (pods as any[]).find(p => podMatches(p, intent.teams))
+        || (pods as any[]).find(p => intent.amount >= (p.minStake || 0) && intent.amount <= (p.maxStake || Infinity))
+        || (pods as any[])[0];
+      if (target) {
+        const amount = Math.min(Math.max(intent.amount, target.minStake || 1000), target.maxStake || 100000);
+        const gains = target.gainsMultiplier || 1.5;
+        const potentialPayout = Math.round(amount * gains);
+        const platformFee = Math.round((potentialPayout - amount) * 0.1);
+        const netPayout = potentialPayout - platformFee;
+        const tag = JSON.stringify({
+          podId: target._id.toString(),
+          podTitle: target.title,
+          amount,
+          gainsMultiplier: gains,
+          potentialPayout,
+          platformFee,
+          netPayout,
+        });
+        return {
+          content: `You want to bet ₦${amount.toLocaleString()} on "${target.title}", right? Confirm below to place it. [STAKE]${tag}[/STAKE]`,
+        };
+      }
+    } catch (err) {
+      console.error('Mock stake lookup failed:', err);
+    }
+  }
 
   if (lastMessage.includes('balance') || lastMessage.includes('how much') || (lastMessage.includes('wallet') && (lastMessage.includes('balance') || lastMessage.includes('money') || lastMessage.includes('have')))) {
     if (systemContext) {

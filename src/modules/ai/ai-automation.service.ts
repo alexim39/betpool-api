@@ -109,6 +109,7 @@ export class AIAutomationService {
                 metadata: {
                   oraCurated: true,
                   oraConfidence: bestPick.confidence,
+                  oraReasoning: fixture.overallReasoning || 'Ora AI curated this pick based on team form and market odds analysis.',
                   fixtureId: fixture.fixtureId,
                   combined: fixture.isCombined,
                   legMarkets: fixture.combinedLegs?.map(l => l.marketType),
@@ -146,7 +147,7 @@ export class AIAutomationService {
                   minStake: 1000, maxStake: 100000, maxTotalExposure: 500000,
                   opensAt: new Date(), stakingClosesAt, settlementEstimateAt,
                   settlementEstimateLabel: settlementEstimateAt.toLocaleDateString('en-NG', { month: 'short', day: 'numeric', year: 'numeric' }),
-                  status: 'active', legs: [], metadata: { oraCurated: true, fallback: 'odds-based', fixtureId: fixture.fixtureId },
+                  status: 'active', legs: [], metadata: { oraCurated: true, fallback: 'odds-based', oraReasoning: fixture.overallReasoning || 'Odds-based curation: selected the highest-probability outcome from available market odds.', fixtureId: fixture.fixtureId },
                 }, adminUser);
                 result.curation.created++;
               } catch (err: any) {
