@@ -193,7 +193,7 @@ async function buildSystemPrompt(userId?: string): Promise<string> {
       .lean();
     if (livePods.length > 0) {
       const lines = (livePods as any[]).map(p =>
-        `- "${p.title}" → pick: ${p.selection || '—'}, ${p.gainsMultiplier || 1.5}x, min ₦${p.minStake || 1000}, max ₦${p.maxStake || 100000}`
+        `- "${p.title}" → pick: ${p.selection || '—'}, ${p.gainsMultiplier || 1.5}x, min ₦${p.minStake || 100}, max ₦${p.maxStake || 100000}`
       );
       livePodsSection = `\n\n## Live Pods Right Now\nThese are the betting offers currently open. Each pod has a FIXED pick — users can only stake on that pod's pick, not on any team they choose. Use these when the user asks to bet:\n${lines.join('\n')}`;
     }
@@ -579,7 +579,7 @@ async function finalizeAction(action: StakeAction): Promise<StakeAction | undefi
     if (!pod || !isStakable(pod)) return undefined;
 
     const gains = pod.gainsMultiplier || 1.5;
-    let amount = Math.min(Math.max(action.data.amount, pod.minStake || 1000), pod.maxStake || 100000);
+    let amount = Math.min(Math.max(action.data.amount, pod.minStake || 100), pod.maxStake || 100000);
     const maxByPayout = pod.maxPayout ? Math.floor(pod.maxPayout / gains) : Infinity;
     if (amount > maxByPayout) amount = maxByPayout;
     const math = computeStakeMath(amount, gains);
@@ -633,7 +633,7 @@ function podPickSide(pod: any): { side: 'home' | 'away' | 'other'; label: string
 
 function buildStakeCard(pod: any, amount: number, intro?: string): { content: string } {
   const requested = amount;
-  amount = Math.min(Math.max(amount, pod.minStake || 1000), pod.maxStake || 100000);
+  amount = Math.min(Math.max(amount, pod.minStake || 100), pod.maxStake || 100000);
   const gains = pod.gainsMultiplier || 1.5;
   const maxByPayout = pod.maxPayout ? Math.floor(pod.maxPayout / gains) : Infinity;
   if (amount > maxByPayout) amount = maxByPayout;
@@ -650,7 +650,7 @@ function buildStakeCard(pod: any, amount: number, intro?: string): { content: st
     netPayout: math.netPayout,
   });
   const clampedNotes: string[] = [];
-  if (requested < (pod.minStake || 1000)) clampedNotes.push(`minimum stake on this pod is ₦${(pod.minStake || 1000).toLocaleString()}`);
+  if (requested < (pod.minStake || 100)) clampedNotes.push(`minimum stake on this pod is ₦${(pod.minStake || 100).toLocaleString()}`);
   if (requested > (pod.maxStake || 100000)) clampedNotes.push(`maximum stake on this pod is ₦${(pod.maxStake || 100000).toLocaleString()}`);
   if (pod.maxPayout && math.potentialPayout > pod.maxPayout) clampedNotes.push(`maximum payout on this pod is ₦${pod.maxPayout.toLocaleString()}`);
   const note = clampedNotes.length ? ` Heads-up — the ${clampedNotes.join(' and ')}, so I set it to ₦${amount.toLocaleString()}.` : '';
@@ -799,7 +799,7 @@ async function buildCardsFromPending(messages: ChatMessage[]): Promise<{ content
           .select('title homeTeam awayTeam selection gainsMultiplier minStake maxStake')
           .lean();
         if (!pod) return null;
-        const amount = Math.min(Math.max(raw.amount || (pod.minStake || 1000), pod.minStake || 1000), pod.maxStake || 100000);
+        const amount = Math.min(Math.max(raw.amount || (pod.minStake || 100), pod.minStake || 100), pod.maxStake || 100000);
         return buildStakeCard(pod, amount);
       }
       return null;
