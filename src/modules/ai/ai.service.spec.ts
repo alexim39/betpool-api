@@ -80,19 +80,36 @@ function mockPodQuery(pods: any[]) {
   });
 }
 
-function mockPodFindRaw(pods: any[]) {
-  const lean = jest.fn().mockResolvedValue(pods);
-  findMock.mockReturnValue({ select: () => ({ lean }) });
+const podRegistry = new Map<string, any>();
+
+function registerPod(pod: any) {
+  if (!pod) return;
+  podRegistry.set(pod._id.toString(), pod);
+  podRegistry.set(String(pod.title || '').toLowerCase(), pod);
 }
 
 function mockPodById(pod: any) {
-  const lean = jest.fn().mockResolvedValue(pod);
-  findByIdMock.mockReturnValue({ select: () => ({ lean }) });
+  registerPod(pod);
+  findByIdMock.mockImplementation((id: string) => {
+    const found = podRegistry.get(id?.toString?.() ?? '');
+    const lean = jest.fn().mockResolvedValue(found);
+    return { select: () => ({ lean }) };
+  });
 }
 
 function mockPodByName(pod: any) {
-  const lean = jest.fn().mockResolvedValue(pod);
-  findOneMock.mockReturnValue({ select: () => ({ lean }) });
+  registerPod(pod);
+  findOneMock.mockImplementation((query: any) => {
+    let found: any;
+    const pattern = query?.title instanceof RegExp ? query.title : null;
+    if (pattern) {
+      found = [...podRegistry.values()].find(p => p?.title && pattern.test(p.title));
+    } else {
+      found = podRegistry.get(String(query?.title ?? '').toLowerCase());
+    }
+    const lean = jest.fn().mockResolvedValue(found);
+    return { select: () => ({ lean }) };
+  });
 }
 
 const realFetch = global.fetch;
@@ -104,6 +121,7 @@ function data(a: any): any {
 afterEach(() => {
   global.fetch = realFetch;
   jest.clearAllMocks();
+  podRegistry.clear();
   delete process.env.DEEPSEEK_API_KEY;
 });
 
@@ -140,7 +158,8 @@ describe('chatWithOra — AI path (provider reachable)', () => {
 
   it('parses an [ACCUM] block and finalizes legs against the real pods', async () => {
     process.env.DEEPSEEK_API_KEY = 'sk-test';
-    mockPodFindRaw([mockPod, mockPod2]);
+    mockPodById(mockPod);
+    mockPodById(mockPod2);
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -160,6 +179,52 @@ describe('chatWithOra — AI path (provider reachable)', () => {
     expect(data(res.actions[0]).combinedMultiplier).toBeCloseTo(2.1 * 1.9, 5);
     expect(data(res.actions[0]).stakeAmount).toBe(1000);
     expect(data(res.actions[0]).potentialPayout).toBe(Math.floor(1000 * (2.1 * 1.9)));
+    expect(res.content).not.toContain('[ACCUM]');
+  });
+
+  it('matches accumulator legs by title when the AI invents podIds', async () => {
+    process.env.DEEPSEEK_API_KEY = 'sk-test';
+    mockPodByName(mockPod);
+    mockPodByName(mockPod2);
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: 'Bet on 2 games? [ACCUM]{"legs":[{"podId":"64abc1234567890def000111","podTitle":"Arsenal vs Chelsea","selection":"Arsenal","gainsMultiplier":2.1},{"podId":"64abc1234567890def000222","podTitle":"Real Madrid vs Barcelona","selection":"Barcelona","gainsMultiplier":1.9}],"stakeAmount":1000}[/ACCUM]',
+          },
+        }],
+      }),
+    } as any);
+
+    const res = await chatWithOra([{ role: 'user', content: 'bet 1000 on 2 games' }]);
+
+    expect(res.actions).toHaveLength(1);
+    expect(res.actions[0].type).toBe('confirm_accumulator');
+    expect(data(res.actions[0]).legs.map(l => l.podId)).toEqual(['pod-1', 'pod-3']);
+    expect(res.content).not.toContain('[ACCUM]');
+  });
+
+  it('keeps valid single cards when only the accumulator legs cannot be resolved', async () => {
+    process.env.DEEPSEEK_API_KEY = 'sk-test';
+    mockPodById(mockPod);
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: 'Two bets here. [STAKE]{"podId":"pod-1","podTitle":"Arsenal vs Chelsea","amount":1000}[/STAKE] [ACCUM]{"legs":[{"podTitle":"Ghost Match","gainsMultiplier":2.0},{"podTitle":"Another Ghost","gainsMultiplier":1.5}],"stakeAmount":200}[/ACCUM]',
+          },
+        }],
+      }),
+    } as any);
+
+    const res = await chatWithOra([{ role: 'user', content: 'bet 1000 on arsenal, bet 200 on 2 games' }]);
+
+    expect(res.actions).toHaveLength(1);
+    expect(res.actions[0].type).toBe('confirm_stake');
+    expect(data(res.actions[0]).podId).toBe('pod-1');
+    expect(res.content).not.toContain('[STAKE]');
     expect(res.content).not.toContain('[ACCUM]');
   });
 
@@ -304,7 +369,8 @@ describe('chatWithOra — fallback paths (provider unreachable)', () => {
     expect(res.actions).toHaveLength(1);
     expect(res.actions[0].type).toBe('confirm_accumulator');
     expect(data(res.actions[0]).legs.map(l => l.podId)).toEqual(['pod-1', 'pod-3', 'pod-m1']);
-    expect(data(res.actions[0]).stakeAmount).toBe(300);
+    expect(data(res.actions[0]).stakeAmount).toBe(1000);
+    expect(res.content).toContain('minimum accumulator stake');
   });
 
   it('creates 5 separate singles for "bet ₦200 on each of 5 games"', async () => {
@@ -332,6 +398,44 @@ describe('chatWithOra — fallback paths (provider unreachable)', () => {
     expect(res.actions[0].type).toBe('confirm_stake');
     expect(data(res.actions[0]).podId).toBe('pod-1');
     expect(res.content).toContain('strongest game');
+  });
+
+  it('ignores the currency word: "bet 200 naira on 5 games" builds the accumulator', async () => {
+    process.env.DEEPSEEK_API_KEY = 'sk-test';
+    global.fetch = jest.fn().mockRejectedValue(new Error('blocked'));
+    mockPodQuery(multPods);
+
+    const res = await chatWithOra([{ role: 'user', content: 'bet 200 naira on 5 games' }]);
+
+    expect(res.actions).toHaveLength(1);
+    expect(res.actions[0].type).toBe('confirm_accumulator');
+    expect(data(res.actions[0]).legs).toHaveLength(5);
+    expect(data(res.actions[0]).stakeAmount).toBe(200);
+  });
+
+  it('ignores stop words: "bet 500 on the winning game" still picks the strongest pod', async () => {
+    process.env.DEEPSEEK_API_KEY = 'sk-test';
+    global.fetch = jest.fn().mockRejectedValue(new Error('blocked'));
+    mockPodQuery([mockPod, mockPod2]);
+
+    const res = await chatWithOra([{ role: 'user', content: 'bet 500 on the winning game' }]);
+
+    expect(res.actions).toHaveLength(1);
+    expect(res.actions[0].type).toBe('confirm_stake');
+    expect(data(res.actions[0]).podId).toBe('pod-1');
+  });
+
+  it('builds the accumulator for "place a bet of 1000 naira on 3 games"', async () => {
+    process.env.DEEPSEEK_API_KEY = 'sk-test';
+    global.fetch = jest.fn().mockRejectedValue(new Error('blocked'));
+    mockPodQuery(multPods);
+
+    const res = await chatWithOra([{ role: 'user', content: 'place a bet of 1000 naira on 3 games' }]);
+
+    expect(res.actions).toHaveLength(1);
+    expect(res.actions[0].type).toBe('confirm_accumulator');
+    expect(data(res.actions[0]).legs).toHaveLength(3);
+    expect(data(res.actions[0]).stakeAmount).toBe(1000);
   });
 
   it('builds an accumulator from named teams: "bet ₦500 on arsenal and barcelona"', async () => {
@@ -370,6 +474,19 @@ describe('chatWithOra — fallback paths (provider unreachable)', () => {
     expect(res.actions[0].type).toBe('confirm_accumulator');
     expect(data(res.actions[0]).legs).toHaveLength(5);
     expect(res.content).toContain('up to 5');
+  });
+
+  it('clamps the accumulator stake to the highest leg minimum', async () => {
+    process.env.DEEPSEEK_API_KEY = 'sk-test';
+    global.fetch = jest.fn().mockRejectedValue(new Error('blocked'));
+    mockPodQuery([mockPod, ...multPods]); // mockPod minStake is 1000
+
+    const res = await chatWithOra([{ role: 'user', content: 'bet 200 naira on 3 games' }]);
+
+    expect(res.actions).toHaveLength(1);
+    expect(res.actions[0].type).toBe('confirm_accumulator');
+    expect(data(res.actions[0]).stakeAmount).toBe(1000);
+    expect(res.content).toContain('minimum accumulator stake is ₦1,000');
   });
 
   it('drops legs to keep combined odds at or below 50x', async () => {

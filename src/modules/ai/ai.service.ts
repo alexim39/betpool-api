@@ -217,8 +217,8 @@ Additional guidelines — VERY IMPORTANT:
 - If a user asks to place a bet or says something like "put X on [team]", use the Live Pods section: pick the pod matching their request, and check that the team they want to bet on matches the pod's FIXED pick. If it doesn't match, tell them the pod only offers that pick and ask if they want to stake on it instead — do NOT fabricate a bet on a team the pod doesn't offer.
 - Users can place MULTIPLE bets in one message, separated by commas (e.g. "bet ₦100 on the winning game, bet ₦200 on 5 games"). Emit one [STAKE] block per single bet and one [ACCUM] block per accumulator — ALL blocks in the same reply.
 - "bet ₦X on N games" (N ≥ 2) means one ACCUMULATOR: a parlay of N live pods with a single total stake of ₦X and combined odds = product of all leg multipliers. "each" / "per game" means separate single bets of ₦X each. "winning game" / "best game" means the highest-confidence pod. "pick N best games" means the N highest-confidence pods.
-- When you confirm a bet, respond naturally, ask a quick confirmation question like "You want to bet ₦X on [pod] — pick: [pick], right?", and include a [STAKE] JSON block at the very end of your message with the stake details. Example: "Sure! You want to bet ₦5,000 on Arsenal vs Chelsea — pick: Arsenal, right? [STAKE]{\"podId\":\"...\",\"podTitle\":\"Arsenal vs Chelsea\",\"selection\":\"Arsenal\",\"amount\":5000}[/STAKE]"
-- For an accumulator, include an [ACCUM] JSON block: {"legs":[{"podId":"...","podTitle":"Arsenal vs Chelsea","selection":"Arsenal","gainsMultiplier":1.7}],"stakeAmount":200,"combinedMultiplier":2.89} — combinedMultiplier must equal the product of all legs' gainsMultiplier, and the block must contain 2-5 legs from DIFFERENT matches.`;
+- When you confirm a bet, respond naturally, ask a quick confirmation question like "You want to bet ₦X on [pod] — pick: [pick], right?", and include a [STAKE] JSON block at the very end of your message with the stake details. The podId field may be left empty — the pod is matched by podTitle, so always use the exact title from the Live Pods section. Example: "Sure! You want to bet ₦5,000 on Arsenal vs Chelsea — pick: Arsenal, right? [STAKE]{\"podTitle\":\"Arsenal vs Chelsea\",\"selection\":\"Arsenal\",\"amount\":5000}[/STAKE]"
+- For an accumulator, include an [ACCUM] JSON block: {"legs":[{"podTitle":"Arsenal vs Chelsea","selection":"Arsenal","gainsMultiplier":1.7}],"stakeAmount":200,"combinedMultiplier":2.89} — combinedMultiplier must equal the product of all legs' gainsMultiplier, the block must contain 2-5 legs from DIFFERENT matches, and each leg is matched to a live pod by its podTitle (use the exact titles from the Live Pods section).`;
 }
 
 function computeStakeMath(amount: number, gains: number): { potentialPayout: number; platformFee: number; netPayout: number } {
@@ -410,6 +410,12 @@ function parseBetInstructions(text: string): BetIntent[] {
   return intents;
 }
 
+const TEAM_STOP_WORDS = new Set([
+  'the', 'a', 'an', 'of', 'to', 'for', 'in', 'with', 'at', 'and', 'vs', 'versus', 'or',
+  'game', 'games', 'win', 'wins', 'winner', 'bet', 'bets', 'stake', 'staking', 'wager',
+  'naira', 'ngn', 'kobo', 'now', 'please', 'right', 'ok', 'okay', 'best', 'match', 'matches'
+]);
+
 function parseSingleInstruction(text: string): BetIntent | null {
   const amountMatch = text.match(/(?:place|put|bet|stake|wager)\s+(?:a\s+)?(?:bet\s+)?(?:of\s+)?(?:₦|n|ngn)?\s*([\d,]+(?:\s*k)?)/i);
   if (!amountMatch) return null;
@@ -436,10 +442,11 @@ function parseSingleInstruction(text: string): BetIntent | null {
     .replace(/\b(?:each|per game|every game)\b/gi, ' ')
     .replace(/\b(?:winning game|the winner|best game)\b/gi, ' ')
     .replace(/(?:\d+\s*(?:best\s*)?games?)/gi, ' ')
+    .replace(/\b(?:naira|ngn|kobo)s?\b/gi, ' ')
     .replace(/^\s*(?:on|to win|for|in|with|at)\s*/i, '')
-    .split(/\s+(?:and|vs|to win|to beat|winning)\s+/i)
+    .split(/\s+(?:and|vs|to win|to beat|winning|versus)\s+/i)
     .map(s => s.trim().replace(/[?!.,]/g, ''))
-    .filter(s => s.length >= 3 && !/^(game|games|win|wins|winner)$/i.test(s));
+    .filter(s => s.length >= 3 && !TEAM_STOP_WORDS.has(s.toLowerCase()));
 
   const selectionCount = count !== undefined ? count : teams.length;
   const mode: 'single' | 'accumulator' = each ? 'single' : (selectionCount >= 2 ? 'accumulator' : 'single');
@@ -494,15 +501,33 @@ function isStakable(p: any, now = new Date()): boolean {
   );
 }
 
+const POD_FINALIZE_SELECT = 'title homeTeam awayTeam selection gainsMultiplier minStake maxStake maxPayout status opensAt stakingClosesAt bookedExternally';
+
+async function findPodByIdOrTitle(podId?: string, podTitle?: string): Promise<any | undefined> {
+  if (podId) {
+    const byId = await PodModel.findById(podId).select(POD_FINALIZE_SELECT).lean();
+    if (byId) return byId;
+  }
+  if (podTitle) {
+    const now = new Date();
+    return PodModel.findOne({
+      title: new RegExp(`^${escapeRegExp(podTitle)}$`, 'i'),
+      status: 'active',
+      bookedExternally: false,
+      opensAt: { $lte: now },
+      stakingClosesAt: { $gte: now },
+    }).select(POD_FINALIZE_SELECT).lean();
+  }
+  return undefined;
+}
+
 async function finalizeAccumulatorAction(action: AccumulatorAction): Promise<AccumulatorAction | undefined> {
   try {
-    const pods = await PodModel.find({ _id: { $in: action.data.legs.map(l => l.podId) } })
-      .select('title homeTeam awayTeam selection gainsMultiplier minStake maxStake status opensAt stakingClosesAt bookedExternally')
-      .lean();
-    const byId = new Map((pods as any[]).map(p => [p._id.toString(), p]));
-    const ordered = action.data.legs
-      .map(l => byId.get(l.podId))
-      .filter((p): p is any => !!p && isStakable(p));
+    const ordered: any[] = [];
+    for (const leg of action.data.legs) {
+      const p = await findPodByIdOrTitle(leg.podId, leg.podTitle);
+      if (p && isStakable(p)) ordered.push(p);
+    }
     if (ordered.length < 2) return undefined;
 
     const seen = new Set<string>();
@@ -528,8 +553,9 @@ async function finalizeAccumulatorAction(action: AccumulatorAction): Promise<Acc
     }
     if (combined > 50) return undefined;
 
+    const minAmount = Math.max(100, ...unique.map(p => p.minStake || 100));
     const maxAmount = Math.min(5000, ...unique.map(p => p.maxStake || 100000));
-    const stakeAmount = Math.min(Math.max(action.data.stakeAmount, 100), maxAmount);
+    const stakeAmount = Math.min(Math.max(action.data.stakeAmount, minAmount), maxAmount);
     const math = computeStakeMath(stakeAmount, combined);
     return {
       type: 'confirm_accumulator',
@@ -549,16 +575,7 @@ async function finalizeAccumulatorAction(action: AccumulatorAction): Promise<Acc
 
 async function finalizeAction(action: StakeAction): Promise<StakeAction | undefined> {
   try {
-    let pod: any = null;
-    if (action.data.podId) {
-      pod = await PodModel.findById(action.data.podId)
-        .select('title selection gainsMultiplier minStake maxStake maxPayout status opensAt stakingClosesAt bookedExternally')
-        .lean();
-    } else {
-      pod = await PodModel.findOne({ title: new RegExp(`^${escapeRegExp(action.data.podTitle)}$`, 'i') })
-        .select('title selection gainsMultiplier minStake maxStake maxPayout status opensAt stakingClosesAt bookedExternally')
-        .lean();
-    }
+    const pod = await findPodByIdOrTitle(action.data.podId, action.data.podTitle);
     if (!pod || !isStakable(pod)) return undefined;
 
     const gains = pod.gainsMultiplier || 1.5;
@@ -673,8 +690,9 @@ function buildAccumulatorCard(pods: any[], amount: number, extraNote?: string): 
   if (legs.length < 2 || combined > 50) return null;
 
   const requestedAmount = amount;
+  const minAmount = Math.max(100, ...pods.map(p => p.minStake || 100));
   const maxAmount = Math.min(5000, ...pods.map(p => p.maxStake || 100000));
-  amount = Math.min(Math.max(amount, 100), maxAmount);
+  amount = Math.min(Math.max(amount, minAmount), maxAmount);
   const math = computeStakeMath(amount, combined);
   const tag = JSON.stringify({
     legs,
@@ -688,7 +706,7 @@ function buildAccumulatorCard(pods: any[], amount: number, extraNote?: string): 
   const notes: string[] = [];
   if (droppedCount > 0) notes.push(`I dropped ${droppedCount} ${droppedCount === 1 ? 'leg' : 'legs'} to keep the combined odds at or below 50x`);
   if (extraNote) notes.push(extraNote);
-  if (amount > requestedAmount) notes.push(`the minimum accumulator stake is ₦100, so I set it to ₦100`);
+  if (amount > requestedAmount) notes.push(`the minimum accumulator stake is ₦${minAmount.toLocaleString()}, so I set it to ₦${amount.toLocaleString()}`);
   if (amount < requestedAmount) notes.push(`the maximum accumulator stake is ₦${maxAmount.toLocaleString()}, so I set it to ₦${amount.toLocaleString()}`);
   const note = notes.length ? ` ${notes.join('. ')}.` : '';
 
