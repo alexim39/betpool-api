@@ -3,6 +3,7 @@ import app from "./app";
 import { aiAutomationService } from './modules/ai/ai-automation.service';
 import { aiRiskService } from './modules/ai/ai-risk.service';
 import { aiBiService } from './modules/ai/ai-bi.service';
+import { aiGamesService } from './modules/ai/ai-games.service';
 import { walletService } from './services/wallet.service';
 import { logger } from './services/logger.service';
 
@@ -12,6 +13,10 @@ const port: any = process.env.PORT || 8383;
 
 app.listen(port, () => {
     logger.info(`Express server listening on port ${port}`);
+    // Populate Games Today board on boot so /games is never empty after a restart
+    aiGamesService.analyzeToday()
+        .then(r => logger.info(`[Games Today] Boot analysis: ${r.analyzed} analyzed / ${r.fixturesFound} fixtures / ${r.errors.length} errors`))
+        .catch(e => logger.error('[Games Today] Boot analysis failed', e));
     // Start Ora automation cycle (every 2 hours) — curation, pod creation, bet manager
     if (process.env.ORA_AUTOMATION !== 'disabled') {
         aiAutomationService.start(2 * 60 * 60 * 1000);

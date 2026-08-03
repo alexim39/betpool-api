@@ -99,6 +99,68 @@ export interface CurationResponse {
   createdPods?: Array<{ fixtureId: number; homeTeam: string; awayTeam: string; podId: string; title: string }>;
 }
 
+export const LEAGUE_NAMES: Record<number, string> = {
+  1: 'Premier League',
+  2: 'UEFA Champions League',
+  3: 'La Liga',
+  4: 'Serie A',
+  5: 'Bundesliga',
+  6: 'Ligue 1',
+  7: 'Eredivisie',
+  8: 'Primeira Liga',
+  9: 'English Championship',
+  10: 'Scottish Premiership',
+  11: 'Belgian Pro League',
+  12: 'Super Lig',
+  13: 'Russian Premier League',
+  14: 'Austrian Bundesliga',
+  15: 'Swiss Super League',
+  16: 'Greek Super League',
+  17: 'Danish Superliga',
+  18: 'Eliteserien',
+  19: 'Allsvenskan',
+  20: 'Ekstraklasa',
+  21: 'Czech First League',
+  22: 'Croatian HNL',
+  23: 'Romanian Liga I',
+  24: 'Bulgarian First League',
+  25: 'MLS',
+  26: 'J1 League',
+  27: 'Saudi Pro League',
+  54: 'Eliteserien',
+  55: 'OBOS-ligaen',
+  88: 'Championship',
+  90: 'League One',
+  91: 'League Two',
+  94: 'Premier League 2',
+  101: 'UEFA Europa League',
+  102: 'UEFA Conference League',
+  103: 'FA Cup',
+  104: 'EFL Cup',
+  105: 'Super Cup',
+  106: 'Community Shield',
+  107: 'Copa del Rey',
+  108: 'DFB-Pokal',
+  109: 'Coppa Italia',
+  110: 'Coupe de France',
+  111: 'KNVB Cup',
+  112: 'Taça de Portugal',
+  113: 'Scottish Cup',
+  114: 'AFC Champions League',
+  115: 'CAF Champions League',
+  116: 'Copa Libertadores',
+  117: 'Copa Sudamericana',
+  118: 'CONCACAF Champions Cup',
+  119: 'FIFA Club World Cup',
+  120: 'FIFA World Cup',
+  121: 'UEFA Euro',
+  122: 'Copa America',
+  123: 'Africa Cup of Nations',
+  124: 'Asian Cup',
+  125: 'Gold Cup',
+  126: 'Olympics',
+};
+
 export class AICurationService {
   private get apiKey(): string { return process.env.SPORTSAPI_KEY || ''; }
   private get baseUrl(): string {
@@ -108,76 +170,75 @@ export class AICurationService {
     return (process.env.SPORTSAPI_LEAGUES || '1,3,4,5,6,7,8,2').split(',').map(s => s.trim());
   }
   private get deepseekKey(): string { return process.env.DEEPSEEK_API_KEY || ''; }
+  private oddsLeagueNames = new Map<number, string>();
 
   private get headers(): Record<string, string> {
     return { 'Authorization': `Token ${this.apiKey}` };
   }
 
-  private static readonly LEAGUE_NAMES: Record<number, string> = {
-    1: 'Premier League',
-    2: 'UEFA Champions League',
-    3: 'La Liga',
-    4: 'Serie A',
-    5: 'Bundesliga',
-    6: 'Ligue 1',
-    7: 'Eredivisie',
-    8: 'Primeira Liga',
-    9: 'English Championship',
-    10: 'Scottish Premiership',
-    11: 'Belgian Pro League',
-    12: 'Super Lig',
-    13: 'Russian Premier League',
-    14: 'Austrian Bundesliga',
-    15: 'Swiss Super League',
-    16: 'Greek Super League',
-    17: 'Danish Superliga',
-    18: 'Eliteserien',
-    19: 'Allsvenskan',
-    20: 'Ekstraklasa',
-    21: 'Czech First League',
-    22: 'Croatian HNL',
-    23: 'Romanian Liga I',
-    24: 'Bulgarian First League',
-    25: 'MLS',
-    26: 'J1 League',
-    27: 'Saudi Pro League',
-    54: 'Eliteserien',
-    55: 'OBOS-ligaen',
-    88: 'Championship',
-    90: 'League One',
-    91: 'League Two',
-    94: 'Premier League 2',
-    101: 'UEFA Europa League',
-    102: 'UEFA Conference League',
-    103: 'FA Cup',
-    104: 'EFL Cup',
-    105: 'Super Cup',
-    106: 'Community Shield',
-    107: 'Copa del Rey',
-    108: 'DFB-Pokal',
-    109: 'Coppa Italia',
-    110: 'Coupe de France',
-    111: 'KNVB Cup',
-    112: 'Taça de Portugal',
-    113: 'Scottish Cup',
-    114: 'AFC Champions League',
-    115: 'CAF Champions League',
-    116: 'Copa Libertadores',
-    117: 'Copa Sudamericana',
-    118: 'CONCACAF Champions Cup',
-    119: 'FIFA Club World Cup',
-    120: 'FIFA World Cup',
-    121: 'UEFA Euro',
-    122: 'Copa America',
-    123: 'Africa Cup of Nations',
-    124: 'Asian Cup',
-    125: 'Gold Cup',
-    126: 'Olympics',
-  };
-
-  private leagueName(leagueId: number | undefined | null): string {
+  private leagueName(leagueId: number | undefined | null, fixtureId?: number): string {
+    if (fixtureId != null && this.oddsLeagueNames.has(fixtureId)) {
+      const real = this.oddsLeagueNames.get(fixtureId);
+      if (real) return real;
+    }
     if (leagueId == null) return '';
-    return AICurationService.LEAGUE_NAMES[leagueId] || `League ${leagueId}`;
+    return LEAGUE_NAMES[leagueId] || `League ${leagueId}`;
+  }
+
+  private async fetchUpcomingFixtures(dateFrom: string, dateTo: string): Promise<BSDEvent[]> {
+    const fixtures: BSDEvent[] = [];
+    const seen = new Set<number>();
+    let offset = 0;
+    const PAGE = 50;
+    for (let guard = 0; guard < 20; guard++) {
+      let res;
+      try {
+        res = await axios.get(`${this.baseUrl}/events/`, {
+          headers: this.headers,
+          params: { status: 'notstarted', date_from: dateFrom, date_to: dateTo, limit: PAGE, offset },
+          timeout: 20000,
+        });
+      } catch {
+        break;
+      }
+      const events: BSDEvent[] = res.data?.results || [];
+      if (!events.length) break;
+      for (const ev of events) {
+        if (!ev.id || seen.has(ev.id)) continue;
+        if (!ev.home_team || !ev.away_team || !ev.event_date) continue;
+        if (['finished', 'postponed', 'cancelled'].includes(ev.status)) continue;
+        seen.add(ev.id);
+        fixtures.push(ev);
+      }
+      if (events.length < PAGE) break;
+      offset += PAGE;
+    }
+    return fixtures;
+  }
+
+  private parseOddsMarkets(data: any): OddsMarket[] {
+    const markets: OddsMarket[] = [];
+    if (Array.isArray(data?.markets)) {
+      return data.markets as OddsMarket[];
+    }
+    if (data?.markets && typeof data.markets === 'object') {
+      for (const [code, m] of Object.entries(data.markets)) {
+        const outcomes: OddsMarket['outcomes'] = [];
+        for (const [oc, o] of Object.entries((m as any) || {})) {
+          const val = o as any;
+          if (!val || typeof val !== 'object') continue;
+          outcomes.push({
+            code: oc,
+            name: val.outcome_name || val.name || oc,
+            best_odds: val.best_odds || val.odds || val.max_odds || 0,
+          });
+        }
+        markets.push({ code, outcomes });
+      }
+      return markets;
+    }
+    if (data?.comparison) return data.comparison as OddsMarket[];
+    return [];
   }
 
   async curate(): Promise<CurationResponse> {
@@ -208,27 +269,7 @@ export class AICurationService {
     const today = new Date();
     const dateFrom = today.toISOString().split('T')[0];
     const dateTo = new Date(today.getTime() + 7 * 86400000).toISOString().split('T')[0];
-    const fixtures: BSDEvent[] = [];
-
-    for (const leagueId of this.leagues) {
-      try {
-        const res = await axios.get(`${this.baseUrl}/events/`, {
-          headers: this.headers,
-          params: { status: 'notstarted', date_from: dateFrom, date_to: dateTo, league: leagueId },
-          timeout: 20000,
-        });
-        const events: BSDEvent[] = res.data?.results || [];
-        result.apiLog.push(`league=${leagueId}: ${events.length} fixtures`);
-        for (const ev of events) {
-          if (!ev.id || !ev.home_team || !ev.away_team || !ev.event_date) continue;
-          if (['finished', 'postponed', 'cancelled'].includes(ev.status)) continue;
-          fixtures.push(ev);
-        }
-      } catch (err: any) {
-        result.apiLog.push(`league=${leagueId}: ERROR — ${err.message}`);
-        result.errors.push(`league ${leagueId}: ${err.message}`);
-      }
-    }
+    const fixtures: BSDEvent[] = await this.fetchUpcomingFixtures(dateFrom, dateTo);
 
     result.total = fixtures.length;
     result.apiLog.push(`Total fixtures to analyze: ${fixtures.length}`);
@@ -429,9 +470,8 @@ export class AICurationService {
         timeout: 10000,
       });
       const data = res.data;
-      if (data?.markets) return data.markets as OddsMarket[];
-      if (data?.comparison) return data.comparison as OddsMarket[];
-      return [];
+      if (data?.league_name) this.oddsLeagueNames.set(fixtureId, String(data.league_name));
+      return this.parseOddsMarkets(data);
     } catch {
       return [];
     }
@@ -479,7 +519,7 @@ export class AICurationService {
       const prompt = `Analyze this football match for BetPool's pod curation:
 
 MATCH: ${fixture.home_team} vs ${fixture.away_team}
-LEAGUE: ${this.leagueName(fixture.league_id)} | Round: ${fixture.round_number || 'N/A'}
+LEAGUE: ${this.leagueName(fixture.league_id, fixture.id)} | Round: ${fixture.round_number || 'N/A'}
 DATE: ${fixture.event_date}
 
 TEAM FORM:
@@ -579,7 +619,7 @@ Rules:
 
       const parsed = JSON.parse(content.replace(/```json\s*/gi, '').replace(/```\s*$/g, '').trim());
 
-      const leagueName = this.leagueName(fixture.league_id);
+      const leagueName = this.leagueName(fixture.league_id, fixture.id);
 
       // Parse recommendations
       const recommendations: CurationSelection[] = (parsed.recommendations || []).map((r: any) => ({
@@ -630,11 +670,12 @@ Rules:
         combinedLegs,
       };
     } catch (err: any) {
+      context.errors.push(`AI analysis failed for ${fixture.home_team} vs ${fixture.away_team}: ${err.message}`);
       return {
         fixtureId: fixture.id,
         homeTeam: fixture.home_team,
         awayTeam: fixture.away_team,
-        league: this.leagueName(fixture.league_id),
+        league: this.leagueName(fixture.league_id, fixture.id),
         matchDate: fixture.event_date,
         verdict: 'SKIP',
         overallReasoning: `AI analysis failed: ${err.message}`,
@@ -659,24 +700,7 @@ Rules:
     const dateFrom = today.toISOString().split('T')[0];
     const dateTo = new Date(today.getTime() + 7 * 86400000).toISOString().split('T')[0];
 
-    const fixtures: BSDEvent[] = [];
-    for (const leagueId of this.leagues) {
-      try {
-        const res = await axios.get(`${this.baseUrl}/events/`, {
-          headers: this.headers,
-          params: { status: 'notstarted', date_from: dateFrom, date_to: dateTo, league: leagueId },
-          timeout: 20000,
-        });
-        const events: BSDEvent[] = res.data?.results || [];
-        for (const ev of events) {
-          if (!ev.id || !ev.home_team || !ev.away_team || !ev.event_date) continue;
-          if (['finished', 'postponed', 'cancelled'].includes(ev.status)) continue;
-          fixtures.push(ev);
-        }
-      } catch {
-        // per-league errors are non-fatal
-      }
-    }
+    const fixtures: BSDEvent[] = await this.fetchUpcomingFixtures(dateFrom, dateTo);
 
     result.total = fixtures.length;
     if (fixtures.length === 0) {
@@ -691,8 +715,8 @@ Rules:
         const res = await axios.get(`${this.baseUrl}/events/${f.id}/odds/comparison/`, {
           headers: this.headers, timeout: 10000,
         });
-        const data = res.data;
-        const markets: OddsMarket[] = data?.markets || data?.comparison || [];
+        if (res.data?.league_name) this.oddsLeagueNames.set(f.id, String(res.data.league_name));
+        const markets = this.parseOddsMarkets(res.data);
         if (markets.length) oddsCache.set(f.id, markets);
       } catch {
         // odds unavailable for this fixture
@@ -706,7 +730,7 @@ Rules:
         result.skipped++;
         result.fixtures.push({
           fixtureId: fixture.id, homeTeam: fixture.home_team, awayTeam: fixture.away_team,
-          league: this.leagueName(fixture.league_id), matchDate: fixture.event_date,
+          league: this.leagueName(fixture.league_id, fixture.id), matchDate: fixture.event_date,
           verdict: 'SKIP', overallReasoning: 'No 1X2 odds data', recommendations: [],
         });
         continue;
@@ -717,15 +741,15 @@ Rules:
           selection: o.name || o.code || '',
           rawOdds: o.best_odds || o.max_odds || o.odds || 0,
         }))
-        .filter(o => o.selection && o.rawOdds >= 1.3 && (1 / o.rawOdds) >= 0.80)
+        .filter(o => o.selection && o.rawOdds >= 1.3 && (1 / o.rawOdds) >= 0.55)
         .sort((a, b) => (1 / b.rawOdds) - (1 / a.rawOdds));
 
       if (filtered.length === 0) {
         result.skipped++;
         result.fixtures.push({
           fixtureId: fixture.id, homeTeam: fixture.home_team, awayTeam: fixture.away_team,
-          league: this.leagueName(fixture.league_id), matchDate: fixture.event_date,
-          verdict: 'SKIP', overallReasoning: 'No outcome met 80% implied probability threshold',
+          league: this.leagueName(fixture.league_id, fixture.id), matchDate: fixture.event_date,
+          verdict: 'SKIP', overallReasoning: 'No outcome met 55% implied probability threshold',
           recommendations: [],
         });
         continue;
@@ -736,7 +760,7 @@ Rules:
       result.recommended++;
       result.fixtures.push({
         fixtureId: fixture.id, homeTeam: fixture.home_team, awayTeam: fixture.away_team,
-        league: this.leagueName(fixture.league_id), matchDate: fixture.event_date,
+        league: this.leagueName(fixture.league_id, fixture.id), matchDate: fixture.event_date,
         verdict: 'RECOMMEND',
         overallReasoning: `Odds-based: ${best.selection} @ ${best.rawOdds.toFixed(2)}x (${impliedPct}% implied)`,
         recommendations: [{

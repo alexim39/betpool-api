@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 
 import { authRoutes } from '../modules/auth';
 import { podRoutes } from '../modules/pods';
+import { gamesRoutes } from '../modules/games';
 import { stakeRoutes } from '../modules/staking';
 import { walletRoutes } from '../modules/wallet';
 import { aiRoutes } from '../modules/ai';
@@ -33,6 +34,7 @@ router.get('/health', apiLimiter, (_req: Request, res: Response) => {
 // Mount module routers
 router.use('/auth', authRoutes);
 router.use('/pods', podRoutes);
+router.use('/games', gamesRoutes);
 router.use('/stakes', stakeRoutes);
 router.use('/wallet', walletRoutes);
 router.use('/ai', aiRoutes);
