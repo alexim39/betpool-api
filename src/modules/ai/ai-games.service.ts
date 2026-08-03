@@ -68,6 +68,31 @@ export interface TodayGame {
   availableOdds: number;
   podId: string | null;
   stakable: boolean;
+  stakeReason?: string;
+}
+
+export interface GamesListQuery {
+  page?: number;
+  limit?: number;
+  sortField?: string;
+  sortOrder?: 'asc' | 'desc';
+  search?: string;
+  league?: string;
+  marketType?: string;
+  stakableOnly?: boolean;
+  minConfidence?: number;
+  dateFrom?: string;
+  dateTo?: string;
+}
+
+export interface GamesListResult {
+  items: TodayGame[];
+  total: number;
+  stakableTotal: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+  leagues: string[];
 }
 
 export class AIGamesService {
@@ -493,7 +518,12 @@ Return ONLY valid JSON with no markdown:
       .limit(100)
       .lean();
 
-    const items: TodayGame[] = docs.map((d: any) => ({
+    const items = await this.enrichStakable(docs.map((d: any) => this.toTodayGame(d)));
+    return { items, count: items.length };
+  }
+
+  private toTodayGame(d: any): TodayGame {
+    return {
       fixtureId: d.fixtureId,
       homeTeam: d.homeTeam,
       awayTeam: d.awayTeam,
@@ -507,9 +537,101 @@ Return ONLY valid JSON with no markdown:
       availableOdds: d.availableOdds || 0,
       podId: d.podId ? d.podId.toString() : null,
       stakable: !!d.podId,
-    }));
+    };
+  }
 
-    return { items, count: items.length };
+  private async enrichStakable(items: TodayGame[]): Promise<TodayGame[]> {
+    const now = new Date();
+    const podIds = items.filter(g => g.podId).map(g => g.podId as string);
+    if (podIds.length === 0) {
+      return items.map(g => ({ ...g, stakable: false, stakeReason: 'No live pool yet' }));
+    }
+
+    const pods = await PodModel.find({ _id: { $in: podIds } })
+      .select('status opensAt stakingClosesAt bookedExternally')
+      .lean();
+    const byId = new Map<string, { status: string; opensAt?: Date; stakingClosesAt?: Date; bookedExternally?: boolean }>();
+    for (const p of pods) byId.set(String((p as any)._id), p as any);
+
+    return items.map(g => {
+      if (!g.podId) return { ...g, stakable: false, stakeReason: 'No live pool yet' };
+      const pod = byId.get(g.podId);
+      if (!pod) return { ...g, stakable: false, stakeReason: 'No live pool yet' };
+      if (pod.status !== 'active') return { ...g, stakable: false, stakeReason: 'Pool is not active' };
+      if (pod.bookedExternally) return { ...g, stakable: false, stakeReason: 'Pool booked externally' };
+      if (pod.opensAt && pod.opensAt > now) return { ...g, stakable: false, stakeReason: 'Pool opens soon' };
+      if (pod.stakingClosesAt && pod.stakingClosesAt <= now) return { ...g, stakable: false, stakeReason: 'Staking closed' };
+      return { ...g, stakable: true, stakeReason: undefined };
+    });
+  }
+
+  private escapeRegex(s: string): string {
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  async list(query: GamesListQuery = {}): Promise<GamesListResult> {
+    const ALLOWED_SORTS = new Set(['matchDate', 'confidence', 'gainsMultiplier', 'homeTeam', 'awayTeam', 'league', 'analyzedAt']);
+
+    // Security: sanitize + clamp every input before it touches the query
+    const page = Math.max(1, parseInt(String(query.page ?? '1'), 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(String(query.limit ?? '25'), 10) || 25));
+    const sortField = ALLOWED_SORTS.has(String(query.sortField)) ? String(query.sortField) : 'matchDate';
+    const sortOrder: 1 | -1 = String(query.sortOrder).toLowerCase() === 'asc' ? 1 : -1;
+    const stakableOnly = query.stakableOnly === true || String(query.stakableOnly) === 'true';
+    const minConfidence = Math.min(100, Math.max(0, parseInt(String(query.minConfidence ?? '0'), 10) || 0));
+
+    const now = new Date();
+    const from = query.dateFrom ? new Date(`${query.dateFrom}T00:00:00.000Z`) : new Date(now.getTime());
+    const to = query.dateTo
+      ? new Date(`${query.dateTo}T23:59:59.999Z`)
+      : new Date(now.getTime() + 2 * 86400000);
+
+    const dateFilter = (!Number.isNaN(from.getTime()) && !Number.isNaN(to.getTime()) && from <= to)
+      ? { matchDate: { $gte: from, $lt: to } }
+      : null;
+    const windowFilter: any = dateFilter ?? {};
+    const filter: any = { ...windowFilter };
+
+    const search = String(query.search ?? '').trim();
+    if (search) {
+      const rx = new RegExp(this.escapeRegex(search), 'i');
+      filter.$or = [{ homeTeam: rx }, { awayTeam: rx }, { league: rx }];
+    }
+    if (query.league) filter.league = { $eq: query.league };
+    if (query.marketType) filter.marketType = query.marketType;
+    if (minConfidence > 0) filter.confidence = { $gte: minConfidence };
+    if (stakableOnly) filter.podId = { $ne: null };
+
+    const sort: any = { [sortField]: sortOrder };
+
+    const [total, linkedPodIds, docs, leagues] = await Promise.all([
+      GameAnalysisModel.countDocuments(filter),
+      GameAnalysisModel.distinct('podId', { ...filter, podId: { $ne: null } }),
+      GameAnalysisModel.find(filter).collation({ locale: 'en', strength: 2 }).sort(sort).skip((page - 1) * limit).limit(limit).lean(),
+      GameAnalysisModel.distinct('league', windowFilter),
+    ]);
+
+    const stakableTotal = linkedPodIds.length
+      ? await PodModel.countDocuments({
+          _id: { $in: linkedPodIds },
+          status: 'active',
+          opensAt: { $lte: now },
+          stakingClosesAt: { $gte: now },
+          bookedExternally: { $ne: true },
+        })
+      : 0;
+
+    const items = await this.enrichStakable(docs.map((d: any) => this.toTodayGame(d)));
+
+    return {
+      items,
+      total,
+      stakableTotal,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      leagues: leagues.filter(Boolean).sort((a: string, b: string) => a.localeCompare(b)),
+    };
   }
 }
 

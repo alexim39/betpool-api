@@ -6,6 +6,7 @@ import { adminMiddleware } from '../../middleware/admin.middleware';
 
 const router = Router();
 
+router.get('/', apiLimiter, gamesController.list);
 router.get('/today', apiLimiter, gamesController.getToday);
 router.post('/analyze', authMiddleware, adminMiddleware, gamesController.analyzeToday);
 

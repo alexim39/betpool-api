@@ -13,12 +13,14 @@ jest.mock('../../models/game-analysis.model', () => ({
 jest.mock('../../models/pod.model', () => ({
   PodModel: {
     findOne: jest.fn(),
+    find: jest.fn(),
   },
 }));
 
 const findMock = GameAnalysisModel.find as jest.Mock;
 const updateOneMock = GameAnalysisModel.updateOne as jest.Mock;
 const podFindOneMock = PodModel.findOne as jest.Mock;
+const podFindMock = PodModel.find as jest.Mock;
 
 const realFetch = global.fetch;
 
@@ -72,13 +74,48 @@ describe('AIGamesService.getToday', () => {
   });
 
   it('maps docs to game items with pod linking', async () => {
+    podFindMock.mockReturnValue({
+      select: () => ({
+        lean: jest.fn().mockResolvedValue([
+          {
+            _id: 'pod-9',
+            status: 'active',
+            opensAt: new Date(Date.now() - 3600000),
+            stakingClosesAt: new Date(Date.now() + 3600000),
+            bookedExternally: false,
+          },
+        ]),
+      }),
+    });
     mockLeanResult([todayGame({ podId: { toString: () => 'pod-9' } }), todayGame({ fixtureId: 1002, podId: null })]);
     const res = await aiGamesService.getToday(1);
     expect(res.count).toBe(2);
     expect(res.items[0].stakable).toBe(true);
+    expect(res.items[0].stakeReason).toBeUndefined();
     expect(res.items[0].podId).toBe('pod-9');
     expect(res.items[1].stakable).toBe(false);
+    expect(res.items[1].stakeReason).toBe('No live pool yet');
     expect(res.items[1].podId).toBeNull();
+  });
+
+  it('marks games as non-stakable when linked pod window is closed', async () => {
+    podFindMock.mockReturnValue({
+      select: () => ({
+        lean: jest.fn().mockResolvedValue([
+          {
+            _id: 'pod-9',
+            status: 'active',
+            opensAt: new Date(Date.now() - 24 * 3600000),
+            stakingClosesAt: new Date(Date.now() - 3600000),
+            bookedExternally: false,
+          },
+        ]),
+      }),
+    });
+    mockLeanResult([todayGame({ podId: { toString: () => 'pod-9' } })]);
+    const res = await aiGamesService.getToday(1);
+    expect(res.items[0].stakable).toBe(false);
+    expect(res.items[0].stakeReason).toBe('Staking closed');
   });
 });
 
