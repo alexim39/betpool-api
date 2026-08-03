@@ -7,6 +7,8 @@ jest.mock('../../models/game-analysis.model', () => ({
     find: jest.fn(),
     findOne: jest.fn(),
     updateOne: jest.fn(),
+    countDocuments: jest.fn(),
+    distinct: jest.fn(),
   },
 }));
 
@@ -19,6 +21,8 @@ jest.mock('../../models/pod.model', () => ({
 
 const findMock = GameAnalysisModel.find as jest.Mock;
 const updateOneMock = GameAnalysisModel.updateOne as jest.Mock;
+const countMock = GameAnalysisModel.countDocuments as jest.Mock;
+const distinctMock = GameAnalysisModel.distinct as jest.Mock;
 const podFindOneMock = PodModel.findOne as jest.Mock;
 const podFindMock = PodModel.find as jest.Mock;
 
@@ -179,5 +183,101 @@ describe('AIGamesService.analyzeToday', () => {
       }),
       { upsert: true }
     );
+  });
+});
+
+describe('AIGamesService.list status filters', () => {
+  function mockListFind(docs: any[]) {
+    const lean = jest.fn().mockResolvedValue(docs);
+    findMock.mockReturnValue({
+      select: () => ({ sort: () => ({ limit: () => ({ lean }) }) }),
+      collation: () => ({ sort: () => ({ skip: () => ({ limit: () => ({ lean }) }) }) }),
+    });
+    countMock.mockResolvedValue(docs.length);
+    distinctMock.mockResolvedValue([]);
+  }
+
+  it('defaults to upcoming window (from now) with no status filter', async () => {
+    mockListFind([]);
+    await aiGamesService.list({});
+    const findCall = findMock.mock.calls.find(c => {
+      const f = c[0] as any;
+      return f.matchDate && f.matchDate.$gte && !f.matchDate.$lte ? f : null;
+    });
+    expect(findCall).toBeDefined();
+    const matchDate: any = (findCall![0] as any).matchDate;
+    const from = new Date(matchDate.$gte);
+    const before = Date.now() - 5 * 1000;
+    expect(from.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  it('applies finished filter with a 7-day past window', async () => {
+    const finished = todayGame({
+      matchDate: new Date(Date.now() - 86400000),
+      matchStatus: 'finished',
+      homeScore: 2,
+      awayScore: 1,
+    });
+    mockListFind([finished]);
+    const res = await aiGamesService.list({ status: 'finished' });
+    const findCall = findMock.mock.calls.find(c => {
+      const f = c[0] as any;
+      return f.matchStatus === 'finished';
+    });
+    expect(findCall).toBeDefined();
+    const from = new Date((findCall![0] as any).matchDate.$gte);
+    expect(Date.now() - from.getTime()).toBeGreaterThan(6 * 86400000);
+    expect(res.items[0].matchStatus).toBe('finished');
+    expect(res.items[0].homeScore).toBe(2);
+    expect(res.items[0].result).toBe('home_win');
+  });
+
+  it('applies live filter to in-progress statuses', async () => {
+    mockListFind([]);
+    await aiGamesService.list({ status: 'live' });
+    const findCall = findMock.mock.calls.find(c => (c[0] as any).matchStatus && (c[0] as any).matchStatus.$in);
+    expect(findCall).toBeDefined();
+    expect((findCall![0] as any).matchStatus.$in).toContain('2nd_half');
+    expect((findCall![0] as any).matchStatus.$in).toContain('halftime');
+  });
+});
+
+describe('AIGamesService.syncMatchStatuses', () => {
+  it('updates stale non-terminal fixtures with live status and scores', async () => {
+    const staleDoc = { _id: 'ga-x', fixtureId: 5005, matchStatus: 'notstarted', statusSyncedAt: null };
+    const lean = jest.fn().mockResolvedValue([staleDoc]);
+    findMock.mockReturnValue({ select: () => ({ sort: () => ({ limit: () => ({ lean }) }) }) });
+    jest.spyOn(aiGamesService as any, 'fetchFixtureStatus').mockResolvedValue({
+      status: 'finished',
+      homeScore: 3,
+      awayScore: 1,
+    });
+    updateOneMock.mockResolvedValue({});
+
+    await aiGamesService.syncMatchStatuses(10);
+
+    expect(updateOneMock).toHaveBeenCalledWith(
+      { fixtureId: 5005 },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          matchStatus: 'finished',
+          homeScore: 3,
+          awayScore: 1,
+          statusSyncedAt: expect.any(Date),
+        }),
+      })
+    );
+  });
+
+  it('skips fixtures synced within the freshness window', async () => {
+    const freshDoc = { _id: 'ga-y', fixtureId: 6006, matchStatus: 'inprogress', statusSyncedAt: new Date() };
+    const lean = jest.fn().mockResolvedValue([freshDoc]);
+    findMock.mockReturnValue({ select: () => ({ sort: () => ({ limit: () => ({ lean }) }) }) });
+    const fetchSpy = jest.spyOn(aiGamesService as any, 'fetchFixtureStatus');
+
+    await aiGamesService.syncMatchStatuses(10);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(updateOneMock).not.toHaveBeenCalled();
   });
 });

@@ -5,6 +5,7 @@ import { aiRiskService } from './modules/ai/ai-risk.service';
 import { aiBiService } from './modules/ai/ai-bi.service';
 import { aiGamesService } from './modules/ai/ai-games.service';
 import { walletService } from './services/wallet.service';
+import { aiDigestService } from './modules/digest/ai-digest.service';
 import { logger } from './services/logger.service';
 
 // set environment configs
@@ -26,6 +27,16 @@ app.listen(port, () => {
     if (process.env.RISK_AUTO_ESCALATION !== 'disabled') {
         aiRiskService.startScheduler();
         logger.info('[Risk Management] Auto-escalation scheduler started');
+    }
+    // Start Games Today live match-status watcher (every 5 minutes)
+    if (process.env.MATCH_STATUS_WATCHER !== 'disabled') {
+        aiGamesService.startStatusWatcher();
+        logger.info('[Games Status] Live match-status watcher started — every 5 minutes');
+    }
+    // Start Daily AI Briefing scheduler (daily at configured hour)
+    if (process.env.DAILY_DIGEST !== 'disabled') {
+        aiDigestService.start();
+        logger.info('[Daily Digest] Background scheduler started');
     }
     // Run initial T4 financial advisory check
     if (process.env.T4_ADVISORY !== 'disabled') {

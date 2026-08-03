@@ -28,6 +28,7 @@ export class GamesController {
         minConfidence: q.minConfidence ? parseInt(q.minConfidence, 10) : undefined,
         dateFrom: /^\d{4}-\d{2}-\d{2}$/.test(q.dateFrom || '') ? q.dateFrom : undefined,
         dateTo: /^\d{4}-\d{2}-\d{2}$/.test(q.dateTo || '') ? q.dateTo : undefined,
+        status: (['upcoming', 'live', 'finished', 'all'] as const).includes(q.status as any) ? (q.status as any) : undefined,
       };
       const result = await aiGamesService.list(query);
       res.json({ success: true, data: result });

@@ -7,6 +7,19 @@ import { LEAGUE_NAMES } from './ai-curation.service';
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 const MAX_ANALYZE_PER_RUN = 80;
 const FRESH_MS = 6 * 60 * 60 * 1000;
+const DAY_MS = 86400000;
+const STATUS_STALE_MS = 5 * 60 * 1000;
+
+export const GAME_LIVE_STATUSES = ['inprogress', 'live', '1st_half', '2nd_half', 'halftime', 'extra_time', 'penalties', 'shootout', 'break'];
+export const GAME_TERMINAL_STATUSES = ['finished', 'postponed', 'cancelled', 'abandoned'];
+export const GAME_VOID_STATUSES = ['postponed', 'cancelled', 'abandoned'];
+
+export function gameResult(status: string | undefined | null, homeScore: number | null | undefined, awayScore: number | null | undefined): string | null {
+  if (status !== 'finished' || homeScore == null || awayScore == null) return null;
+  if (homeScore > awayScore) return 'home_win';
+  if (homeScore < awayScore) return 'away_win';
+  return 'draw';
+}
 
 interface BSDEvent {
   id: number;
@@ -69,6 +82,10 @@ export interface TodayGame {
   podId: string | null;
   stakable: boolean;
   stakeReason?: string;
+  matchStatus?: string;
+  homeScore?: number | null;
+  awayScore?: number | null;
+  result?: string | null;
 }
 
 export interface GamesListQuery {
@@ -83,6 +100,7 @@ export interface GamesListQuery {
   minConfidence?: number;
   dateFrom?: string;
   dateTo?: string;
+  status?: 'upcoming' | 'live' | 'finished' | 'all';
 }
 
 export interface GamesListResult {
@@ -417,6 +435,104 @@ Return ONLY valid JSON with no markdown:
     }
   }
 
+  private async fetchFixtureStatus(fixtureId: number): Promise<{ status: string; homeScore: number | null; awayScore: number | null } | null> {
+    const res = await axios.get(`${this.baseUrl}/events/${fixtureId}/`, {
+      headers: this.headers,
+      timeout: 6000,
+    });
+    const ev = res.data;
+    if (!ev || typeof ev !== 'object') return null;
+    const status = String(ev.status || ev.event_status || ev.match_status || 'unknown').toLowerCase();
+    const hs = ev.home_score ?? ev.scores?.home ?? ev.home_team?.score ?? null;
+    const as = ev.away_score ?? ev.scores?.away ?? ev.away_team?.score ?? null;
+    return {
+      status,
+      homeScore: hs == null ? null : Number(hs),
+      awayScore: as == null ? null : Number(as),
+    };
+  }
+
+  private statusSyncPromise: Promise<void> | null = null;
+  private watcherId: ReturnType<typeof setInterval> | null = null;
+
+  async startStatusWatcher(): Promise<void> {
+    if (this.watcherId) return;
+    const run = () => {
+      this.syncMatchStatuses(150).catch(() => {});
+    };
+    run();
+    this.watcherId = setInterval(run, 5 * 60 * 1000);
+  }
+
+  /**
+   * Refresh match status + scores from the sports API for non-terminal games.
+   * Deduped via a shared in-flight promise; never throws.
+   */
+  async syncMatchStatuses(max = 80): Promise<void> {
+    if (this.statusSyncPromise) {
+      await this.statusSyncPromise;
+      return;
+    }
+    this.statusSyncPromise = this.runStatusSync(max)
+      .catch(() => {})
+      .finally(() => {
+        this.statusSyncPromise = null;
+      });
+    await this.statusSyncPromise;
+  }
+
+  private async runStatusSync(max: number): Promise<void> {
+    const now = new Date();
+    const docs = await GameAnalysisModel.find({
+      matchDate: {
+        $gte: new Date(now.getTime() - 2 * DAY_MS),
+        $lte: new Date(now.getTime() + DAY_MS),
+      },
+      matchStatus: { $nin: GAME_TERMINAL_STATUSES },
+    })
+      .select('_id fixtureId matchStatus statusSyncedAt')
+      .sort({ matchDate: 1 })
+      .limit(max)
+      .lean();
+
+    const cutoff = now.getTime() - STATUS_STALE_MS;
+    const toSync = (docs as any[]).filter(d =>
+      !d.statusSyncedAt || new Date(d.statusSyncedAt).getTime() < cutoff
+    );
+    if (toSync.length === 0) return;
+
+    let idx = 0;
+    const workers = Array.from({ length: Math.min(10, toSync.length) }, async () => {
+      while (idx < toSync.length) {
+        const doc = toSync[idx++];
+        try {
+          const st = await this.fetchFixtureStatus(doc.fixtureId);
+          if (!st) continue;
+          await GameAnalysisModel.updateOne(
+            { fixtureId: doc.fixtureId },
+            {
+              $set: {
+                matchStatus: st.status,
+                homeScore: st.homeScore,
+                awayScore: st.awayScore,
+                statusSyncedAt: new Date(),
+              },
+            }
+          );
+        } catch {
+          // Keep stale so the next cycle retries.
+        }
+      }
+    });
+    await Promise.all(workers);
+  }
+
+  /** Bound the page-load cost of a freshness sweep (background sync keeps running). */
+  private async kickStatusSync(max = 40, budgetMs = 3500): Promise<void> {
+    const sync = this.syncMatchStatuses(max);
+    await Promise.race([sync, new Promise<void>(r => setTimeout(r, budgetMs))]);
+  }
+
   async analyzeToday(): Promise<GamesAnalysisResult> {
     const result: GamesAnalysisResult = { success: true, fixturesFound: 0, analyzed: 0, skippedFresh: 0, errors: [], apiLog: [] };
 
@@ -511,6 +627,8 @@ Return ONLY valid JSON with no markdown:
     const now = new Date();
     const end = new Date(now.getTime() + Math.min(Math.max(parseInt(String(days), 10) || 1, 1), 7) * 86400000);
 
+    await this.kickStatusSync();
+
     const docs = await GameAnalysisModel.find({
       matchDate: { $gte: now, $lt: end },
     })
@@ -537,6 +655,10 @@ Return ONLY valid JSON with no markdown:
       availableOdds: d.availableOdds || 0,
       podId: d.podId ? d.podId.toString() : null,
       stakable: !!d.podId,
+      matchStatus: d.matchStatus || 'notstarted',
+      homeScore: d.homeScore ?? null,
+      awayScore: d.awayScore ?? null,
+      result: gameResult(d.matchStatus, d.homeScore, d.awayScore),
     };
   }
 
@@ -544,7 +666,15 @@ Return ONLY valid JSON with no markdown:
     const now = new Date();
     const podIds = items.filter(g => g.podId).map(g => g.podId as string);
     if (podIds.length === 0) {
-      return items.map(g => ({ ...g, stakable: false, stakeReason: 'No live pool yet' }));
+      return items.map(g => {
+        if (g.matchStatus && GAME_TERMINAL_STATUSES.includes(g.matchStatus)) {
+          return { ...g, stakable: false, stakeReason: g.matchStatus === 'finished' ? 'Match finished' : 'Match not played' };
+        }
+        if (g.matchStatus && GAME_LIVE_STATUSES.includes(g.matchStatus)) {
+          return { ...g, stakable: false, stakeReason: 'Match in progress' };
+        }
+        return { ...g, stakable: false, stakeReason: 'No live pool yet' };
+      });
     }
 
     const pods = await PodModel.find({ _id: { $in: podIds } })
@@ -554,6 +684,12 @@ Return ONLY valid JSON with no markdown:
     for (const p of pods) byId.set(String((p as any)._id), p as any);
 
     return items.map(g => {
+      if (g.matchStatus && GAME_TERMINAL_STATUSES.includes(g.matchStatus)) {
+        return { ...g, stakable: false, stakeReason: g.matchStatus === 'finished' ? 'Match finished' : 'Match not played' };
+      }
+      if (g.matchStatus && GAME_LIVE_STATUSES.includes(g.matchStatus)) {
+        return { ...g, stakable: false, stakeReason: 'Match in progress' };
+      }
       if (!g.podId) return { ...g, stakable: false, stakeReason: 'No live pool yet' };
       const pod = byId.get(g.podId);
       if (!pod) return { ...g, stakable: false, stakeReason: 'No live pool yet' };
@@ -579,18 +715,39 @@ Return ONLY valid JSON with no markdown:
     const sortOrder: 1 | -1 = String(query.sortOrder).toLowerCase() === 'asc' ? 1 : -1;
     const stakableOnly = query.stakableOnly === true || String(query.stakableOnly) === 'true';
     const minConfidence = Math.min(100, Math.max(0, parseInt(String(query.minConfidence ?? '0'), 10) || 0));
+    const status = (['upcoming', 'live', 'finished', 'all'].includes(String(query.status))
+      ? String(query.status) : 'upcoming') as 'upcoming' | 'live' | 'finished' | 'all';
 
     const now = new Date();
-    const from = query.dateFrom ? new Date(`${query.dateFrom}T00:00:00.000Z`) : new Date(now.getTime());
-    const to = query.dateTo
+    let from = query.dateFrom ? new Date(`${query.dateFrom}T00:00:00.000Z`) : null;
+    let to = query.dateTo
       ? new Date(`${query.dateTo}T23:59:59.999Z`)
-      : new Date(now.getTime() + 2 * 86400000);
-
-    const dateFilter = (!Number.isNaN(from.getTime()) && !Number.isNaN(to.getTime()) && from <= to)
-      ? { matchDate: { $gte: from, $lt: to } }
       : null;
-    const windowFilter: any = dateFilter ?? {};
+
+    if (!from) {
+      switch (status) {
+        case 'finished':
+        case 'all':
+          from = new Date(now.getTime() - 7 * 86400000);
+          break;
+        case 'live':
+          from = new Date(now.getTime() - 86400000);
+          break;
+        default:
+          from = new Date(now.getTime());
+      }
+    }
+    if (!to) {
+      to = new Date(now.getTime() + 2 * 86400000);
+    }
+
+    const windowFilter: any = (!Number.isNaN(from.getTime()) && !Number.isNaN(to.getTime()) && from <= to)
+      ? { matchDate: { $gte: from, $lt: to } }
+      : {};
     const filter: any = { ...windowFilter };
+
+    if (status === 'finished') filter.matchStatus = 'finished';
+    if (status === 'live') filter.matchStatus = { $in: GAME_LIVE_STATUSES };
 
     const search = String(query.search ?? '').trim();
     if (search) {
@@ -603,6 +760,8 @@ Return ONLY valid JSON with no markdown:
     if (stakableOnly) filter.podId = { $ne: null };
 
     const sort: any = { [sortField]: sortOrder };
+
+    await this.kickStatusSync(40, status === 'upcoming' ? 2000 : 4000);
 
     const [total, linkedPodIds, docs, leagues] = await Promise.all([
       GameAnalysisModel.countDocuments(filter),

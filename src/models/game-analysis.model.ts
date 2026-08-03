@@ -16,6 +16,10 @@ export interface IGameAnalysis extends mongoose.Document {
   availableOdds: number;
   podId?: mongoose.Types.ObjectId;
   analyzedAt: Date;
+  matchStatus?: string;
+  homeScore?: number | null;
+  awayScore?: number | null;
+  statusSyncedAt?: Date;
 }
 
 const GameAnalysisSchema = new Schema<IGameAnalysis>({
@@ -32,6 +36,10 @@ const GameAnalysisSchema = new Schema<IGameAnalysis>({
   availableOdds: { type: Number, default: 0 },
   podId: { type: Schema.Types.ObjectId, ref: 'Pod', default: null },
   analyzedAt: { type: Date, default: Date.now },
+  matchStatus: { type: String, default: 'notstarted' },
+  homeScore: { type: Number, default: null },
+  awayScore: { type: Number, default: null },
+  statusSyncedAt: { type: Date, default: null },
 }, {
   timestamps: true,
 });
@@ -41,5 +49,6 @@ GameAnalysisSchema.index({ matchDate: 1, confidence: -1 });
 GameAnalysisSchema.index({ matchDate: 1, podId: 1 });
 GameAnalysisSchema.index({ league: 1, matchDate: 1 });
 GameAnalysisSchema.index({ analyzedAt: -1 });
+GameAnalysisSchema.index({ matchStatus: 1, matchDate: 1 });
 
 export const GameAnalysisModel = mongoose.model<IGameAnalysis>('GameAnalysis', GameAnalysisSchema);
