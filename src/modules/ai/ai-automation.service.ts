@@ -1,6 +1,7 @@
 import { aiCurationService } from './ai-curation.service';
 import { aiSettlementService } from './ai-settlement.service';
 import { aiRiskService } from './ai-risk.service';
+import { aiGamesService } from './ai-games.service';
 import { adminService } from '../admin/admin.service';
 import { PodModel } from '../../models/pod.model';
 import { logger } from '../../services/logger.service';
@@ -111,6 +112,7 @@ export class AIAutomationService {
                   oraConfidence: bestPick.confidence,
                   oraReasoning: fixture.overallReasoning || 'Ora AI curated this pick based on team form and market odds analysis.',
                   fixtureId: fixture.fixtureId,
+                  source: 'bsd',
                   combined: fixture.isCombined,
                   legMarkets: fixture.combinedLegs?.map(l => l.marketType),
                   legSelections: fixture.combinedLegs?.map(l => l.selection),
@@ -147,7 +149,7 @@ export class AIAutomationService {
                   minStake: 100, maxStake: 100000, maxTotalExposure: 500000,
                   opensAt: new Date(), stakingClosesAt, settlementEstimateAt,
                   settlementEstimateLabel: settlementEstimateAt.toLocaleDateString('en-NG', { month: 'short', day: 'numeric', year: 'numeric' }),
-                  status: 'active', legs: [], metadata: { oraCurated: true, fallback: 'odds-based', oraReasoning: fixture.overallReasoning || 'Odds-based curation: selected the highest-probability outcome from available market odds.', fixtureId: fixture.fixtureId },
+                  status: 'active', legs: [], metadata: { oraCurated: true, fallback: 'odds-based', source: 'bsd', oraReasoning: fixture.overallReasoning || 'Odds-based curation: selected the highest-probability outcome from available market odds.', fixtureId: fixture.fixtureId },
                 }, adminUser);
                 result.curation.created++;
               } catch (err: any) {
@@ -157,6 +159,15 @@ export class AIAutomationService {
             logger.info(`[Ora Automation] Fallback: ${fallbackResult.recommended} odds-based pods published`);
           }
         }
+      }
+
+      // Step 1b: Games Today board — analyze upcoming fixtures so /games is populated daily
+      try {
+        const gamesAnalysis = await aiGamesService.analyzeToday();
+        logger.info(`[Ora Automation] Games analysis: ${gamesAnalysis.analyzed} analyzed, ${gamesAnalysis.fixturesFound} fixtures found, ${gamesAnalysis.errors.length} errors`);
+      } catch (err: any) {
+        logger.error('[Ora Automation] Games analysis error', err.message);
+        result.settlement.errors.push(`Games analysis: ${err.message}`);
       }
 
       // Step 2: Bet Manager operations

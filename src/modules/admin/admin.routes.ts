@@ -5,6 +5,7 @@ import { matchPoolController } from '../match-pools/match-pool.controller';
 import { podSyncController } from '../pods/pod-sync.controller';
 import { aiCurationController } from '../ai/ai-curation.controller';
 import { aiSettlementController } from '../ai/ai-settlement.controller';
+import { digestController } from '../digest/digest.controller';
 import { aiKycController } from '../ai/ai-kyc.controller';
 import { aiRiskController } from '../ai/ai-risk.controller';
 import { aiBiController } from '../ai/ai-bi.controller';
@@ -86,6 +87,10 @@ router.post('/ai/settlement/disputed/:podId/resolve', aiSettlementController.res
 router.post('/ai/settlement/disputed/batch-resolve', aiSettlementController.batchResolveDisputes);
 router.get('/ai/settlement/stuck', aiSettlementController.listStuck);
 router.get('/ai/settlement/pending-count', aiSettlementController.countPendingReviews);
+
+// Daily AI Briefing
+router.post('/ai/digest/run', digestController.runDigest);
+router.get('/ai/digest/status', digestController.getStatus);
 
 // Stake management
 router.get('/stakes', adminController.listStakes);

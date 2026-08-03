@@ -112,14 +112,15 @@ export class PodSyncService {
         const eventId = ev.id;
         const homeName = ev.home_team?.name || ev.home_team;
         const awayName = ev.away_team?.name || ev.away_team;
-        const eventDate = ev.event_date || ev.date;
-        const leagueName = ev.league?.name || ev.league_name || 'Football';
+const eventDate = ev.event_date || ev.date;
         const status = ev.status || '';
 
         if (!eventId || !homeName || !awayName || !eventDate) continue;
         if (['finished', 'postponed', 'cancelled'].includes(status)) continue;
 
-        fixturesProcessed++;
+fixturesProcessed++;
+
+        let leagueName = ev.league?.name || ev.league_name || 'Football';
 
         let selections: Array<{ selection: string; marketType: string; multiplier: number }> = [];
         try {
@@ -128,6 +129,7 @@ export class PodSyncService {
             timeout: 10000,
           });
           const oddsData = oddsRes.data;
+          leagueName = oddsData?.league_name || leagueName;
 
           if (oddsData?.markets && typeof oddsData.markets === 'object') {
             const relevantMarkets = new Set(['1x2', 'double_chance', 'btts', 'draw_no_bet']);
