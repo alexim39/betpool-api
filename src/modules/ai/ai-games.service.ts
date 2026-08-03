@@ -8,7 +8,6 @@ const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 const MAX_ANALYZE_PER_RUN = 80;
 const FRESH_MS = 6 * 60 * 60 * 1000;
 const DAY_MS = 86400000;
-const STATUS_STALE_MS = 5 * 60 * 1000;
 
 export const GAME_LIVE_STATUSES = ['inprogress', 'live', '1st_half', '2nd_half', 'halftime', 'extra_time', 'penalties', 'shootout', 'break'];
 export const GAME_TERMINAL_STATUSES = ['finished', 'postponed', 'cancelled', 'abandoned'];
@@ -455,13 +454,25 @@ Return ONLY valid JSON with no markdown:
   private statusSyncPromise: Promise<void> | null = null;
   private watcherId: ReturnType<typeof setInterval> | null = null;
 
+  /** How stale a stored status must be before it is refetched. */
+  private get statusStaleMs(): number {
+    const v = parseInt(process.env.MATCH_STATUS_STALE_MS || '120000', 10);
+    return Number.isFinite(v) && v > 0 ? v : 120000;
+  }
+
+  /** Watcher tick interval (ms). */
+  private get watcherIntervalMs(): number {
+    const v = parseInt(process.env.MATCH_STATUS_INTERVAL_MS || '180000', 10);
+    return Number.isFinite(v) && v > 0 ? v : 180000;
+  }
+
   async startStatusWatcher(): Promise<void> {
     if (this.watcherId) return;
     const run = () => {
       this.syncMatchStatuses(150).catch(() => {});
     };
     run();
-    this.watcherId = setInterval(run, 5 * 60 * 1000);
+    this.watcherId = setInterval(run, this.watcherIntervalMs);
   }
 
   /**
@@ -495,7 +506,7 @@ Return ONLY valid JSON with no markdown:
       .limit(max)
       .lean();
 
-    const cutoff = now.getTime() - STATUS_STALE_MS;
+    const cutoff = now.getTime() - this.statusStaleMs;
     const toSync = (docs as any[]).filter(d =>
       !d.statusSyncedAt || new Date(d.statusSyncedAt).getTime() < cutoff
     );

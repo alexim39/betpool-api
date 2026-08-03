@@ -28,10 +28,10 @@ app.listen(port, () => {
         aiRiskService.startScheduler();
         logger.info('[Risk Management] Auto-escalation scheduler started');
     }
-    // Start Games Today live match-status watcher (every 5 minutes)
+    // Start Games Today live match-status watcher (every 3 minutes)
     if (process.env.MATCH_STATUS_WATCHER !== 'disabled') {
         aiGamesService.startStatusWatcher();
-        logger.info('[Games Status] Live match-status watcher started — every 5 minutes');
+        logger.info('[Games Status] Live match-status watcher started — every 3 minutes');
     }
     // Start Daily AI Briefing scheduler (daily at configured hour)
     if (process.env.DAILY_DIGEST !== 'disabled') {
