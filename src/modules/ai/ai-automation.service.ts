@@ -2,6 +2,7 @@ import { aiCurationService } from './ai-curation.service';
 import { aiSettlementService } from './ai-settlement.service';
 import { aiRiskService } from './ai-risk.service';
 import { aiGamesService } from './ai-games.service';
+import { aiPersonalizationService } from './ai-personalization.service';
 import { adminService } from '../admin/admin.service';
 import { PodModel } from '../../models/pod.model';
 import { logger } from '../../services/logger.service';
@@ -182,6 +183,15 @@ export class AIAutomationService {
       } catch (err: any) {
         logger.error('BetManager automation error', err.message);
         result.settlement.errors.push(`BetManager: ${err.message}`);
+      }
+
+      // Step 3: Daily batched personalization profile recompute
+      try {
+        const warmed = await aiPersonalizationService.warmAllProfiles();
+        if (warmed > 0) logger.info(`[Ora Automation] Personalization profiles warmed: ${warmed}`);
+      } catch (err: any) {
+        logger.error('Personalization warm-up error', err.message);
+        result.settlement.errors.push(`Personalization: ${err.message}`);
       }
 
     } catch (err: any) {

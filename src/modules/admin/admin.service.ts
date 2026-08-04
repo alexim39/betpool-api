@@ -11,6 +11,7 @@ import { cacheService } from '../../services/cache.service';
 import { notifyWithdrawalCompleted, notifyWithdrawalFailed, notifyKycApproved } from '../../services/notification.service';
 import { walletService } from '../../services/wallet.service';
 import { stakeService } from '../staking/stake.service';
+import { pickOutcomeService } from '../../services/pick-outcome.service';
 import { runTransaction } from '../../utils/transaction';
 import { logger } from '../../services/logger.service';
 
@@ -421,6 +422,14 @@ export class AdminService {
       if (homeScore !== undefined) pod.homeScore = homeScore;
       if (awayScore !== undefined) pod.awayScore = awayScore;
       await pod.save({ session });
+
+      // Write pick-outcome ledger records for personalization (non-fatal:
+      // settlement must never roll back because the ledger write failed)
+      try {
+        await pickOutcomeService.recordPodSettlement(pod._id.toString(), session);
+      } catch (err: any) {
+        logger.error(`[PickOutcome] Ledger write failed for pod ${id}: ${err.message}`);
+      }
 
       return pod;
     });

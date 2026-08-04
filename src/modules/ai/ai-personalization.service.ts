@@ -1,4 +1,6 @@
 import { StakeModel } from '../../models/stake.model';
+import { PickOutcomeModel } from '../../models/pick-outcome.model';
+import { UserModel } from '../../models/user.model';
 import { logger } from '../../services/logger.service';
 
 const DEFAULT_LLM_URL = 'https://api.deepseek.com/v1/chat/completions';
@@ -10,6 +12,28 @@ export interface BettingProfile {
   riskTolerance: 'low' | 'medium' | 'high';
   style: 'singles' | 'accumulators' | 'mixed';
   source: 'ai' | 'rules';
+  // Rules-derived behavioral signals (overlay, always computed from the ledger)
+  winRate90d?: number;
+  lossStreak?: number;
+  stakingCadence30d?: number;
+  avgStake?: number;
+  historyCount?: number;
+  dampen?: number;
+}
+
+interface BettingSignals {
+  winRate90d: number;
+  lossStreak: number;
+  stakingCadence30d: number;
+  avgStake: number;
+  historyCount: number;
+  dampen: number;
+}
+
+export interface PersonalizedFeed {
+  items: any[];
+  personalized: boolean;
+  protective: boolean;
 }
 
 interface HistorySummary {
@@ -28,13 +52,22 @@ const PROFILE_TTL_MS = 12 * 60 * 60 * 1000;
 const FAILURE_TTL_MS = 5 * 60 * 1000;
 const EMPTY_TTL_MS = 30 * 60 * 1000;
 const LLM_TIMEOUT_MS = 8000;
+const WHY_TIMEOUT_MS = 2500;
+const WHY_TTL_MS = 12 * 60 * 60 * 1000;
+const WARM_INTERVAL_MS = 20 * 60 * 60 * 1000;
+const LOSS_STREAK_PROTECTIVE_THRESHOLD = 3;
+const COLD_START_HISTORY_TARGET = 10;
+const SIGNALS_WINDOW_DAYS = 90;
 
 export class AIPersonalizationService {
   private cache = new Map<string, { profile: BettingProfile; expiresAt: number }>();
+  private whyCache = new Map<string, { text: string; expiresAt: number }>();
+  private lastWarmAt: number | null = null;
 
   private get deepseekKey(): string { return process.env.DEEPSEEK_API_KEY || ''; }
   private get llmUrl(): string { return process.env.LLM_API_URL || DEFAULT_LLM_URL; }
   private get llmModel(): string { return process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash'; }
+  private get llmReasonsEnabled(): boolean { return process.env.PERSONALIZATION_LLM_REASONS === '1'; }
 
   async getProfile(userId: string): Promise<BettingProfile> {
     const cached = this.cache.get(userId);
@@ -59,6 +92,7 @@ export class AIPersonalizationService {
           logger.info(`[Ora Personalization] AI unreachable — rules profile for user ${userId}`);
         }
       }
+      profile = { ...profile, ...(await this.loadSignals(userId)) };
     } catch (err: any) {
       profile = this.rulesProfile(await this.loadHistory(userId).catch(() => null));
       ttl = FAILURE_TTL_MS;
@@ -67,6 +101,53 @@ export class AIPersonalizationService {
 
     this.cache.set(userId, { profile, expiresAt: Date.now() + ttl });
     return profile;
+  }
+
+  invalidateProfile(userId: string): void {
+    this.cache.delete(userId);
+  }
+
+  /**
+   * Hybrid reranking: deterministic base score + recency-weighted affinity
+   * boost. Cold-start dampening scales the boost by settled-pick history, and
+   * a risk gate skips personalization for suspended users entirely or dampens
+   * it after 3+ consecutive losses. Never hides pools — reorders only.
+   */
+  async personalize(pods: any[], userId: string): Promise<PersonalizedFeed> {
+    const user = await UserModel.findById(userId).lean();
+    if (!user || !user.isActive || user.isSuspended) {
+      return { items: [...pods], personalized: false, protective: false };
+    }
+
+    const profile = await this.getProfile(userId);
+    const historyCount = profile.historyCount || 0;
+    if (historyCount === 0) {
+      return { items: [...pods], personalized: false, protective: false };
+    }
+
+    const protective = (profile.lossStreak || 0) >= LOSS_STREAK_PROTECTIVE_THRESHOLD;
+    const streakDampen = protective ? 0.3 : 1;
+
+    const scored = pods.map(p => ({
+      pod: p,
+      score: this.scorePod(p, profile) + this.affinityBoost(p, profile, streakDampen),
+    }));
+    scored.sort((a, b) =>
+      b.score - a.score ||
+      new Date(a.pod.opensAt || 0).getTime() - new Date(b.pod.opensAt || 0).getTime()
+    );
+
+    const items = scored.map(s => {
+      s.pod.whyRecommended = this.whyRecommended(s.pod, profile, protective);
+      s.pod.personalizationScore = Math.round(s.score);
+      return s.pod;
+    });
+
+    if (this.llmReasonsEnabled) {
+      await this.polishReasons(userId, items.slice(0, 3));
+    }
+
+    return { items, personalized: true, protective };
   }
 
   scorePod(pod: any, profile: BettingProfile): number {
@@ -97,6 +178,170 @@ export class AIPersonalizationService {
     if ((pod.refundPercent || 0) >= 50) score += 5;
 
     return score;
+  }
+
+  private affinityBoost(pod: any, profile: BettingProfile, streakDampen: number): number {
+    const dampen = profile.dampen ?? 0;
+    const sportFit = this.matchWeight(profile.preferredSports, pod.sport);
+    const teamFit = Math.max(
+      this.matchWeight(profile.preferredTeams, pod.homeTeam),
+      this.matchWeight(profile.preferredTeams, pod.awayTeam)
+    );
+    const leagueFit = this.matchWeight(profile.preferredLeagues, pod.league);
+    const affinity = 0.35 * sportFit + 0.4 * teamFit + 0.25 * leagueFit;
+    return affinity * 30 * dampen * streakDampen;
+  }
+
+  private matchWeight(list: string[], value: string): number {
+    const v = (value || '').toLowerCase();
+    if (!v) return 0;
+    for (let i = 0; i < list.length; i++) {
+      const l = (list[i] || '').toLowerCase();
+      if (l && v.includes(l)) return Math.max(0.6, 1 - i * 0.2);
+    }
+    return 0;
+  }
+
+  private bestMatch(list: string[], value: string): string | null {
+    const v = (value || '').toLowerCase();
+    if (!v) return null;
+    for (const entry of list) {
+      if (entry && v.includes(entry.toLowerCase())) return entry;
+    }
+    return null;
+  }
+
+  private whyRecommended(pod: any, profile: BettingProfile, protective: boolean): string {
+    const team = this.bestMatch(profile.preferredTeams, pod.homeTeam) ||
+      this.bestMatch(profile.preferredTeams, pod.awayTeam);
+    const league = this.bestMatch(profile.preferredLeagues, pod.league);
+    const sport = this.bestMatch(profile.preferredSports, pod.sport);
+
+    let reason: string;
+    if (team) {
+      reason = `You often back ${team} — matches a team on your list.`;
+    } else if (league) {
+      reason = `You regularly bet on ${league}.`;
+    } else if (sport) {
+      reason = `${sport} is one of your usual sports.`;
+    } else {
+      const confidence = Math.round((pod.metadata?.oraConfidence as number) || 0);
+      reason = confidence > 0
+        ? `Ora-curated pick with ${confidence}% confidence.`
+        : 'High-probability pick aligned with your betting style.';
+    }
+
+    return protective ? `Safeguard after losses — ${reason.toLowerCase()}` : reason;
+  }
+
+  private async polishReasons(userId: string, pods: any[]): Promise<void> {
+    if (!this.deepseekKey || this.deepseekKey === 'your_deepseek_api_key_here' || pods.length === 0) return;
+
+    const systemPrompt = 'You are Ora, BetPool\'s recommendation explainer. Rewrite each product-card reason as ONE short, friendly sentence (max 20 words) for a betting app. Reply with a JSON array of strings in the same order. No markdown.';
+    const userPrompt = `Card ${pods.length}: ${pods.map(p => `"${p.title}: ${p.whyRecommended}"`).join(' | ')}`;
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), WHY_TIMEOUT_MS);
+      let raw = '';
+      try {
+        const response = await fetch(this.llmUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.deepseekKey}`,
+          },
+          body: JSON.stringify({
+            model: this.llmModel,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt },
+            ],
+            temperature: 0.3,
+            max_tokens: 120,
+          }),
+          signal: controller.signal,
+        });
+        if (response.ok) {
+          const data = await response.json();
+          raw = data.choices?.[0]?.message?.content || '';
+        }
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      const parsed = this.parseReasonList(raw);
+      if (!parsed) return;
+      pods.forEach((p, i) => {
+        if (parsed[i]) {
+          this.whyCache.set(`why:${userId}:${p._id}`, { text: parsed[i], expiresAt: Date.now() + WHY_TTL_MS });
+          p.whyRecommended = parsed[i];
+        }
+      });
+    } catch (err: any) {
+      logger.warn(`[Ora Personalization] Why-explainer LLM call failed: ${err.message}`);
+    }
+  }
+
+  private parseReasonList(raw: string): string[] | null {
+    try {
+      const cleaned = raw.replace(/```(?:json)?/g, '').trim();
+      const start = cleaned.indexOf('[');
+      const end = cleaned.lastIndexOf(']');
+      if (start === -1 || end === -1) return null;
+      const parsed = JSON.parse(cleaned.slice(start, end + 1));
+      if (!Array.isArray(parsed)) return null;
+      return parsed.map((r: any) => (typeof r === 'string' ? r.trim() : '')).filter((r: string) => r.length > 0);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Daily batched profile recompute: warms the in-memory profile cache for all
+   * users with settled activity in the last 30 days. Guarded to run at most
+   * once per WARM_INTERVAL_MS.
+   */
+  async warmAllProfiles(options: { limit?: number } = {}): Promise<number> {
+    if (this.lastWarmAt && Date.now() - this.lastWarmAt < WARM_INTERVAL_MS) return 0;
+    this.lastWarmAt = Date.now();
+
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const userIds = (await PickOutcomeModel.distinct('user', { settledAt: { $gte: since } }))
+      .slice(0, options.limit ?? 500)
+      .map(String);
+
+    await Promise.allSettled(userIds.map(id => this.getProfile(id).catch(() => null)));
+    logger.info(`[Ora Personalization] Warmed profiles for ${userIds.length} users`);
+    return userIds.length;
+  }
+
+  private async loadSignals(userId: string): Promise<BettingSignals> {
+    const since = new Date(Date.now() - SIGNALS_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+    const records = await PickOutcomeModel.find({ user: userId, settledAt: { $gte: since } })
+      .sort({ settledAt: -1 })
+      .limit(500)
+      .lean() as any[];
+
+    const wins = records.filter(r => r.outcome === 'won').length;
+    let lossStreak = 0;
+    for (const r of records) {
+      if (r.outcome === 'lost') lossStreak++;
+      else if (r.outcome === 'won') break;
+    }
+
+    let stakeSum = 0;
+    for (const r of records) stakeSum += r.stakeAmount || 0;
+
+    const n = records.length;
+    return {
+      winRate90d: n > 0 ? wins / n : 0,
+      lossStreak,
+      stakingCadence30d: Math.round((n / SIGNALS_WINDOW_DAYS) * 30 * 100) / 100,
+      avgStake: n > 0 ? Math.round(stakeSum / n) : 0,
+      historyCount: n,
+      dampen: Math.min(1, n / COLD_START_HISTORY_TARGET),
+    };
   }
 
   private async loadHistory(userId: string): Promise<HistorySummary> {

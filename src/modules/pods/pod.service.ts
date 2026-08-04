@@ -115,13 +115,11 @@ export class PodService {
     const total = await PodModel.countDocuments(query);
 
     if (options.personalized) {
-      const profile = await aiPersonalizationService.getProfile(options.personalized);
       const pods = await baseQuery as unknown as IPod[];
-      const scored = pods.map(p => ({ pod: p, score: aiPersonalizationService.scorePod(p, profile) }));
-      scored.sort((a, b) => b.score - a.score);
-
-      const paginated = scored.slice(offset, offset + (options.limit || 20));
-      return { pods: paginated.map(s => s.pod), total };
+      const result = await aiPersonalizationService.personalize(pods, options.personalized);
+      const ranked = result.items as IPod[];
+      const paginated = ranked.slice(offset, offset + (options.limit || 20));
+      return { pods: paginated, total };
     }
 
     const pods = await baseQuery
