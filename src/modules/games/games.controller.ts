@@ -1,11 +1,13 @@
 import { Request, Response } from 'express';
+import { AuthRequest } from '../../middleware/auth.middleware';
 import { aiGamesService, GamesListQuery } from '../ai/ai-games.service';
 
 export class GamesController {
-  async getToday(req: Request, res: Response): Promise<void> {
+  async getToday(req: AuthRequest, res: Response): Promise<void> {
     try {
       const days = req.query.days ? parseInt(req.query.days as string, 10) : 1;
-      const result = await aiGamesService.getToday(days);
+      const userId = req.query.personalized === 'true' ? req.user?.userId : undefined;
+      const result = await aiGamesService.getToday(days, userId);
       res.json({ success: true, data: result });
     } catch (error: any) {
       console.error('Get today games error:', error);
@@ -13,7 +15,7 @@ export class GamesController {
     }
   }
 
-  async list(req: Request, res: Response): Promise<void> {
+  async list(req: AuthRequest, res: Response): Promise<void> {
     try {
       const q = req.query as Record<string, string>;
       const query: GamesListQuery = {
@@ -30,7 +32,8 @@ export class GamesController {
         dateTo: /^\d{4}-\d{2}-\d{2}$/.test(q.dateTo || '') ? q.dateTo : undefined,
         status: (['upcoming', 'live', 'finished', 'all'] as const).includes(q.status as any) ? (q.status as any) : undefined,
       };
-      const result = await aiGamesService.list(query);
+      const userId = req.query.personalized === 'true' ? req.user?.userId : undefined;
+      const result = await aiGamesService.list(query, userId);
       res.json({ success: true, data: result });
     } catch (error: any) {
       console.error('List games error:', error);

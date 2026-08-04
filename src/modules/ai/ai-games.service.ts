@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import { PodModel } from '../../models/pod.model';
 import { GameAnalysisModel, IGameAnalysis } from '../../models/game-analysis.model';
 import { LEAGUE_NAMES } from './ai-curation.service';
+import { aiPersonalizationService } from './ai-personalization.service';
 
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 const MAX_ANALYZE_PER_RUN = 80;
@@ -85,6 +86,8 @@ export interface TodayGame {
   homeScore?: number | null;
   awayScore?: number | null;
   result?: string | null;
+  whyRecommended?: string;
+  personalizationScore?: number;
 }
 
 export interface GamesListQuery {
@@ -110,6 +113,7 @@ export interface GamesListResult {
   limit: number;
   totalPages: number;
   leagues: string[];
+  personalized: boolean;
 }
 
 export class AIGamesService {
@@ -634,7 +638,7 @@ Return ONLY valid JSON with no markdown:
     return result;
   }
 
-  async getToday(days = 1): Promise<{ items: TodayGame[]; count: number }> {
+  async getToday(days = 1, userId?: string): Promise<{ items: TodayGame[]; count: number; personalized: boolean }> {
     const now = new Date();
     const end = new Date(now.getTime() + Math.min(Math.max(parseInt(String(days), 10) || 1, 1), 7) * 86400000);
 
@@ -647,8 +651,46 @@ Return ONLY valid JSON with no markdown:
       .limit(100)
       .lean();
 
-    const items = await this.enrichStakable(docs.map((d: any) => this.toTodayGame(d)));
-    return { items, count: items.length };
+    let items = await this.enrichStakable(docs.map((d: any) => this.toTodayGame(d)));
+    if (userId) {
+      const res = await this.personalizeGames(items, userId);
+      items = res.items;
+      return { items, count: items.length, personalized: res.personalized };
+    }
+    return { items, count: items.length, personalized: false };
+  }
+
+  private toPseudoPod(g: TodayGame): any {
+    return {
+      _id: `fixture:${g.fixtureId}`,
+      title: `${g.homeTeam} vs ${g.awayTeam}`,
+      sport: 'football',
+      league: g.league,
+      homeTeam: g.homeTeam,
+      awayTeam: g.awayTeam,
+      gainsMultiplier: g.gainsMultiplier,
+      marketType: g.marketType,
+      opensAt: g.matchDate,
+      metadata: { oraConfidence: g.confidence },
+    };
+  }
+
+  /**
+   * Hybrid rerank of games against the user's betting profile. Reorders only —
+   * never hides games. Copies back the personalized reasons onto the original
+   * TodayGame items.
+   */
+  async personalizeGames(items: TodayGame[], userId: string): Promise<{ items: TodayGame[]; personalized: boolean }> {
+    if (!items.length) return { items, personalized: false };
+    const pseudo = items.map(g => ({ src: g, pod: this.toPseudoPod(g) }));
+    const result = await aiPersonalizationService.personalize(pseudo.map(p => p.pod), userId);
+    if (!result.personalized) return { items, personalized: false };
+    const bySrc = new Map(pseudo.map(p => [p.pod, p.src as TodayGame]));
+    const reordered = result.items.map(pod => {
+      const g = bySrc.get(pod) as TodayGame;
+      return { ...g, whyRecommended: pod.whyRecommended, personalizationScore: pod.personalizationScore };
+    });
+    return { items: reordered, personalized: true };
   }
 
   private toTodayGame(d: any): TodayGame {
@@ -716,7 +758,7 @@ Return ONLY valid JSON with no markdown:
     return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  async list(query: GamesListQuery = {}): Promise<GamesListResult> {
+  async list(query: GamesListQuery = {}, userId?: string): Promise<GamesListResult> {
     const ALLOWED_SORTS = new Set(['matchDate', 'confidence', 'gainsMultiplier', 'homeTeam', 'awayTeam', 'league', 'analyzedAt']);
 
     // Security: sanitize + clamp every input before it touches the query
@@ -793,7 +835,17 @@ Return ONLY valid JSON with no markdown:
         })
       : 0;
 
-    const items = await this.enrichStakable(docs.map((d: any) => this.toTodayGame(d)));
+    let items = await this.enrichStakable(docs.map((d: any) => this.toTodayGame(d)));
+
+    // Personalize only under the default ordering — any explicit user sort wins.
+    let personalized = false;
+    const defaultOrder = !query.sortField
+      || (query.sortField === 'matchDate' && String(query.sortOrder).toLowerCase() === 'asc');
+    if (userId && defaultOrder) {
+      const res = await this.personalizeGames(items, userId);
+      personalized = res.personalized;
+      items = res.items;
+    }
 
     return {
       items,
@@ -803,6 +855,7 @@ Return ONLY valid JSON with no markdown:
       limit,
       totalPages: Math.ceil(total / limit),
       leagues: leagues.filter(Boolean).sort((a: string, b: string) => a.localeCompare(b)),
+      personalized,
     };
   }
 }

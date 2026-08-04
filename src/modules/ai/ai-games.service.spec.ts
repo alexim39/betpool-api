@@ -1,4 +1,5 @@
 import { aiGamesService } from './ai-games.service';
+import { aiPersonalizationService } from './ai-personalization.service';
 import { GameAnalysisModel } from '../../models/game-analysis.model';
 import { PodModel } from '../../models/pod.model';
 
@@ -73,7 +74,7 @@ describe('AIGamesService.getToday', () => {
   it('returns empty list when no games analyzed', async () => {
     mockLeanResult([]);
     const res = await aiGamesService.getToday(1);
-    expect(res).toEqual({ items: [], count: 0 });
+    expect(res).toEqual({ items: [], count: 0, personalized: false });
     expect(findMock).toHaveBeenCalledWith(expect.objectContaining({ matchDate: expect.any(Object) }));
   });
 
@@ -241,6 +242,84 @@ describe('AIGamesService.list status filters', () => {
     expect(findCall).toBeDefined();
     expect((findCall![0] as any).matchStatus.$in).toContain('2nd_half');
     expect((findCall![0] as any).matchStatus.$in).toContain('halftime');
+  });
+});
+
+describe('AIGamesService personalization', () => {
+  function mockListFind(docs: any[]) {
+    const lean = jest.fn().mockResolvedValue(docs);
+    findMock.mockReturnValue({
+      select: () => ({ sort: () => ({ limit: () => ({ lean }) }) }),
+      collation: () => ({ sort: () => ({ skip: () => ({ limit: () => ({ lean }) }) }) }),
+    });
+    countMock.mockResolvedValue(docs.length);
+    distinctMock.mockResolvedValue([]);
+    podFindMock.mockReturnValue({ select: () => ({ lean: jest.fn().mockResolvedValue([]) }) });
+  }
+
+  function reversedPersonalize() {
+    return jest.spyOn(aiPersonalizationService, 'personalize').mockImplementation(async (pods: any[]) => ({
+      items: [...pods].reverse().map((p, i) => {
+        p.whyRecommended = `reason-${i}`;
+        p.personalizationScore = 100 - i;
+        return p;
+      }),
+      personalized: true,
+      protective: false,
+    }));
+  }
+
+  it('getToday reorders items and attaches whyRecommended when personalized', async () => {
+    const spy = reversedPersonalize();
+    mockLeanResult([todayGame({ fixtureId: 1001 }), todayGame({ fixtureId: 1002, confidence: 88 })]);
+    const res = await aiGamesService.getToday(1, 'user-1');
+    expect(spy).toHaveBeenCalledWith(expect.any(Array), 'user-1');
+    expect(res.personalized).toBe(true);
+    expect(res.items[0].fixtureId).toBe(1002);
+    expect(res.items[0].whyRecommended).toBe('reason-0');
+    expect(typeof res.items[0].personalizationScore).toBe('number');
+    expect(res.items[1].fixtureId).toBe(1001);
+  });
+
+  it('getToday returns default order when profile is not personalized (cold start)', async () => {
+    const spy = jest.spyOn(aiPersonalizationService, 'personalize').mockResolvedValue({
+      items: [],
+      personalized: false,
+      protective: false,
+    });
+    mockLeanResult([todayGame({ fixtureId: 1001 }), todayGame({ fixtureId: 1002 })]);
+    const res = await aiGamesService.getToday(1, 'user-1');
+    expect(res.personalized).toBe(false);
+    expect(res.items.map(i => i.fixtureId)).toEqual([1001, 1002]);
+    expect(res.items[0].whyRecommended).toBeUndefined();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('getToday without userId never personalizes', async () => {
+    const spy = jest.spyOn(aiPersonalizationService, 'personalize');
+    mockLeanResult([todayGame({ fixtureId: 1001 })]);
+    const res = await aiGamesService.getToday(1);
+    expect(res.personalized).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('list reorders under the default ordering when personalized', async () => {
+    const spy = reversedPersonalize();
+    mockListFind([todayGame({ fixtureId: 1001 }), todayGame({ fixtureId: 1002 })]);
+    const res = await aiGamesService.list({ sortField: 'matchDate', sortOrder: 'asc' }, 'user-1');
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(res.personalized).toBe(true);
+    expect(res.items[0].fixtureId).toBe(1002);
+    expect(res.items[0].whyRecommended).toBe('reason-0');
+  });
+
+  it('list keeps the user sort and skips personalization for explicit sort orders', async () => {
+    const spy = jest.spyOn(aiPersonalizationService, 'personalize');
+    mockListFind([todayGame({ fixtureId: 1001, confidence: 55 }), todayGame({ fixtureId: 1002, confidence: 88 })]);
+    const res = await aiGamesService.list({ sortField: 'confidence', sortOrder: 'desc' }, 'user-1');
+    expect(spy).not.toHaveBeenCalled();
+    expect(res.personalized).toBe(false);
+    expect(res.items.map(i => i.fixtureId)).toEqual([1001, 1002]);
   });
 });
 
