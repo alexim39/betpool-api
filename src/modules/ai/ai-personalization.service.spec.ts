@@ -2,6 +2,7 @@ import { aiPersonalizationService, BettingProfile } from './ai-personalization.s
 import { StakeModel } from '../../models/stake.model';
 import { PickOutcomeModel } from '../../models/pick-outcome.model';
 import { UserModel } from '../../models/user.model';
+import { abtestService } from '../abtest/abtest.service';
 
 jest.mock('../../models/stake.model', () => ({
   StakeModel: { find: jest.fn() },
@@ -15,10 +16,15 @@ jest.mock('../../models/user.model', () => ({
   UserModel: { findById: jest.fn() },
 }));
 
+jest.mock('../abtest/abtest.service', () => ({
+  abtestService: { variantFor: jest.fn().mockResolvedValue(null) },
+}));
+
 const findMock = StakeModel.find as jest.Mock;
 const pickFindMock = PickOutcomeModel.find as jest.Mock;
 const distinctMock = PickOutcomeModel.distinct as jest.Mock;
 const userFindMock = UserModel.findById as jest.Mock;
+const variantForMock = abtestService.variantFor as jest.Mock;
 
 function mockStakeQuery(stakes: any[]) {
   const lean = jest.fn().mockResolvedValue(stakes);
@@ -317,6 +323,117 @@ describe('AIPersonalizationService — hybrid reranking (personalize)', () => {
     const result = await aiPersonalizationService.personalize([podArsenal, podFulham], 'u-llmfail');
 
     expect(result.items[0].whyRecommended).toContain('High-probability pick');
+  });
+
+  it('returns the default order untouched for A/B control users', async () => {
+    mockStakeQuery(historyStakes);
+    mockPickOutcomeQuery([
+      { outcome: 'won', stakeAmount: 5000, settledAt: dayAgo(2) },
+      { outcome: 'won', stakeAmount: 5000, settledAt: dayAgo(4) },
+    ]);
+
+    const clean = (id: string, homeTeam: string) => ({
+      _id: id,
+      sport: 'Football',
+      league: 'Premier League',
+      homeTeam,
+      awayTeam: 'Leicester',
+      gainsMultiplier: 1.5,
+      refundPercent: 40,
+      opensAt: new Date('2026-08-01T10:00:00Z'),
+      metadata: { oraConfidence: 0 },
+    });
+
+    const result = await aiPersonalizationService.personalize(
+      [clean('p2', 'Fulham'), clean('p1', 'Arsenal')],
+      'u-ctrl',
+      'control'
+    );
+
+    expect(result.personalized).toBe(false);
+    expect(result.items.map((p: any) => p._id)).toEqual(['p2', 'p1']);
+    expect(result.items[0].whyRecommended).toBeUndefined();
+    expect(result.items[0].personalizationScore).toBeUndefined();
+  });
+
+  it('looks up the experiment variant when none is passed', async () => {
+    variantForMock.mockResolvedValue('treatment');
+    mockStakeQuery(historyStakes);
+    mockPickOutcomeQuery([
+      { outcome: 'won', stakeAmount: 5000, settledAt: dayAgo(2) },
+      { outcome: 'won', stakeAmount: 5000, settledAt: dayAgo(4) },
+    ]);
+
+    const result = await aiPersonalizationService.personalize([podFulham, podArsenal], 'u-treat');
+
+    expect(variantForMock).toHaveBeenCalledWith('u-treat', 'personalization');
+    expect(result.personalized).toBe(true);
+    expect(result.items[0]._id).toBe('p1');
+  });
+
+  it('treats a null variant as no experiment (normal behavior)', async () => {
+    variantForMock.mockResolvedValue(null);
+    mockStakeQuery(historyStakes);
+    mockPickOutcomeQuery([
+      { outcome: 'won', stakeAmount: 5000, settledAt: dayAgo(2) },
+      { outcome: 'won', stakeAmount: 5000, settledAt: dayAgo(4) },
+    ]);
+
+    const result = await aiPersonalizationService.personalize([podFulham, podArsenal], 'u-none');
+
+    expect(result.personalized).toBe(true);
+  });
+
+  it('ranks pods in leagues where the user wins most (win-sensitivity)', async () => {
+    mockStakeQuery([]);
+    mockPickOutcomeQuery([
+      { outcome: 'won', stakeAmount: 1000, settledAt: dayAgo(2), league: 'Premier League', marketType: '1X2' },
+      { outcome: 'won', stakeAmount: 1000, settledAt: dayAgo(4), league: 'Premier League', marketType: '1X2' },
+      { outcome: 'won', stakeAmount: 1000, settledAt: dayAgo(6), league: 'Premier League', marketType: '1X2' },
+      { outcome: 'won', stakeAmount: 1000, settledAt: dayAgo(8), league: 'Premier League', marketType: '1X2' },
+      { outcome: 'won', stakeAmount: 1000, settledAt: dayAgo(10), league: 'Premier League', marketType: '1X2' },
+      { outcome: 'won', stakeAmount: 1000, settledAt: dayAgo(12), league: 'Premier League', marketType: '1X2' },
+    ]);
+
+    const laLigaPod = { ...podArsenal, _id: 'p-la', league: 'La Liga', homeTeam: 'Real Madrid', awayTeam: 'Barcelona' };
+    const result = await aiPersonalizationService.personalize([laLigaPod, { ...podArsenal }], 'u-win');
+
+    expect(result.personalized).toBe(true);
+    expect(result.items[0]._id).toBe('p1');
+    expect(result.items[0].whyRecommended).toContain('win 100% of settled picks in Premier League');
+  });
+
+  it('demotes pods in leagues where the user consistently loses', async () => {
+    mockStakeQuery([]);
+    mockPickOutcomeQuery([
+      { outcome: 'lost', stakeAmount: 1000, settledAt: dayAgo(2), league: 'Premier League', marketType: '1X2' },
+      { outcome: 'lost', stakeAmount: 1000, settledAt: dayAgo(4), league: 'Premier League', marketType: '1X2' },
+      { outcome: 'lost', stakeAmount: 1000, settledAt: dayAgo(6), league: 'Premier League', marketType: '1X2' },
+      { outcome: 'lost', stakeAmount: 1000, settledAt: dayAgo(8), league: 'Premier League', marketType: '1X2' },
+      { outcome: 'lost', stakeAmount: 1000, settledAt: dayAgo(10), league: 'Premier League', marketType: '1X2' },
+      { outcome: 'lost', stakeAmount: 1000, settledAt: dayAgo(12), league: 'Premier League', marketType: '1X2' },
+    ]);
+
+    const laLigaPod = { ...podArsenal, _id: 'p-la', league: 'La Liga', homeTeam: 'Real Madrid', awayTeam: 'Barcelona' };
+    const result = await aiPersonalizationService.personalize([{ ...podArsenal }, laLigaPod], 'u-lose');
+
+    expect(result.items[0]._id).toBe('p-la');
+  });
+
+  it('favors pods whose stake band fits the user average stake (bankroll band)', async () => {
+    mockStakeQuery([]);
+    mockPickOutcomeQuery([
+      { outcome: 'won', stakeAmount: 2000, settledAt: dayAgo(2), league: 'Premier League', marketType: '1X2' },
+      { outcome: 'won', stakeAmount: 2000, settledAt: dayAgo(4), league: 'Premier League', marketType: '1X2' },
+      { outcome: 'won', stakeAmount: 2000, settledAt: dayAgo(6), league: 'Premier League', marketType: '1X2' },
+      { outcome: 'won', stakeAmount: 2000, settledAt: dayAgo(8), league: 'Premier League', marketType: '1X2' },
+    ]);
+
+    const inBand = { ...podArsenal, _id: 'p-band', minStake: 100, maxStake: 5000 };
+    const tooRich = { ...podFulham, _id: 'p-rich', minStake: 5000, maxStake: 100000 };
+    const result = await aiPersonalizationService.personalize([tooRich, inBand], 'u-bank');
+
+    expect(result.items[0]._id).toBe('p-band');
   });
 });
 

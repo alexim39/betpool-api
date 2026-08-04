@@ -2,6 +2,9 @@ import { StakeModel } from '../../models/stake.model';
 import { PickOutcomeModel } from '../../models/pick-outcome.model';
 import { UserModel } from '../../models/user.model';
 import { logger } from '../../services/logger.service';
+import { abtestService, Variant } from '../abtest/abtest.service';
+
+const EXPERIMENT_KEY = 'personalization';
 
 const DEFAULT_LLM_URL = 'https://api.deepseek.com/v1/chat/completions';
 
@@ -19,6 +22,9 @@ export interface BettingProfile {
   avgStake?: number;
   historyCount?: number;
   dampen?: number;
+  // Per-user settled-pick win rates (accuracy ledger), keyed by lowercase name
+  leagueWinRates?: Record<string, { played: number; won: number; winRate: number }>;
+  marketWinRates?: Record<string, { played: number; won: number; winRate: number }>;
 }
 
 interface BettingSignals {
@@ -28,6 +34,8 @@ interface BettingSignals {
   avgStake: number;
   historyCount: number;
   dampen: number;
+  leagueWinRates: Record<string, { played: number; won: number; winRate: number }>;
+  marketWinRates: Record<string, { played: number; won: number; winRate: number }>;
 }
 
 export interface PersonalizedFeed {
@@ -112,8 +120,17 @@ export class AIPersonalizationService {
    * boost. Cold-start dampening scales the boost by settled-pick history, and
    * a risk gate skips personalization for suspended users entirely or dampens
    * it after 3+ consecutive losses. Never hides pools — reorders only.
+   *
+   * A/B experiment: when the `personalization` experiment is active, control
+   * users receive the plain default order (personalized: false) while
+   * treatment users get the reranked feed.
    */
-  async personalize(pods: any[], userId: string): Promise<PersonalizedFeed> {
+  async personalize(pods: any[], userId: string, variant?: Variant | null): Promise<PersonalizedFeed> {
+    const effectiveVariant = variant ?? (await abtestService.variantFor(userId, EXPERIMENT_KEY));
+    if (effectiveVariant === 'control') {
+      return { items: [...pods], personalized: false, protective: false };
+    }
+
     const user = await UserModel.findById(userId).lean();
     if (!user || !user.isActive || user.isSuspended) {
       return { items: [...pods], personalized: false, protective: false };
@@ -130,7 +147,10 @@ export class AIPersonalizationService {
 
     const scored = pods.map(p => ({
       pod: p,
-      score: this.scorePod(p, profile) + this.affinityBoost(p, profile, streakDampen),
+      score: this.scorePod(p, profile)
+        + this.affinityBoost(p, profile, streakDampen)
+        + this.winSensitivityBoost(p, profile, streakDampen)
+        + this.bankrollBoost(p, profile, streakDampen),
     }));
     scored.sort((a, b) =>
       b.score - a.score ||
@@ -192,6 +212,52 @@ export class AIPersonalizationService {
     return affinity * 30 * dampen * streakDampen;
   }
 
+  /**
+   * Win-sensitivity: favors leagues and markets where the user's settled picks
+   * actually won, penalizes chronic losers. Needs at least 3 settled picks in
+   * that dimension to have an opinion; otherwise neutral.
+   */
+  private winSensitivityBoost(pod: any, profile: BettingProfile, streakDampen: number): number {
+    const dampen = profile.dampen ?? 0;
+    let boost = 0;
+
+    const leagueStat = profile.leagueWinRates?.[(pod.league || '').toLowerCase()];
+    if (leagueStat && leagueStat.played >= 3) {
+      if (leagueStat.winRate >= 75) boost += 20;
+      else if (leagueStat.winRate >= 60) boost += 15;
+      else if (leagueStat.winRate <= 35) boost -= 10;
+      else if (leagueStat.winRate <= 45) boost -= 4;
+    }
+
+    const marketStat = profile.marketWinRates?.[(pod.marketType || '').toLowerCase()];
+    if (marketStat && marketStat.played >= 3) {
+      if (marketStat.winRate >= 60) boost += 8;
+      else if (marketStat.winRate <= 35) boost -= 5;
+    }
+
+    return boost * dampen * streakDampen;
+  }
+
+  /**
+   * Bankroll band: pods whose min/max stake range fits the user's average
+   * stake get a boost; pods with a minimum above their typical stake are
+   * penalized (they are a stretch). Neutral when the user has no stake signal.
+   */
+  private bankrollBoost(pod: any, profile: BettingProfile, streakDampen: number): number {
+    const dampen = profile.dampen ?? 0;
+    const avgStake = profile.avgStake || 0;
+    if (!avgStake) return 0;
+
+    const minStake = pod.minStake || 100;
+    const maxStake = pod.maxStake || 50000;
+    let boost: number;
+    if (avgStake >= minStake && avgStake <= maxStake) boost = 10;
+    else if (maxStake < avgStake) boost = 5;
+    else boost = -6;
+
+    return boost * dampen * streakDampen;
+  }
+
   private matchWeight(list: string[], value: string): number {
     const v = (value || '').toLowerCase();
     if (!v) return 0;
@@ -220,15 +286,20 @@ export class AIPersonalizationService {
     let reason: string;
     if (team) {
       reason = `You often back ${team} — matches a team on your list.`;
-    } else if (league) {
-      reason = `You regularly bet on ${league}.`;
-    } else if (sport) {
-      reason = `${sport} is one of your usual sports.`;
     } else {
-      const confidence = Math.round((pod.metadata?.oraConfidence as number) || 0);
-      reason = confidence > 0
-        ? `Ora-curated pick with ${confidence}% confidence.`
-        : 'High-probability pick aligned with your betting style.';
+      const podLeagueStat = profile.leagueWinRates?.[(pod.league || '').toLowerCase()];
+      if (podLeagueStat && podLeagueStat.played >= 3 && podLeagueStat.winRate >= 60) {
+        reason = `You win ${podLeagueStat.winRate}% of settled picks in ${pod.league}.`;
+      } else if (league) {
+        reason = `You regularly bet on ${league}.`;
+      } else if (sport) {
+        reason = `${sport} is one of your usual sports.`;
+      } else {
+        const confidence = Math.round((pod.metadata?.oraConfidence as number) || 0);
+        reason = confidence > 0
+          ? `Ora-curated pick with ${confidence}% confidence.`
+          : 'High-probability pick aligned with your betting style.';
+      }
     }
 
     return protective ? `Safeguard after losses — ${reason.toLowerCase()}` : reason;
@@ -334,6 +405,33 @@ export class AIPersonalizationService {
     for (const r of records) stakeSum += r.stakeAmount || 0;
 
     const n = records.length;
+
+    const leagueWin = new Map<string, { played: number; won: number }>();
+    const marketWin = new Map<string, { played: number; won: number }>();
+    for (const r of records) {
+      const lk = (r.league || '').toLowerCase();
+      if (lk) {
+        const e = leagueWin.get(lk) || { played: 0, won: 0 };
+        e.played++;
+        if (r.outcome === 'won') e.won++;
+        leagueWin.set(lk, e);
+      }
+      const mk = (r.marketType || '').toLowerCase();
+      if (mk) {
+        const e = marketWin.get(mk) || { played: 0, won: 0 };
+        e.played++;
+        if (r.outcome === 'won') e.won++;
+        marketWin.set(mk, e);
+      }
+    }
+    const toWinRates = (m: Map<string, { played: number; won: number }>) =>
+      Object.fromEntries(
+        [...m.entries()].map(([key, v]) => [
+          key,
+          { played: v.played, won: v.won, winRate: Math.round((v.won / v.played) * 100) },
+        ])
+      );
+
     return {
       winRate90d: n > 0 ? wins / n : 0,
       lossStreak,
@@ -341,6 +439,8 @@ export class AIPersonalizationService {
       avgStake: n > 0 ? Math.round(stakeSum / n) : 0,
       historyCount: n,
       dampen: Math.min(1, n / COLD_START_HISTORY_TARGET),
+      leagueWinRates: toWinRates(leagueWin),
+      marketWinRates: toWinRates(marketWin),
     };
   }
 

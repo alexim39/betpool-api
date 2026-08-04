@@ -78,6 +78,30 @@ describe('pickOutcomeVerdict — mirrors client pickOutcome()', () => {
       expect(pickOutcomeVerdict({ ...finished, pick: 'Arsenal to win the tournament' })).toBe('skip');
     });
   });
+
+  describe('combined parlay picks ("Home Win + Over 2.5")', () => {
+    it('wins only when every leg wins', () => {
+      expect(pickOutcomeVerdict({ ...finished, pick: 'Home Win + Over 2.5', result: 'home_win', homeScore: 2, awayScore: 1 })).toBe('won');
+    });
+
+    it('loses when any leg loses', () => {
+      expect(pickOutcomeVerdict({ ...finished, pick: 'Home Win + Over 2.5', result: 'home_win', homeScore: 2, awayScore: 0 })).toBe('lost');
+      expect(pickOutcomeVerdict({ ...finished, pick: 'Home Win + Over 2.5', result: 'draw', homeScore: 1, awayScore: 1 })).toBe('lost');
+    });
+
+    it('skips when any leg pushes', () => {
+      expect(pickOutcomeVerdict({ ...finished, pick: 'Home Win + Over 2', result: 'home_win', homeScore: 2, awayScore: 0 })).toBe('skip');
+    });
+
+    it('tolerates missing spaces around the plus', () => {
+      expect(pickOutcomeVerdict({ ...finished, pick: 'Home Win+Over 2.5', result: 'home_win', homeScore: 3, awayScore: 0 })).toBe('won');
+    });
+
+    it('combines BTTS with an over line', () => {
+      expect(pickOutcomeVerdict({ ...finished, pick: 'BTTS Yes + Over 2.5', result: 'home_win', homeScore: 2, awayScore: 1 })).toBe('won');
+      expect(pickOutcomeVerdict({ ...finished, pick: 'BTTS Yes + Over 2.5', result: 'home_win', homeScore: 3, awayScore: 0 })).toBe('lost');
+    });
+  });
 });
 
 describe('verdictFromFinalScores', () => {
@@ -99,5 +123,10 @@ describe('verdictFromFinalScores', () => {
 
   it('skips Draw No Bet on a draw', () => {
     expect(verdictFromFinalScores('Home Draw No Bet', 1, 1)).toBe('skip');
+  });
+
+  it('judges a combined parlay pod selection from the final score', () => {
+    expect(verdictFromFinalScores('Home Win + Over 2.5', 2, 1)).toBe('won');
+    expect(verdictFromFinalScores('Home Win + Over 2.5', 2, 0)).toBe('lost');
   });
 });

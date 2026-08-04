@@ -45,7 +45,15 @@ export class AICurationController {
               settlementEstimateAt,
               settlementEstimateLabel: settlementEstimateAt.toLocaleDateString('en-NG', { month: 'short', day: 'numeric', year: 'numeric' }),
               status: 'active' as const,
-              legs: [{ homeTeam: fixture.homeTeam, awayTeam: fixture.awayTeam, matchDate, league: fixture.league }],
+              legs: fixture.combinedLegs?.map(l => ({
+                homeTeam: fixture.homeTeam,
+                awayTeam: fixture.awayTeam,
+                matchDate,
+                league: fixture.league,
+                marketType: l.marketType,
+                selection: l.selection,
+                multiplier: l.multiplier,
+              })) || [{ homeTeam: fixture.homeTeam, awayTeam: fixture.awayTeam, matchDate, league: fixture.league }],
               metadata: {
                 oraCurated: true,
                 oraConfidence: bestPick.confidence,

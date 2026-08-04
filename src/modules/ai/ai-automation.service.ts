@@ -107,7 +107,15 @@ export class AIAutomationService {
                 settlementEstimateAt,
                 settlementEstimateLabel: settlementEstimateAt.toLocaleDateString('en-NG', { month: 'short', day: 'numeric', year: 'numeric' }),
                 status: 'active' as const,
-                legs: [{ homeTeam: fixture.homeTeam, awayTeam: fixture.awayTeam, matchDate, league: fixture.league }],
+                legs: fixture.combinedLegs?.map(l => ({
+                  homeTeam: fixture.homeTeam,
+                  awayTeam: fixture.awayTeam,
+                  matchDate,
+                  league: fixture.league,
+                  marketType: l.marketType,
+                  selection: l.selection,
+                  multiplier: l.multiplier,
+                })) || [{ homeTeam: fixture.homeTeam, awayTeam: fixture.awayTeam, matchDate, league: fixture.league }],
                 metadata: {
                   oraCurated: true,
                   oraConfidence: bestPick.confidence,
@@ -169,6 +177,22 @@ export class AIAutomationService {
       } catch (err: any) {
         logger.error('[Ora Automation] Games analysis error', err.message);
         result.settlement.errors.push(`Games analysis: ${err.message}`);
+      }
+
+      // Step 1c: Auto-settle pods whose matches have concluded (feeds the outcome ledger → personalization + curation accuracy)
+      try {
+        if (!adminUser) {
+          logger.warn('[Ora Automation] Settlement SKIPPED — no admin user found');
+          result.settlement.errors.push('Settlement skipped: no admin user found');
+        } else {
+          const settlement = await aiSettlementService.settleAllSettleable(adminUser);
+          result.settlement.settled = settlement.settled;
+          for (const e of settlement.errors) result.settlement.errors.push(e);
+          logger.info(`[Ora Automation] Settlement: ${settlement.settled} settled, ${settlement.disputed} disputed, ${settlement.stuck} stuck`);
+        }
+      } catch (err: any) {
+        logger.error('[Ora Automation] Settlement error', err.message);
+        result.settlement.errors.push(`Settlement: ${err.message}`);
       }
 
       // Step 2: Bet Manager operations

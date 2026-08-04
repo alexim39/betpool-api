@@ -17,10 +17,32 @@ function isFinishedStatus(matchStatus?: string | null): boolean {
  * workspace/projects/investbetz-platform/src/app/features/games/game-status.util.ts.
  * Judges 1X2, Over/Under (push => skip), BTTS, Double Chance and Draw No Bet
  * (draw => skip) from a finished match's result and final scores.
+ *
+ * Combined parlay picks ("Home Win + Over 2.5") are split on '+' and each leg
+ * is judged independently: any lost leg => lost, any push => skip, else won.
  */
 export function pickOutcomeVerdict(g: PickVerdictInput): PickOutcome {
   if (g.matchStatus && !isFinishedStatus(g.matchStatus)) return 'skip';
   if (!g.result) return 'skip';
+  const p = (g.pick || '').toLowerCase();
+
+  if (p.includes('+')) {
+    const legs = p.split('+').map(s => s.trim()).filter(Boolean);
+    if (legs.length > 1) {
+      let anyLost = false;
+      for (const leg of legs) {
+        const verdict = judgePick({ ...g, pick: leg });
+        if (verdict === 'lost') anyLost = true;
+        if (verdict === 'skip') return 'skip';
+      }
+      return anyLost ? 'lost' : 'won';
+    }
+  }
+
+  return judgePick(g);
+}
+
+function judgePick(g: PickVerdictInput): PickOutcome {
   const p = (g.pick || '').toLowerCase();
 
   const over = /over\s*(\d+(?:\.\d+)?)/.exec(p);

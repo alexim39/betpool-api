@@ -11,6 +11,9 @@ export interface PodLeg {
   awayTeam: string;
   matchDate: Date;
   league?: string;
+  marketType?: string;
+  selection?: string;
+  multiplier?: number;
 }
 
 export interface IPod extends mongoose.Document {
@@ -70,7 +73,10 @@ const PodLegSchema = new Schema({
   homeTeam: { type: String, required: true, trim: true },
   awayTeam: { type: String, required: true, trim: true },
   matchDate: { type: Date, required: true },
-  league: { type: String, trim: true }
+  league: { type: String, trim: true },
+  marketType: { type: String, trim: true },
+  selection: { type: String, trim: true },
+  multiplier: { type: Number, min: 1.01 }
 }, { _id: false });
 
 const PodSchema = new Schema({

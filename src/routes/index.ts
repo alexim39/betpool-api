@@ -13,6 +13,8 @@ import { featuredBannerRoutes } from '../modules/featured-banners';
 import { digestRoutes } from '../modules/digest';
 import { adminRoutes } from '../modules/admin';
 import betManagerRoutes from '../modules/bet-manager/bet-manager.routes';
+import abtestRoutes from '../modules/abtest/abtest.routes';
+import abtestAdminRoutes from '../modules/abtest/abtest-admin.routes';
 
 import { authMiddleware } from '../middleware/auth.middleware';
 import { adminMiddleware } from '../middleware/admin.middleware';
@@ -44,8 +46,9 @@ router.use('/match-pools', matchPoolRoutes);
 router.use('/bet-manager', betManagerRoutes);
 router.use('/featured-games', featuredBannerRoutes);
 router.use('/digest', digestRoutes);
+router.use('/abtest', authMiddleware, abtestRoutes);
 
 // Admin routes (auth + admin middleware applied at this level)
-router.use('/admin', authMiddleware, adminMiddleware, adminLimiter, adminRoutes);
+router.use('/admin', authMiddleware, adminMiddleware, adminLimiter, abtestAdminRoutes, adminRoutes);
 
 export default router;

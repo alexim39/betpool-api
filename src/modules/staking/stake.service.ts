@@ -6,6 +6,7 @@ import { TransactionModel } from '../../models/transaction.model';
 import { walletService } from '../../services/wallet.service';
 import { notifyStakePlaced, notifyStakeWon, notifyStakeLost, notifyStakeCashedOut } from '../../services/notification.service';
 import { userService } from '../../services/user.service';
+import { abtestService } from '../abtest/abtest.service';
 
 // Type helper to cast Mongoose lean queries
 function toLeanArray<T>(): (query: any) => Promise<T[]> {
@@ -169,6 +170,12 @@ export class StakeService {
       userService.payReferralBonusOnStake(data.userId).catch(e => console.error('Referral bonus error', e));
       
       await notifyStakePlaced(data.userId, pod.title || 'Pod', data.stakeAmount, potentialPayout).catch(e => console.error(e));
+      
+      abtestService.recordEvent(data.userId, 'personalization', 'stake_placed', {
+        isParlay: false,
+        stakeAmount: data.stakeAmount,
+        podId,
+      });
       
       return {
         stake: stake[0],
@@ -448,6 +455,13 @@ export class StakeService {
       const podTitle = `${pods[0].homeTeam} vs ${pods[0].awayTeam} +${podIds.length - 1}`;
       await notifyStakePlaced(userId, `${podTitle} (${podIds.length}-leg parlay)`, stakeAmount, potentialPayout).catch(e => console.error(e));
 
+      abtestService.recordEvent(userId, 'personalization', 'stake_placed', {
+        isParlay: true,
+        legCount: podIds.length,
+        stakeAmount,
+        combinedMultiplier,
+      });
+      
       return {
         stake: stake[0],
         potentialPayout,
