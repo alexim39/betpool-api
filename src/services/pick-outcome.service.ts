@@ -4,6 +4,7 @@ import { StakeModel, IStake } from '../models/stake.model';
 import { PickOutcomeModel } from '../models/pick-outcome.model';
 import { verdictFromFinalScores, PickOutcome } from '../utils/pick-verdict';
 import { aiPersonalizationService } from '../modules/ai/ai-personalization.service';
+import { curationAccuracyService } from '../modules/ai/curation-accuracy.service';
 import { logger } from './logger.service';
 
 const SETTLED_STATUSES = ['won', 'lost', 'void'];
@@ -63,6 +64,9 @@ export class PickOutcomeService {
     for (const userId of [...stakes.values()].map(s => s.user.toString())) {
       aiPersonalizationService.invalidateProfile(userId);
     }
+
+    // Settled ledger changed — drop cached league/market accuracy stats.
+    curationAccuracyService.invalidate();
 
     return records.length;
   }

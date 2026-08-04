@@ -3,6 +3,7 @@ import { PodModel } from '../models/pod.model';
 import { StakeModel } from '../models/stake.model';
 import { PickOutcomeModel } from '../models/pick-outcome.model';
 import { aiPersonalizationService } from '../modules/ai/ai-personalization.service';
+import { curationAccuracyService } from '../modules/ai/curation-accuracy.service';
 
 jest.mock('../models/pod.model', () => ({
   PodModel: { findById: jest.fn() },
@@ -20,10 +21,15 @@ jest.mock('../modules/ai/ai-personalization.service', () => ({
   aiPersonalizationService: { invalidateProfile: jest.fn() },
 }));
 
+jest.mock('../modules/ai/curation-accuracy.service', () => ({
+  curationAccuracyService: { invalidate: jest.fn() },
+}));
+
 const findByIdMock = PodModel.findById as jest.Mock;
 const stakeFindMock = StakeModel.find as jest.Mock;
 const insertManyMock = PickOutcomeModel.insertMany as jest.Mock;
 const invalidateMock = aiPersonalizationService.invalidateProfile as jest.Mock;
+const accuracyInvalidateMock = curationAccuracyService.invalidate as jest.Mock;
 
 function mockPod(value: any) {
   const thenable = {
@@ -87,6 +93,7 @@ describe('PickOutcomeService.recordPodSettlement', () => {
     const records = insertManyMock.mock.calls[0][0];
     expect(records[0]).toMatchObject({ user: 'user-1', pod: 'pod-1', outcome: 'won', stakeAmount: 2000, isParlay: false });
     expect(invalidateMock).toHaveBeenCalledWith('user-1');
+    expect(accuracyInvalidateMock).toHaveBeenCalled();
   });
 
   it('returns skip on an over/under push', async () => {

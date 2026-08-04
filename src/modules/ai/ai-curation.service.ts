@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import { StakeModel } from '../../models/stake.model';
 import { WalletModel } from '../../models/wallet.model';
 import { PodModel } from '../../models/pod.model';
+import { curationAccuracyService, CurationAccuracyStats } from './curation-accuracy.service';
 
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 
@@ -96,6 +97,7 @@ export interface CurationResponse {
   oraTotalPods: number;
   oraWon: number;
   confidenceThreshold: number;
+  ledgerAccuracy: CurationAccuracyStats | null;
   autoCreated?: boolean;
   createdPods?: Array<{ fixtureId: number; homeTeam: string; awayTeam: string; podId: string; title: string }>;
 }
@@ -248,6 +250,7 @@ export class AICurationService {
       success: true, total: 0, recommended: 0, skipped: 0,
       fixtures: [], errors: [], apiLog: [], skippedReason: null,
       oraWinRate: 50, oraTotalPods: 0, oraWon: 0, confidenceThreshold: 65,
+      ledgerAccuracy: null,
     };
 
     if (!this.apiKey || this.apiKey === 'your_api_key_here') {
@@ -263,6 +266,9 @@ export class AICurationService {
 
     // 1. Learn from Ora's past performance
     await this.loadOraHistory(result);
+
+    // 1b. Load settled-pick ledger accuracy (league/market win rates)
+    result.ledgerAccuracy = await curationAccuracyService.getStats();
 
     // 2. Fetch financial health
     const financialHealth = await this.getFinancialHealth();
@@ -319,7 +325,8 @@ export class AICurationService {
           formCache.get(fixture.away_team_id),
           oddsCache.get(fixture.id) || [],
           financialHealth,
-          result
+          result,
+          result.ledgerAccuracy
         ))
       );
       for (const analysis of batchResults) {
@@ -465,6 +472,14 @@ export class AICurationService {
     }
   }
 
+  /** Fallback guard: +adjustment when the league's settled ledger looks risky. */
+  private leagueAdjGuard(fixture: BSDEvent, result: CurationResponse): number {
+    return curationAccuracyService.leagueAdjustment(
+      this.leagueName(fixture.league_id, fixture.id, fixture.league?.name || fixture.league_name),
+      result.ledgerAccuracy
+    );
+  }
+
   private async fetchOdds(fixtureId: number): Promise<OddsMarket[]> {
     try {
       const res = await axios.get(`${this.baseUrl}/events/${fixtureId}/odds/comparison/`, {
@@ -485,10 +500,16 @@ export class AICurationService {
     awayForm: TeamFormData | undefined,
     odds: OddsMarket[],
     financialHealth: { reserveRatio: number; totalReserves: number; totalExposure: number; activePodCount: number },
-    context: CurationResponse
+    context: CurationResponse,
+    accuracy: CurationAccuracyStats | null = null
   ): Promise<CurationResult> {
     try {
       const h2h = fixture.head_to_head;
+      const leagueName = this.leagueName(fixture.league_id, fixture.id, fixture.league?.name || fixture.league_name);
+
+      // League ledger adjustment: proven leagues lower the bar, risky leagues raise it
+      const leagueAdj = curationAccuracyService.leagueAdjustment(leagueName, accuracy);
+      const effectiveThreshold = Math.min(90, Math.max(50, (context.confidenceThreshold || 65) + leagueAdj));
 
       // Build structured form strings
       const homeFormStr = homeForm
@@ -521,7 +542,7 @@ export class AICurationService {
       const prompt = `Analyze this football match for BetPool's pod curation:
 
 MATCH: ${fixture.home_team} vs ${fixture.away_team}
-LEAGUE: ${this.leagueName(fixture.league_id, fixture.id, fixture.league?.name || fixture.league_name)} | Round: ${fixture.round_number || 'N/A'}
+LEAGUE: ${leagueName} | Round: ${fixture.round_number || 'N/A'}
 DATE: ${fixture.event_date}
 
 TEAM FORM:
@@ -537,13 +558,16 @@ ${oddsStr}
 FINANCIAL HEALTH:
 ${finStr}
 
+ORA LEDGER PERFORMANCE (accuracy from settled outcomes — weight proven leagues/markets higher, be extra cautious in risky ones):
+${curationAccuracyService.promptBlock(leagueName, accuracy)}
+
 CRITICAL RULES (SURVIVAL DEPENDS ON FOLLOWING THESE):
 - BetPool's profit model: we earn commission ONLY when pods WIN. Every losing pod earns zero revenue. This is a survival requirement.
 - We need HIGH WINNING CONSISTENCY above all else. Recommend ONLY outcomes that have a very high probability of winning.
 - Prefer 10 excellent pods over 30 mediocre ones. Quality over quantity is the only path to survival.
 - VALUE SCORING: Score each outcome as confidence × (multiplier - 1). Always pick the outcome with the highest value score, NOT just the highest confidence alone.
 - NEVER recommend an outcome with a multiplier below 1.3x — the risk-adjusted return is too low regardless of confidence.
-- NEVER recommend an outcome with confidence below 70% — the risk of losing is unacceptable.
+- NEVER recommend an outcome with confidence below ${Math.min(70, effectiveThreshold)}% — the risk of losing is unacceptable.
 - If the best single outcome has a multiplier below 1.5x, consider combining 2 high-confidence outcomes from this SAME fixture as a parlay to get reasonable odds (1.8x - 5.0x target).
 - Never combine outcomes from different fixtures. Both legs must be from this same match.
 
@@ -575,8 +599,8 @@ Return valid JSON matching this structure:
 }
 
 Rules:
-- RECOMMEND only if at least one outcome has confidence >= ${context.confidenceThreshold}
-- If no outcome reaches ${context.confidenceThreshold}%, return SKIP
+- RECOMMEND only if at least one outcome has confidence >= ${effectiveThreshold}
+- If no outcome reaches ${effectiveThreshold}%, return SKIP
 - If the best outcome's multiplier is < 1.5x, set combinedRecommendation.enabled = true suggesting a parlay
 - The combined confidence should be both outcomes' average confidence * 0.9 (penalty for two events)
 - The combined multiplier = leg1Multiplier * leg2Multiplier
@@ -621,8 +645,6 @@ Rules:
 
       const parsed = JSON.parse(content.replace(/```json\s*/gi, '').replace(/```\s*$/g, '').trim());
 
-      const leagueName = this.leagueName(fixture.league_id, fixture.id, fixture.league?.name || fixture.league_name);
-
       // Parse recommendations
       const recommendations: CurationSelection[] = (parsed.recommendations || []).map((r: any) => ({
         selection: r.selection,
@@ -643,7 +665,7 @@ Rules:
       let isCombined = false;
       let combinedLegs: Array<{ marketType: string; selection: string; multiplier: number }> | undefined;
 
-      if (combined?.enabled && combined.combinedConfidence >= context.confidenceThreshold) {
+      if (combined?.enabled && combined.combinedConfidence >= effectiveThreshold) {
         isCombined = true;
         combinedLegs = [
           { marketType: combined.leg1Market, selection: combined.leg1Selection, multiplier: combined.leg1Multiplier },
@@ -691,12 +713,15 @@ Rules:
       success: true, total: 0, recommended: 0, skipped: 0,
       fixtures: [], errors: [], apiLog: [], skippedReason: null,
       oraWinRate: 50, oraTotalPods: 0, oraWon: 0, confidenceThreshold: 65,
+      ledgerAccuracy: null,
     };
 
     if (!this.apiKey || this.apiKey === 'your_api_key_here') {
       result.errors.push('SPORTSAPI_KEY not configured');
       return result;
     }
+
+    result.ledgerAccuracy = await curationAccuracyService.getStats();
 
     const today = new Date();
     const dateFrom = today.toISOString().split('T')[0];
@@ -743,7 +768,7 @@ Rules:
           selection: o.name || o.code || '',
           rawOdds: o.best_odds || o.max_odds || o.odds || 0,
         }))
-        .filter(o => o.selection && o.rawOdds >= 1.3 && (1 / o.rawOdds) >= 0.55)
+        .filter(o => o.selection && o.rawOdds >= 1.3 && (1 / o.rawOdds) >= (this.leagueAdjGuard(fixture, result) > 0 ? 0.6 : 0.55))
         .sort((a, b) => (1 / b.rawOdds) - (1 / a.rawOdds));
 
       if (filtered.length === 0) {
@@ -751,7 +776,7 @@ Rules:
         result.fixtures.push({
           fixtureId: fixture.id, homeTeam: fixture.home_team, awayTeam: fixture.away_team,
           league: this.leagueName(fixture.league_id, fixture.id, fixture.league?.name || fixture.league_name), matchDate: fixture.event_date,
-          verdict: 'SKIP', overallReasoning: 'No outcome met 55% implied probability threshold',
+          verdict: 'SKIP', overallReasoning: 'No outcome met implied probability threshold',
           recommendations: [],
         });
         continue;

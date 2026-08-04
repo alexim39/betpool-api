@@ -17,6 +17,7 @@ export interface DigestPickRow {
   gainsMultiplier: number;
   confidence: number;
   stakable: boolean;
+  whyRecommended?: string;
 }
 
 export interface DigestEmailData {
@@ -83,6 +84,7 @@ function picksSection(picks: DigestPickRow[]): string {
           <div style="font-size:15px;font-weight:700;color:#FFFFFF;margin-top:5px">${esc(p.homeTeam)} <span style="color:rgba(255,255,255,0.35);font-weight:400">vs</span> ${esc(p.awayTeam)}</div>
           <div style="font-size:12px;color:#00E676;margin-top:5px;font-weight:600">Ora's pick — ${esc(p.pick)} <span style="color:rgba(255,255,255,0.5)">@</span> ${p.gainsMultiplier.toFixed(2)}x</div>
           <div style="font-size:10px;color:rgba(255,255,255,0.4);margin-top:3px">${p.confidence}% confidence${p.stakable ? '' : ' · staking closed for this pool'}</div>
+          ${p.whyRecommended ? `<div style="font-size:10px;color:rgba(0,230,118,0.8);margin-top:3px">⭐ ${esc(p.whyRecommended)}</div>` : ''}
         </td>
       </tr>
     </table>`).join('<br/>');
@@ -129,7 +131,7 @@ export function renderDigestEmail(d: DigestEmailData, picks: DigestPickRow[], un
   const escalationHtml = escalationSection(d, escalation);
   const content = `
     <p style="margin:0 0 18px">Hi <strong style="color:#FFFFFF">${firstName}</strong>, here's today's briefing from Ora — the best-value plays, your bankroll snapshot, and a heads-up if your activity is ramping up.</p>
-    <div style="font-size:10px;color:#00E676;text-transform:uppercase;font-weight:700;letter-spacing:0.8px;margin-bottom:8px">Today's best-value matches</div>
+    <div style="font-size:10px;color:#00E676;text-transform:uppercase;font-weight:700;letter-spacing:0.8px;margin-bottom:8px">${picks.some(p => p.whyRecommended) ? "Today's picks — tailored to you" : "Today's best-value matches"}</div>
     ${picksSection(picks)}
     <div style="font-size:10px;color:#00E676;text-transform:uppercase;font-weight:700;letter-spacing:0.8px;margin:22px 0 8px">Your bankroll</div>
     ${bankrollSection(d)}

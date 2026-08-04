@@ -84,6 +84,20 @@ describe('digest-utils', () => {
       expect(escalated).toContain('Quick check-in');
       expect(escalated).toContain('support@betpool.tech');
     });
+
+    it('renders a personalized why reason and tailored heading when present', () => {
+      const personalized = [{ ...picks[0], whyRecommended: 'You often back Arsenal.' }];
+      const html = renderDigestEmail(base, personalized, unsub, false);
+      expect(html).toContain('You often back Arsenal.');
+      expect(html).toContain('Today\'s picks — tailored to you');
+      expect(html).not.toContain('Today\'s best-value matches');
+    });
+
+    it('keeps the generic heading when no picks carry a why reason', () => {
+      const html = renderDigestEmail(base, picks, unsub, false);
+      expect(html).toContain('Today\'s best-value matches');
+      expect(html).not.toContain('tailored to you');
+    });
   });
 
   describe('naira / capErrors', () => {

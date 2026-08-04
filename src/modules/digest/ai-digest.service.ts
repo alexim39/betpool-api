@@ -3,7 +3,7 @@ import { UserModel } from '../../models/user.model';
 import { WalletModel } from '../../models/wallet.model';
 import { StakeModel } from '../../models/stake.model';
 import { DigestSendLogModel } from '../../models/digest-send-log.model';
-import { aiGamesService } from '../ai/ai-games.service';
+import { aiGamesService, TodayGame } from '../ai/ai-games.service';
 import { sendEmail } from '../../services/email.service';
 import { logger } from '../../services/logger.service';
 import {
@@ -55,6 +55,16 @@ export class AIDigestService {
     return Number.isFinite(c) ? Math.min(20, Math.max(1, c)) : 5;
   }
 
+  private get poolSize(): number {
+    const p = parseInt(process.env.DIGEST_POOL_SIZE || '10', 10);
+    return Number.isFinite(p) ? Math.min(20, Math.max(5, p)) : 10;
+  }
+
+  private get emailCount(): number {
+    const n = parseInt(process.env.DIGEST_PICK_COUNT || '5', 10);
+    return Number.isFinite(n) ? Math.min(8, Math.max(3, n)) : 5;
+  }
+
   start() {
     if (this.intervalId) return;
     this.intervalId = setInterval(() => this.tick(), 60 * 1000);
@@ -103,11 +113,14 @@ export class AIDigestService {
     const report: RunReport = { mode: opts.dryRunTo ? 'dry-run' : 'full', startedAt: new Date().toISOString(), scanned: 0, sent: 0, failed: 0, errors: [] };
 
     try {
-      const picks = await this.buildPicks();
+      const pool = await this.buildPool();
 
       if (report.mode === 'dry-run') {
         const to = opts.dryRunTo as string;
-        const user = await UserModel.findOne({ email: to }).select('email fullName').lean();
+        const user = await UserModel.findOne({ email: to }).select('_id email fullName').lean();
+        const picks = user
+          ? await this.picksForUser(pool, String((user as any)._id))
+          : this.defaultPicks(pool);
         const data: DigestEmailData = {
           firstName: (user as any)?.fullName || 'Valued Bettor',
           bankroll: 125000,
@@ -123,7 +136,7 @@ export class AIDigestService {
         return report;
       }
 
-      await this.processAllUsers(picks, report);
+      await this.processAllUsers(pool, report);
       return report;
     } finally {
       this.running = false;
@@ -133,30 +146,46 @@ export class AIDigestService {
     }
   }
 
-  private async buildPicks(): Promise<DigestPickRow[]> {
+  private async buildPool(): Promise<TodayGame[]> {
     try {
       const { items } = await aiGamesService.getToday(1);
       return items
         .filter(g => g.pick && g.confidence)
         .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
-        .slice(0, 5)
-        .map(g => ({
-          homeTeam: g.homeTeam,
-          awayTeam: g.awayTeam,
-          league: g.league || 'Football',
-          kickoff: new Date(g.matchDate).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' }),
-          pick: g.pick,
-          gainsMultiplier: g.gainsMultiplier || 0,
-          confidence: g.confidence || 0,
-          stakable: !!g.stakable,
-        }));
+        .slice(0, this.poolSize);
     } catch (e: any) {
-      logger.error('[Daily Digest] buildPicks failed', e);
+      logger.error('[Daily Digest] buildPool failed', e);
       return [];
     }
   }
 
-  private async processAllUsers(picks: DigestPickRow[], report: RunReport): Promise<void> {
+  private defaultPicks(pool: TodayGame[]): DigestPickRow[] {
+    return pool.slice(0, this.emailCount).map(g => this.toRow(g));
+  }
+
+  private toRow(g: TodayGame): DigestPickRow {
+    return {
+      homeTeam: g.homeTeam,
+      awayTeam: g.awayTeam,
+      league: g.league || 'Football',
+      kickoff: new Date(g.matchDate).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' }),
+      pick: g.pick,
+      gainsMultiplier: g.gainsMultiplier || 0,
+      confidence: g.confidence || 0,
+      stakable: !!g.stakable,
+      whyRecommended: g.whyRecommended,
+    };
+  }
+
+  /** Re-ranks the day's pool against the user's profile; cold-start users keep the default order. */
+  async picksForUser(pool: TodayGame[], userId: string): Promise<DigestPickRow[]> {
+    if (!pool.length) return [];
+    if (!userId) return this.defaultPicks(pool);
+    const res = await aiGamesService.personalizeGames(pool, userId);
+    return res.items.slice(0, this.emailCount).map(g => this.toRow(g));
+  }
+
+  private async processAllUsers(pool: TodayGame[], report: RunReport): Promise<void> {
     const day = new Date().toISOString().slice(0, 10);
     let cursor: mongoose.Types.ObjectId | null = null;
 
@@ -177,13 +206,13 @@ export class AIDigestService {
       if (users.length === 0) break;
       report.scanned += users.length;
 
-      await this.processBatchUsers(users, day, picks, report);
+      await this.processBatchUsers(users, day, pool, report);
       cursor = users[users.length - 1]._id;
       await new Promise(res => setImmediate(res));
     }
   }
 
-  private async processBatchUsers(users: ProcessUser[], day: string, picks: DigestPickRow[], report: RunReport): Promise<void> {
+  private async processBatchUsers(users: ProcessUser[], day: string, pool: TodayGame[], report: RunReport): Promise<void> {
     const ids = users.map(u => u._id);
 
     const [wallets, stakeAgg, recentStakes] = await Promise.all([
@@ -256,6 +285,7 @@ export class AIDigestService {
       while (idx < jobs.length) {
         const job = jobs[idx++];
         try {
+          const picks = await this.picksForUser(pool, String(job.u._id));
           await this.sendOne(job.u, job.data, job.escalation, picks, day, report);
         } catch (err: any) {
           report.failed++;
