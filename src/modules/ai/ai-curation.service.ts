@@ -10,6 +10,7 @@ interface BSDEvent {
   id: number;
   league_id: number;
   league?: { name: string };
+  league_name?: string;
   season_id: number;
   home_team_id: number;
   home_team: string;
@@ -176,13 +177,14 @@ export class AICurationService {
     return { 'Authorization': `Token ${this.apiKey}` };
   }
 
-  private leagueName(leagueId: number | undefined | null, fixtureId?: number): string {
+  private leagueName(leagueId: number | undefined | null, fixtureId?: number, raw?: string): string {
     if (fixtureId != null && this.oddsLeagueNames.has(fixtureId)) {
       const real = this.oddsLeagueNames.get(fixtureId);
       if (real) return real;
     }
-    if (leagueId == null) return '';
-    return LEAGUE_NAMES[leagueId] || `League ${leagueId}`;
+    if (raw && !/^\d+$/.test(raw)) return raw;
+    if (leagueId == null) return raw || '';
+    return LEAGUE_NAMES[leagueId] || raw || `League ${leagueId}`;
   }
 
   private async fetchUpcomingFixtures(dateFrom: string, dateTo: string): Promise<BSDEvent[]> {
@@ -519,7 +521,7 @@ export class AICurationService {
       const prompt = `Analyze this football match for BetPool's pod curation:
 
 MATCH: ${fixture.home_team} vs ${fixture.away_team}
-LEAGUE: ${this.leagueName(fixture.league_id, fixture.id)} | Round: ${fixture.round_number || 'N/A'}
+LEAGUE: ${this.leagueName(fixture.league_id, fixture.id, fixture.league?.name || fixture.league_name)} | Round: ${fixture.round_number || 'N/A'}
 DATE: ${fixture.event_date}
 
 TEAM FORM:
@@ -619,7 +621,7 @@ Rules:
 
       const parsed = JSON.parse(content.replace(/```json\s*/gi, '').replace(/```\s*$/g, '').trim());
 
-      const leagueName = this.leagueName(fixture.league_id, fixture.id);
+      const leagueName = this.leagueName(fixture.league_id, fixture.id, fixture.league?.name || fixture.league_name);
 
       // Parse recommendations
       const recommendations: CurationSelection[] = (parsed.recommendations || []).map((r: any) => ({
@@ -675,7 +677,7 @@ Rules:
         fixtureId: fixture.id,
         homeTeam: fixture.home_team,
         awayTeam: fixture.away_team,
-        league: this.leagueName(fixture.league_id, fixture.id),
+        league: this.leagueName(fixture.league_id, fixture.id, fixture.league?.name || fixture.league_name),
         matchDate: fixture.event_date,
         verdict: 'SKIP',
         overallReasoning: `AI analysis failed: ${err.message}`,
@@ -730,7 +732,7 @@ Rules:
         result.skipped++;
         result.fixtures.push({
           fixtureId: fixture.id, homeTeam: fixture.home_team, awayTeam: fixture.away_team,
-          league: this.leagueName(fixture.league_id, fixture.id), matchDate: fixture.event_date,
+          league: this.leagueName(fixture.league_id, fixture.id, fixture.league?.name || fixture.league_name), matchDate: fixture.event_date,
           verdict: 'SKIP', overallReasoning: 'No 1X2 odds data', recommendations: [],
         });
         continue;
@@ -748,7 +750,7 @@ Rules:
         result.skipped++;
         result.fixtures.push({
           fixtureId: fixture.id, homeTeam: fixture.home_team, awayTeam: fixture.away_team,
-          league: this.leagueName(fixture.league_id, fixture.id), matchDate: fixture.event_date,
+          league: this.leagueName(fixture.league_id, fixture.id, fixture.league?.name || fixture.league_name), matchDate: fixture.event_date,
           verdict: 'SKIP', overallReasoning: 'No outcome met 55% implied probability threshold',
           recommendations: [],
         });
@@ -760,7 +762,7 @@ Rules:
       result.recommended++;
       result.fixtures.push({
         fixtureId: fixture.id, homeTeam: fixture.home_team, awayTeam: fixture.away_team,
-        league: this.leagueName(fixture.league_id, fixture.id), matchDate: fixture.event_date,
+        league: this.leagueName(fixture.league_id, fixture.id, fixture.league?.name || fixture.league_name), matchDate: fixture.event_date,
         verdict: 'RECOMMEND',
         overallReasoning: `Odds-based: ${best.selection} @ ${best.rawOdds.toFixed(2)}x (${impliedPct}% implied)`,
         recommendations: [{

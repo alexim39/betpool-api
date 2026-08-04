@@ -745,7 +745,9 @@ Return ONLY valid JSON with no markdown:
           from = new Date(now.getTime() - 86400000);
           break;
         default:
-          from = new Date(now.getTime());
+          // "Today" — start of the current UTC day, so games that kicked off
+          // (or even finished) earlier today stay on the list with live status/score.
+          from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
       }
     }
     if (!to) {

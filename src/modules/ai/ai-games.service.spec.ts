@@ -197,7 +197,7 @@ describe('AIGamesService.list status filters', () => {
     distinctMock.mockResolvedValue([]);
   }
 
-  it('defaults to upcoming window (from now) with no status filter', async () => {
+  it('defaults to a Today window (start of UTC day) so started games stay listed', async () => {
     mockListFind([]);
     await aiGamesService.list({});
     const findCall = findMock.mock.calls.find(c => {
@@ -207,8 +207,10 @@ describe('AIGamesService.list status filters', () => {
     expect(findCall).toBeDefined();
     const matchDate: any = (findCall![0] as any).matchDate;
     const from = new Date(matchDate.$gte);
-    const before = Date.now() - 5 * 1000;
-    expect(from.getTime()).toBeGreaterThanOrEqual(before);
+    const now = new Date();
+    const expectedStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    expect(from.getTime()).toBe(expectedStart);
+    expect(from.getTime()).toBeLessThanOrEqual(now.getTime());
   });
 
   it('applies finished filter with a 7-day past window', async () => {

@@ -8,7 +8,8 @@
     "tsc": "tsc",
     "dev": "ts-node-dev --respawn ./src/server.ts",
     "prod": "tsc && node ./dist/server.js",
-    "create-admin": "node scripts/create-admin.mjs"
+    "create-admin": "node scripts/create-admin.mjs",
+    "backfill-pod-leagues": "tsc && node ./dist/scripts/backfill-pod-leagues.js"
   },
   "author": "Alex Imenwo",
   "license": "ISC",
