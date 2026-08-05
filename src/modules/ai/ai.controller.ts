@@ -44,7 +44,7 @@ async function sendEscalationNotification(userId: string, reason: string, messag
 <p><strong>Email:</strong> ${user.email || 'N/A'}</p>
 <p><strong>Keyword:</strong> ${reason}</p>
 <p><strong>Message:</strong> ${messageContent}</p>
-<p><a href="${process.env.ADMIN_URL || 'http://localhost:4200'}/admin/ora-chat" style="display:inline-block;padding:10px 24px;background:#00E676;color:#0A1428;text-decoration:none;border-radius:8px;font-weight:700;margin-top:16px">View in Admin</a></p>`;
+<p><a href="${process.env.ADMIN_URL || 'https://mgt.betpool.tech'}/admin/ora-chat" style="display:inline-block;padding:10px 24px;background:#00E676;color:#0A1428;text-decoration:none;border-radius:8px;font-weight:700;margin-top:16px">View in Admin</a></p>`;
       await sendEmail(adminEmail, subject, html);
     } catch (e) {
       logger.error('Failed to send escalation email', e);

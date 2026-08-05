@@ -15,6 +15,12 @@ import { adminRoutes } from '../modules/admin';
 import betManagerRoutes from '../modules/bet-manager/bet-manager.routes';
 import abtestRoutes from '../modules/abtest/abtest.routes';
 import abtestAdminRoutes from '../modules/abtest/abtest-admin.routes';
+import oraRecordRoutes from '../modules/orarecord/orarecord.routes';
+import oraPickRoutes from '../modules/ora-pick/ora-pick.routes';
+import loyaltyRoutes from '../modules/loyalty/loyalty.routes';
+import leaderboardRoutes from '../modules/leaderboard/leaderboard.routes';
+import coachingRoutes from '../modules/coaching/coaching.routes';
+import virtualGamesRoutes from '../modules/virtual-games/virtual-games.routes';
 
 import { authMiddleware } from '../middleware/auth.middleware';
 import { adminMiddleware } from '../middleware/admin.middleware';
@@ -47,6 +53,12 @@ router.use('/bet-manager', betManagerRoutes);
 router.use('/featured-games', featuredBannerRoutes);
 router.use('/digest', digestRoutes);
 router.use('/abtest', authMiddleware, abtestRoutes);
+router.use('/ora-record', oraRecordRoutes);
+router.use('/ora', oraPickRoutes);
+router.use('/loyalty', authMiddleware, loyaltyRoutes);
+router.use('/leaderboard', authMiddleware, leaderboardRoutes);
+router.use('/coaching', authMiddleware, coachingRoutes);
+router.use('/virtual-games', virtualGamesRoutes);
 
 // Admin routes (auth + admin middleware applied at this level)
 router.use('/admin', authMiddleware, adminMiddleware, adminLimiter, abtestAdminRoutes, adminRoutes);
