@@ -366,7 +366,8 @@ export class UserService {
         description: `Referral bonus — ${user.fullName} placed their first bet!`,
         reference: `REFBONUS-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
         balanceBefore: referrerWallet.balance - BONUS_AMOUNT,
-        balanceAfter: referrerWallet.balance
+        balanceAfter: referrerWallet.balance,
+        metadata: { referralBonus: true }
       }], { session });
 
       user.referralBonusPaid = true;
@@ -399,7 +400,17 @@ export class UserService {
       .sort({ createdAt: -1 });
 
     const bonusResult = await TransactionModel.aggregate([
-      { $match: { user: new mongoose.Types.ObjectId(userId), type: 'bonus', status: 'completed' } },
+      {
+        $match: {
+          user: new mongoose.Types.ObjectId(userId),
+          type: 'bonus',
+          status: 'completed',
+          $or: [
+            { 'metadata.referralBonus': true },
+            { description: /^Referral bonus/ },
+          ],
+        },
+      },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
     const referralBonus = bonusResult.length > 0 ? bonusResult[0].total : 0;
