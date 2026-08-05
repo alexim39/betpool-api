@@ -6,6 +6,7 @@ import { aiBiService } from './modules/ai/ai-bi.service';
 import { aiGamesService } from './modules/ai/ai-games.service';
 import { walletService } from './services/wallet.service';
 import { aiDigestService } from './modules/digest/ai-digest.service';
+import { oraPickService } from './modules/ora-pick/ora-pick.service';
 import { logger } from './services/logger.service';
 
 // set environment configs
@@ -37,6 +38,11 @@ app.listen(port, () => {
     if (process.env.DAILY_DIGEST !== 'disabled') {
         aiDigestService.start();
         logger.info('[Daily Digest] Background scheduler started');
+    }
+    // Start Ora Pick of the Day push scheduler
+    if (process.env.ORA_PICKS_PUSH !== 'disabled') {
+        oraPickService.startDailyPush();
+        logger.info('[Ora Pick] Daily pick-of-the-day push scheduler started');
     }
     // Run initial T4 financial advisory check
     if (process.env.T4_ADVISORY !== 'disabled') {

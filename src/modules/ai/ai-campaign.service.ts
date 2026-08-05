@@ -195,7 +195,7 @@ export class AICampaignService {
       inAppTitle = t.inAppTitle;
       inAppMessage = t.message;
       smsText = t.sms;
-      emailHtml = `<div style="font-family:sans-serif;max-width:600px"><h2>${t.subject}</h2><p>${t.message}</p><a href="${process.env.FRONTEND_URL || ''}" style="display:inline-block;padding:12px 24px;background:#00E676;color:#000;text-decoration:none;border-radius:8px;font-weight:600">Browse Pods</a></div>`;
+      emailHtml = `<div style="font-family:sans-serif;max-width:600px"><h2>${t.subject}</h2><p>${t.message}</p><a href="${process.env.FRONTEND_URL || 'https://betpool.tech'}" style="display:inline-block;padding:12px 24px;background:#00E676;color:#000;text-decoration:none;border-radius:8px;font-weight:600">Browse Pods</a></div>`;
     }
 
     return {

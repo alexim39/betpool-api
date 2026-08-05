@@ -7,6 +7,8 @@ import { walletService } from '../../services/wallet.service';
 import { notifyStakePlaced, notifyStakeWon, notifyStakeLost, notifyStakeCashedOut } from '../../services/notification.service';
 import { userService } from '../../services/user.service';
 import { abtestService } from '../abtest/abtest.service';
+import { loyaltyService } from '../loyalty/loyalty.service';
+import { coachingService } from '../coaching/coaching.service';
 
 // Type helper to cast Mongoose lean queries
 function toLeanArray<T>(): (query: any) => Promise<T[]> {
@@ -168,6 +170,10 @@ export class StakeService {
       await session.commitTransaction();
 
       userService.payReferralBonusOnStake(data.userId).catch(e => console.error('Referral bonus error', e));
+      
+      loyaltyService.onStakePlaced(data.userId, data.stakeAmount).catch(e => console.error('Loyalty points error', e));
+
+      coachingService.flagIfHighRisk(data.userId).catch(e => console.error('Coaching flag error', e));
       
       await notifyStakePlaced(data.userId, pod.title || 'Pod', data.stakeAmount, potentialPayout).catch(e => console.error(e));
       
@@ -662,6 +668,10 @@ export class StakeService {
         } else if (result === 'lost') {
           await notifyStakeLost(stake.user.toString(), notifPod?.title || 'Pod', stake.stakeAmount - payoutAmount).catch(e => console.error(e));
         }
+      }
+
+      if (result === 'lost') {
+        loyaltyService.maybeCreditCashback(stake).catch(e => console.error('Cashback credit error', e));
       }
 
       return stake;

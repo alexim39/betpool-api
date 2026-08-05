@@ -244,7 +244,7 @@ export async function notifyStakeWon(userId: string, podTitle: string, payout: n
       `<p>Congratulations ${user.fullName || 'there'}!</p>
       <p>Your bet on <strong>"${podTitle}"</strong> won!</p>
       <p><strong>${formatted}</strong> has been credited to your wallet.</p>
-      ${brandedButton('Keep Staking', process.env.FRONTEND_URL || '')}`,
+      ${brandedButton('Keep Staking', process.env.FRONTEND_URL || 'https://betpool.tech')}`,
       `${formatted} won!`
     );
     await sendEmailIfConfigured(user.email, `You Won! ${formatted} Credited`, html);
