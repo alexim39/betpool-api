@@ -12,7 +12,7 @@ class VirtualGamesController {
 
   async play(req: Request, res: Response) {
     try {
-      const userId = (req as any).user?._id || (req as any).user?.id;
+      const userId = (req as any).user?.userId || (req as any).user?._id;
       const { game, choice, amount, idempotencyKey } = req.body;
       const result = await virtualGamesService.play({
         userId,
@@ -29,7 +29,7 @@ class VirtualGamesController {
 
   async history(req: Request, res: Response) {
     try {
-      const userId = (req as any).user?._id || (req as any).user?.id;
+      const userId = (req as any).user?.userId || (req as any).user?._id;
       const page = parseInt(String(req.query.page || '1'), 10) || 1;
       const limit = parseInt(String(req.query.limit || '20'), 10) || 20;
       const data = await virtualGamesService.history(userId, page, limit);
