@@ -6,12 +6,16 @@ export class MatchPoolController {
   // User-facing endpoints
   async listOpen(req: Request, res: Response): Promise<void> {
     try {
-      const { page, limit, search, status } = req.query;
+      const { page, limit, search, status, sortField, sortOrder, from, to } = req.query;
       const result = await matchPoolService.listOpenPools({
         page: page ? parseInt(page as string) : 1,
         limit: limit ? parseInt(limit as string) : 20,
         search: search as string,
-        status: status as string
+        status: status as string,
+        sortField: sortField as string,
+        sortOrder: sortOrder === 'asc' ? 'asc' : sortOrder === 'desc' ? 'desc' : undefined,
+        from: from as string,
+        to: to as string
       });
       res.json({ success: true, data: result });
     } catch (error: any) {

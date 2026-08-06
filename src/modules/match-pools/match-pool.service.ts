@@ -29,7 +29,18 @@ interface PaginationQuery {
   limit?: number;
   search?: string;
   status?: string;
+  sortField?: string;
+  sortOrder?: 'asc' | 'desc';
+  from?: string;
+  to?: string;
 }
+
+const SORT_FIELDS: Record<string, string> = {
+  createdAt: 'createdAt',
+  stakingClosesAt: 'stakingClosesAt',
+  totalPool: 'totalPool',
+  eventTitle: 'eventTitle'
+};
 
 interface PaginatedResult<T> {
   items: T[];
@@ -69,10 +80,19 @@ export class MatchPoolService {
     if (query.search) {
       filter.eventTitle = { $regex: query.search, $options: 'i' };
     }
+    if (query.from || query.to) {
+      filter.stakingClosesAt = {};
+      if (query.from) filter.stakingClosesAt.$gte = new Date(query.from);
+      if (query.to) filter.stakingClosesAt.$lte = new Date(query.to);
+    }
+
+    const sortField = SORT_FIELDS[query.sortField || 'createdAt'] || 'createdAt';
+    const sortOrder: 1 | -1 = query.sortOrder === 'asc' ? 1 : -1;
+    const sort: Record<string, 1 | -1> = { [sortField]: sortOrder };
 
     const [items, total] = await Promise.all([
       MatchPoolModel.find(filter)
-        .sort({ createdAt: -1 })
+        .sort(sort)
         .skip((page - 1) * limit)
         .limit(limit),
       MatchPoolModel.countDocuments(filter)
