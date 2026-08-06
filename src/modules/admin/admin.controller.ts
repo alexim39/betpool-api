@@ -199,6 +199,26 @@ export class AdminController {
     }
   }
 
+  async updateUser(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const actorId = req.user?.userId;
+      const user = await adminService.updateUser(id, req.body || {}, actorId);
+      if (!user) {
+        res.status(404).json({ success: false, message: 'User not found' });
+        return;
+      }
+      res.json({ success: true, data: user, message: 'User updated successfully' });
+    } catch (error) {
+      const err = error as any;
+      logger.error('Admin update user error', error);
+      res.status(err?.statusCode || 500).json({
+        success: false,
+        message: err?.message || 'Failed to update user',
+      });
+    }
+  }
+
   async verifyUserKYC(req: AuthRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;

@@ -137,4 +137,10 @@ export const UserSchema = new Schema({
 UserSchema.set('toJSON', { virtuals: true });
 UserSchema.set('toObject', { virtuals: true });
 
+UserSchema.virtual('registrationDate').get(function (this: IUser) {
+  return this.createdAt;
+});
+
+UserSchema.index({ createdAt: 1 }, { name: 'idx_users_registration_date' });
+
 export const UserModel = mongoose.model<IUser>('User', UserSchema);

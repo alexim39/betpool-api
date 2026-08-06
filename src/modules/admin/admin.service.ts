@@ -51,6 +51,16 @@ interface DashboardData {
   dailyVolume: { date: string; volume: number; count: number }[];
 }
 
+export interface UpdateUserInput {
+  fullName?: string;
+  phone?: string;
+  email?: string;
+  role?: 'user' | 'admin';
+  isSuspended?: boolean;
+}
+
+const USER_SORTABLE_FIELDS = new Set(['createdAt', 'fullName', 'phone', 'lastLoginAt', 'walletBalance']);
+
 export class AdminService {
   private readonly PLATFORM_FEE_PERCENT = 10;
 
@@ -675,7 +685,7 @@ export class AdminService {
       if (query.dateTo) filter.createdAt.$lte = new Date(query.dateTo + 'T23:59:59.999Z');
     }
 
-    const sortField = query.sortBy || 'createdAt';
+    const sortField = USER_SORTABLE_FIELDS.has(query.sortBy || '') ? (query.sortBy as string) : 'createdAt';
     const sortOrder = query.sortOrder === 'asc' ? 1 : -1;
     const sortObj: any = {};
     sortObj[sortField] = sortOrder;
@@ -699,7 +709,7 @@ export class AdminService {
             walletBalance: { $ifNull: [{ $arrayElemAt: ['$wallet.balance', 0] }, 0] },
           },
         },
-        { $addFields: { id: '$_id' } },
+        { $addFields: { id: '$_id', registrationDate: '$createdAt' } },
         { $project: { pinHash: 0, wallet: 0 } },
       ]),
       UserModel.countDocuments(filter),
@@ -769,6 +779,76 @@ export class AdminService {
     if (!user) return null;
 
     user.isSuspended = !user.isSuspended;
+    await user.save();
+    return user;
+  }
+
+  async updateUser(id: string, data: UpdateUserInput, actorId: string): Promise<IUser | null> {
+    const user = await UserModel.findById(id).select('-pinHash');
+    if (!user) return null;
+
+    const set: Record<string, any> = {};
+    const identityChanged: string[] = [];
+
+    if (data.fullName !== undefined) {
+      const name = String(data.fullName).trim();
+      if (!name) throw new AppError('Full name is required', 400);
+      if (name.length > 100) throw new AppError('Full name must be 100 characters or fewer', 400);
+      if (name !== user.fullName) {
+        set.fullName = name;
+        identityChanged.push('fullName');
+      }
+    }
+
+    if (data.phone !== undefined) {
+      const phone = String(data.phone).trim();
+      if (!/^\+?[1-9]\d{1,14}$/.test(phone)) throw new AppError('Invalid phone number format', 400);
+      if (phone !== user.phone) {
+        const existing = await UserModel.findOne({ phone, _id: { $ne: id } });
+        if (existing) throw new AppError('Phone number is already registered to another user', 409);
+        set.phone = phone;
+        identityChanged.push('phone');
+      }
+    }
+
+    if (data.email !== undefined) {
+      const email = String(data.email).trim().toLowerCase();
+      if (email.length > 255) throw new AppError('Email must be 255 characters or fewer', 400);
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new AppError('Invalid email address', 400);
+      if (email !== (user.email || '')) {
+        if (email) {
+          const existing = await UserModel.findOne({ email, _id: { $ne: id } });
+          if (existing) throw new AppError('Email is already registered to another user', 409);
+          set.email = email;
+        } else {
+          set.email = null;
+        }
+        identityChanged.push('email');
+      }
+    }
+
+    if (data.role !== undefined) {
+      if (data.role !== 'user' && data.role !== 'admin') throw new AppError('Invalid role', 400);
+      if (data.role !== user.role) {
+        if (id === actorId) throw new AppError('You cannot change your own role', 400);
+        set.role = data.role;
+        identityChanged.push('role');
+      }
+    }
+
+    if (data.isSuspended !== undefined && data.isSuspended !== user.isSuspended) {
+      if (data.isSuspended && id === actorId) throw new AppError('You cannot suspend your own account', 400);
+      set.isSuspended = data.isSuspended;
+      identityChanged.push('status');
+    }
+
+    if (Object.keys(set).length === 0) return user;
+
+    if (identityChanged.some(change => change === 'phone' || change === 'role' || change === 'status')) {
+      set.tokenVersion = (user.tokenVersion || 0) + 1;
+    }
+
+    Object.assign(user, set);
     await user.save();
     return user;
   }
