@@ -13,6 +13,7 @@ import { aiCampaignController } from '../ai/ai-campaign.controller';
 import { featuredBannerController } from '../featured-banners/featured-banner.controller';
 import { adminChatController } from '../chat/admin-chat.controller';
 import { betManagerAdminController } from '../bet-manager/bet-manager.admin.controller';
+import { virtualGamesController } from '../virtual-games/virtual-games.controller';
 
 const router = Router();
 
@@ -150,5 +151,8 @@ router.get('/bet-manager/tier/:tier', betManagerAdminController.getTierDetail);
 router.post('/bet-manager/settle-cycle', betManagerAdminController.settleCycle);
 router.post('/bet-manager/reconcile', betManagerAdminController.runReconcile);
 router.post('/bet-manager/pools/top-up', betManagerAdminController.topUpPool);
+
+// Virtual Games (admin)
+router.get('/virtual-games/summary', virtualGamesController.adminSummary);
 
 export default router;

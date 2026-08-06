@@ -88,6 +88,32 @@ export interface PlayResult {
   playedAt: string;
 }
 
+export interface VirtualGameGameSummary {
+  game: VirtualGameId;
+  name: string;
+  icon: string;
+  multiplier: number;
+  plays: number;
+  staked: number;
+  wins: number;
+  payout: number;
+  winRate: number;
+  today: { plays: number; staked: number; won: number };
+}
+
+export interface AdminVirtualGamesSummary {
+  games: VirtualGameGameSummary[];
+  totals: {
+    plays: number;
+    staked: number;
+    wins: number;
+    payout: number;
+    winRate: number;
+    today: { plays: number; staked: number; won: number };
+  };
+  bestWin: { amount: number; game: VirtualGameId } | null;
+}
+
 export interface VirtualGameStats {
   totalPlays: number;
   totalStaked: number;
@@ -409,6 +435,118 @@ export class VirtualGamesService {
       bestWin: best?.amount && best.amount > 0
         ? { amount: best.amount, game: best.game as VirtualGameId }
         : null,
+    };
+  }
+
+  async adminSummary(opts?: { from?: string; to?: string }): Promise<AdminVirtualGamesSummary> {
+    const match: Record<string, any> = {};
+    const playedAt: Record<string, any> = {};
+    if (opts?.from && !isNaN(Date.parse(opts.from))) playedAt.$gte = new Date(opts.from);
+    if (opts?.to && !isNaN(Date.parse(opts.to))) playedAt.$lte = new Date(opts.to);
+    if (playedAt.$gte && playedAt.$lte && playedAt.$gte > playedAt.$lte) {
+      throw new Error('From date cannot be after To date');
+    }
+    if (Object.keys(playedAt).length) match.playedAt = playedAt;
+
+    const startOfToday = new Date();
+    startOfToday.setUTCHours(0, 0, 0, 0);
+
+    const [rows] = await VirtualGamePlayModel.aggregate([
+      { $match: match },
+      {
+        $facet: {
+          byGame: [
+            {
+              $group: {
+                _id: '$game',
+                plays: { $sum: 1 },
+                staked: { $sum: '$stakeAmount' },
+                wins: { $sum: { $cond: [{ $eq: ['$result', 'win'] }, 1, 0] } },
+                payout: { $sum: '$payoutAmount' },
+              },
+            },
+          ],
+          todayByGame: [
+            { $match: { playedAt: { $gte: startOfToday } } },
+            {
+              $group: {
+                _id: '$game',
+                plays: { $sum: 1 },
+                staked: { $sum: '$stakeAmount' },
+                won: { $sum: { $cond: [{ $eq: ['$result', 'win'] }, '$payoutAmount', 0] } },
+              },
+            },
+          ],
+          totals: [
+            {
+              $group: {
+                _id: null,
+                plays: { $sum: 1 },
+                staked: { $sum: '$stakeAmount' },
+                wins: { $sum: { $cond: [{ $eq: ['$result', 'win'] }, 1, 0] } },
+                payout: { $sum: '$payoutAmount' },
+              },
+            },
+          ],
+          todayTotals: [
+            { $match: { playedAt: { $gte: startOfToday } } },
+            {
+              $group: {
+                _id: null,
+                plays: { $sum: 1 },
+                staked: { $sum: '$stakeAmount' },
+                won: { $sum: { $cond: [{ $eq: ['$result', 'win'] }, '$payoutAmount', 0] } },
+              },
+            },
+          ],
+          bestWin: [
+            { $sort: { payoutAmount: -1, playedAt: -1 } },
+            { $limit: 1 },
+            { $project: { _id: 0, amount: '$payoutAmount', game: 1 } },
+          ],
+        },
+      },
+    ]);
+
+    const byGame = new Map((rows?.byGame || []).map((r: any) => [r._id, r]));
+    const todayByGame = new Map((rows?.todayByGame || []).map((r: any) => [r._id, r]));
+    const totals = rows?.totals?.[0];
+    const todayTotals = rows?.todayTotals?.[0];
+    const best = rows?.bestWin?.[0];
+
+    const games: VirtualGameGameSummary[] = (Object.values(VIRTUAL_GAMES) as VirtualGameConfig[]).map((cfg) => {
+      const r = byGame.get(cfg.id) as { plays?: number; staked?: number; wins?: number; payout?: number } | undefined;
+      const t = todayByGame.get(cfg.id) as { plays?: number; staked?: number; won?: number } | undefined;
+      const plays = r?.plays ?? 0;
+      const wins = r?.wins ?? 0;
+      return {
+        game: cfg.id,
+        name: cfg.name,
+        icon: cfg.icon,
+        multiplier: cfg.multiplier,
+        plays,
+        staked: r?.staked ?? 0,
+        wins,
+        payout: r?.payout ?? 0,
+        winRate: plays > 0 ? Math.round((wins / plays) * 100) : 0,
+        today: { plays: t?.plays ?? 0, staked: t?.staked ?? 0, won: t?.won ?? 0 },
+      };
+    });
+
+    const totalPlays = totals?.plays ?? 0;
+    const totalWins = totals?.wins ?? 0;
+
+    return {
+      games,
+      totals: {
+        plays: totalPlays,
+        staked: totals?.staked ?? 0,
+        wins: totalWins,
+        payout: totals?.payout ?? 0,
+        winRate: totalPlays > 0 ? Math.round((totalWins / totalPlays) * 100) : 0,
+        today: { plays: todayTotals?.plays ?? 0, staked: todayTotals?.staked ?? 0, won: todayTotals?.won ?? 0 },
+      },
+      bestWin: best?.amount && best.amount > 0 ? { amount: best.amount, game: best.game as VirtualGameId } : null,
     };
   }
 
