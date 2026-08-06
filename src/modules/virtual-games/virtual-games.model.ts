@@ -37,6 +37,6 @@ const VirtualGamePlaySchema = new Schema<IVirtualGamePlay>(
   { timestamps: true }
 );
 
-VirtualGamePlaySchema.index({ user: 1, playedAt: -1 });
+VirtualGamePlaySchema.index({ user: 1, playedAt: -1, game: 1, result: 1 }, { name: 'idx_virtualgames_user_playedAt_game_result' });
 
 export const VirtualGamePlayModel = mongoose.model<IVirtualGamePlay>('VirtualGamePlay', VirtualGamePlaySchema);

@@ -88,6 +88,26 @@ export interface PlayResult {
   playedAt: string;
 }
 
+export interface VirtualGameStats {
+  totalPlays: number;
+  totalStaked: number;
+  totalWins: number;
+  totalPayout: number;
+  winRate: number;
+  today: { plays: number; staked: number; won: number };
+  bestWin: { amount: number; game: VirtualGameId } | null;
+}
+
+export interface HistoryFilter {
+  userId?: string;
+  page?: number;
+  limit?: number;
+  game?: VirtualGameId;
+  result?: 'win' | 'loss';
+}
+
+const VALID_GAME_IDS: VirtualGameId[] = ['coin_flip', 'dice', 'color_wheel'];
+
 /**
  * Deterministic outcome derivation from a server seed + play nonce.
  * Pure function so clients can recompute and verify the result:
@@ -313,18 +333,91 @@ export class VirtualGamesService {
     };
   }
 
-  async history(userId: string, page = 1, limit = 20): Promise<{ items: any[]; total: number }> {
-    const safeLimit = Math.min(Math.max(limit, 1), 100);
-    const skip = Math.max(page - 1, 0) * safeLimit;
+  async history(filter: HistoryFilter = {}, userId?: string): Promise<{ items: any[]; total: number }> {
+    const uid = userId ?? filter.userId;
+    const page = Math.max(1, Math.floor(filter.page || 1));
+    const limit = Math.min(100, Math.max(1, Math.floor(filter.limit || 20)));
+    const skip = (page - 1) * limit;
+    const query: Record<string, any> = { user: uid };
+    if (filter.game && VALID_GAME_IDS.includes(filter.game)) query.game = filter.game;
+    if (filter.result === 'win' || filter.result === 'loss') query.result = filter.result;
     const [items, total] = await Promise.all([
-      VirtualGamePlayModel.find({ user: userId })
+      VirtualGamePlayModel.find(query)
         .sort({ playedAt: -1 })
         .skip(skip)
-        .limit(safeLimit)
+        .limit(limit)
         .lean(),
-      VirtualGamePlayModel.countDocuments({ user: userId }),
+      VirtualGamePlayModel.countDocuments(query),
     ]);
     return { items: items as any[], total };
+  }
+
+  async summary(userId: string): Promise<VirtualGameStats> {
+    const startOfToday = new Date();
+    startOfToday.setUTCHours(0, 0, 0, 0);
+    const id = this.toUserIdSafe(userId);
+    const [rows] = await VirtualGamePlayModel.aggregate([
+      { $match: { user: id } },
+      {
+        $facet: {
+          totals: [
+            {
+              $group: {
+                _id: null,
+                plays: { $sum: 1 },
+                staked: { $sum: '$stakeAmount' },
+                wins: { $sum: { $cond: [{ $eq: ['$result', 'win'] }, 1, 0] } },
+                payout: { $sum: '$payoutAmount' },
+              },
+            },
+          ],
+          today: [
+            { $match: { playedAt: { $gte: startOfToday } } },
+            {
+              $group: {
+                _id: null,
+                plays: { $sum: 1 },
+                staked: { $sum: '$stakeAmount' },
+                won: { $sum: { $cond: [{ $eq: ['$result', 'win'] }, '$payoutAmount', 0] } },
+              },
+            },
+          ],
+          bestWin: [
+            { $sort: { payoutAmount: -1, playedAt: -1 } },
+            { $limit: 1 },
+            { $project: { _id: 0, amount: '$payoutAmount', game: 1 } },
+          ],
+        },
+      },
+    ]);
+
+    const totals = rows?.totals?.[0];
+    const todayRow = rows?.today?.[0];
+    const best = rows?.bestWin?.[0];
+
+    return {
+      totalPlays: totals?.plays ?? 0,
+      totalStaked: totals?.staked ?? 0,
+      totalWins: totals?.wins ?? 0,
+      totalPayout: totals?.payout ?? 0,
+      winRate: totals && totals.plays > 0 ? Math.round(((totals.wins || 0) / totals.plays) * 100) : 0,
+      today: {
+        plays: todayRow?.plays ?? 0,
+        staked: todayRow?.staked ?? 0,
+        won: todayRow?.won ?? 0,
+      },
+      bestWin: best?.amount && best.amount > 0
+        ? { amount: best.amount, game: best.game as VirtualGameId }
+        : null,
+    };
+  }
+
+  private toUserIdSafe(userId: string): mongoose.Types.ObjectId | string {
+    try {
+      return new mongoose.Types.ObjectId(userId);
+    } catch {
+      return userId;
+    }
   }
 }
 
