@@ -49,10 +49,10 @@ describe('WalletService', () => {
 
   describe('initiateDeposit', () => {
     it('should fail for amount below minimum', async () => {
-      const result = await service.initiateDeposit('user-id-1', 50, 'paystack');
+      const result = await service.initiateDeposit('user-id-1', 200, 'paystack');
 
       expect(result.success).toBe(false);
-      expect(result.message).toBe('Minimum deposit is ₦100');
+      expect(result.message).toBe('Minimum deposit is ₦500');
     });
 
     it('should create transaction and return authorization URL for paystack', async () => {

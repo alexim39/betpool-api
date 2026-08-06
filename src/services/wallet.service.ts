@@ -61,8 +61,8 @@ export class WalletService {
     provider: 'paystack',
     metadata?: Record<string, any>
   ): Promise<DepositResult> {
-    if (amount < 5000) {
-      return { success: false, reference: '', message: 'Minimum deposit is ₦5,000' };
+    if (amount < 500) {
+      return { success: false, reference: '', message: 'Minimum deposit is ₦500' };
     }
     if (amount > 1000000) {
       return { success: false, reference: '', message: 'Maximum deposit is ₦1,000,000' };

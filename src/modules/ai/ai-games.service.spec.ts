@@ -324,6 +324,10 @@ describe('AIGamesService personalization', () => {
 });
 
 describe('AIGamesService.syncMatchStatuses', () => {
+  beforeEach(() => {
+    (aiGamesService as any).statusSyncPromise = null;
+  });
+
   it('updates stale non-terminal fixtures with live status and scores', async () => {
     const staleDoc = { _id: 'ga-x', fixtureId: 5005, matchStatus: 'notstarted', statusSyncedAt: null };
     const lean = jest.fn().mockResolvedValue([staleDoc]);

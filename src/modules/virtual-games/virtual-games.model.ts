@@ -26,10 +26,10 @@ const VirtualGamePlaySchema = new Schema<IVirtualGamePlay>(
     multiplier: { type: Number, required: true, min: 1 },
     result: { type: String, enum: ['win', 'loss'], required: true },
     payoutAmount: { type: Number, default: 0, min: 0 },
-    outcome: { type: String, required: true },
+    outcome: { type: String },
     choice: { type: String, required: true },
-    seed: { type: String, required: true },
-    verificationHash: { type: String, required: true },
+    seed: { type: String },
+    verificationHash: { type: String },
     status: { type: String, enum: ['completed'], default: 'completed' },
     metadata: { type: Schema.Types.Mixed, default: {} },
     playedAt: { type: Date, default: Date.now },
@@ -37,6 +37,6 @@ const VirtualGamePlaySchema = new Schema<IVirtualGamePlay>(
   { timestamps: true }
 );
 
-VirtualGamePlaySchema.index({ user: 1, playedAt: -1 });
+VirtualGamePlaySchema.index({ user: 1, playedAt: -1, game: 1, result: 1 }, { name: 'idx_virtualgames_user_playedAt_game_result' });
 
 export const VirtualGamePlayModel = mongoose.model<IVirtualGamePlay>('VirtualGamePlay', VirtualGamePlaySchema);

@@ -69,7 +69,7 @@ class App {
 
     mongoose.connect(mongoUri, {
       maxPoolSize: parseInt(process.env.MONGO_POOL_SIZE || '10'),
-      serverSelectionTimeoutMS: 5000,
+      serverSelectionTimeoutMS: parseInt(process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS || '30000', 10),
       socketTimeoutMS: 45000,
     })
       .then(() => logger.info('MongoDB connected'))

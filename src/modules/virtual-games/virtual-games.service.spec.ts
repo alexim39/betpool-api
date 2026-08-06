@@ -253,9 +253,80 @@ describe('VirtualGamesService.history', () => {
     const skip = jest.fn(() => ({ limit }));
     playFind.mockReturnValue({ sort: jest.fn(() => ({ skip })) });
     playCount.mockResolvedValue(2);
-    const { items, total } = await virtualGamesService.history('u1', 1, 20);
+    const { items, total } = await virtualGamesService.history({ page: 1, limit: 20 }, 'u1');
     expect(items).toHaveLength(2);
     expect(total).toBe(2);
     expect(playFind.mock.calls[0][0]).toEqual({ user: 'u1' });
+    expect(skip).toHaveBeenCalledWith(0);
+    expect(limit).toHaveBeenCalledWith(20);
+  });
+
+  it('applies game and result filters to the query', async () => {
+    const lean = jest.fn().mockResolvedValue([]);
+    const limit = jest.fn(() => ({ lean }));
+    const skip = jest.fn(() => ({ limit }));
+    playFind.mockReturnValue({ sort: jest.fn(() => ({ skip })) });
+    playCount.mockResolvedValue(0);
+    await virtualGamesService.history({ page: 2, limit: 10, game: 'coin_flip', result: 'win' }, 'u1');
+    expect(playFind.mock.calls[0][0]).toEqual({ user: 'u1', game: 'coin_flip', result: 'win' });
+    expect(skip).toHaveBeenCalledWith(10);
+    expect(limit).toHaveBeenCalledWith(10);
+  });
+
+  it('ignores unknown game ids and invalid result values', async () => {
+    const lean = jest.fn().mockResolvedValue([]);
+    const limit = jest.fn(() => ({ lean }));
+    const skip = jest.fn(() => ({ limit }));
+    playFind.mockReturnValue({ sort: jest.fn(() => ({ skip })) });
+    playCount.mockResolvedValue(0);
+
+    await virtualGamesService.history({ game: 'roulette' as any, result: 'draw' as any }, 'u1');
+    expect(playFind.mock.calls[0][0]).toEqual({ user: 'u1' });
+  });
+
+  it('clamps page and limit to safe bounds', async () => {
+    const lean = jest.fn().mockResolvedValue([]);
+    const limit = jest.fn(() => ({ lean }));
+    const skip = jest.fn(() => ({ limit }));
+    playFind.mockReturnValue({ sort: jest.fn(() => ({ skip })) });
+    playCount.mockResolvedValue(0);
+
+    await virtualGamesService.history({ page: 0, limit: 9999 }, 'u1');
+    expect(skip).toHaveBeenCalledWith(0);
+    expect(limit).toHaveBeenCalledWith(100);
+  });
+});
+
+describe('VirtualGamesService.summary', () => {
+  it('rolls up totals, today, win rate and best win', async () => {
+    playAggregate.mockResolvedValue([{
+      totals: [{ _id: null, plays: 10, staked: 50000, wins: 6, payout: 62000 }],
+      today: [{ _id: null, plays: 3, staked: 9000, won: 3800 }],
+      bestWin: [{ amount: 14250, game: 'dice' }],
+    }]);
+
+    const s = await virtualGamesService.summary('u1');
+    expect(s.totalPlays).toBe(10);
+    expect(s.totalStaked).toBe(50000);
+    expect(s.totalWins).toBe(6);
+    expect(s.totalPayout).toBe(62000);
+    expect(s.winRate).toBe(60);
+    expect(s.today).toEqual({ plays: 3, staked: 9000, won: 3800 });
+    expect(s.bestWin).toEqual({ amount: 14250, game: 'dice' });
+  });
+
+  it('returns zeros and null best win when there are no plays', async () => {
+    playAggregate.mockResolvedValue([{}]);
+    const stats = await virtualGamesService.summary('u1');
+    expect(stats.totalPlays).toBe(0);
+    expect(stats.winRate).toBe(0);
+    expect(stats.today.plays).toBe(0);
+    expect(stats.bestWin).toBeNull();
+  });
+
+  it('returns null best win when the best payout is zero', async () => {
+    playAggregate.mockResolvedValue([{ bestWin: [{ _id: 0, amount: 0, game: 'coin_flip' }] }]);
+    const stats = await virtualGamesService.summary('u1');
+    expect(stats.bestWin).toBeNull();
   });
 });

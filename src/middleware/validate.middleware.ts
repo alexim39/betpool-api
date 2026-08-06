@@ -76,7 +76,7 @@ export const validatePlaceStake = [
 ];
 
 export const validateDeposit = [
-  body('amount').isInt({ min: 5000 }).withMessage('Minimum deposit is ₦5,000'),
+  body('amount').isInt({ min: 500 }).withMessage('Minimum deposit is ₦500'),
   body('amount').isInt({ max: 1000000 }).withMessage('Maximum deposit is ₦1,000,000'),
   body('provider').equals('paystack').withMessage('Invalid provider'),
   validate

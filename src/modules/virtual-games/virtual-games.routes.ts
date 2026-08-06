@@ -10,5 +10,6 @@ router.use(authMiddleware);
 router.get('/catalog', apiLimiter, virtualGamesController.catalog.bind(virtualGamesController));
 router.post('/play', apiLimiter, virtualGamesController.play.bind(virtualGamesController));
 router.get('/history', apiLimiter, virtualGamesController.history.bind(virtualGamesController));
+router.get('/stats', apiLimiter, virtualGamesController.stats.bind(virtualGamesController));
 
 export default router;
