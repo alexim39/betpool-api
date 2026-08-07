@@ -245,26 +245,61 @@ export class StakeService {
 
   async getUserStakes(
     userId: string,
-    options: { 
-      status?: IStake['status'] | 'settled';
+    options: {
+      status?: IStake['status'] | 'settled' | 'all';
       page?: number;
       limit?: number;
+      search?: string;
+      sortField?: string;
+      sortOrder?: 'asc' | 'desc';
+      from?: string;
+      to?: string;
     } = {}
-  ): Promise<{ stakes: IStake[]; total: number }> {
+  ): Promise<{ stakes: IStake[]; total: number; page: number; limit: number; totalPages: number }> {
     const query: Record<string, any> = { user: userId };
     if (options.status === 'settled') {
       query.status = { $nin: ['pending', 'confirmed'] };
-    } else if (options.status) {
+    } else if (options.status && options.status !== 'all') {
       query.status = options.status;
     }
 
-    const page = options.page || 1;
-    const limit = Math.min(options.limit || 20, 100);
+    if (options.search && options.search.trim()) {
+      const term = options.search.trim().slice(0, 120).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      query.$or = [
+        { 'items.homeTeam': { $regex: term, $options: 'i' } },
+        { 'items.awayTeam': { $regex: term, $options: 'i' } },
+        { 'items.selection': { $regex: term, $options: 'i' } }
+      ];
+    }
+
+    if (options.from || options.to) {
+      const range: Record<string, Date> = {};
+      if (options.from) {
+        const from = new Date(options.from);
+        if (!isNaN(from.getTime())) range.$gte = from;
+      }
+      if (options.to) {
+        const to = new Date(options.to);
+        if (!isNaN(to.getTime())) range.$lte = new Date(to.getTime() + 86399999);
+      }
+      if (Object.keys(range).length > 0) query.createdAt = range;
+    }
+
+    const page = Math.max(1, Math.floor(options.page || 1));
+    const limit = Math.min(Math.max(1, Math.floor(options.limit || 20)), 100);
+    const SORT_FIELDS: Record<string, string> = {
+      createdAt: 'createdAt',
+      stakeAmount: 'stakeAmount',
+      payout: 'potentialPayout',
+      status: 'status'
+    };
+    const sortField = SORT_FIELDS[options.sortField || 'createdAt'] || 'createdAt';
+    const sortOrder: 1 | -1 = options.sortOrder === 'asc' ? 1 : -1;
 
     const [docs, total] = await Promise.all([
       StakeModel.find(query)
         .populate('pod')
-        .sort({ createdAt: -1 })
+        .sort({ [sortField]: sortOrder })
         .skip((page - 1) * limit)
         .limit(limit)
         .lean(),
@@ -272,7 +307,13 @@ export class StakeService {
     ]);
 
     const stakes = (docs as any[]).map(s => this.attachVirtuals(s));
-    return { stakes: await this.attachLegScores(stakes), total };
+    return {
+      stakes: await this.attachLegScores(stakes),
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit))
+    };
   }
 
   async getActiveStakes(userId: string): Promise<IStake[]> {
