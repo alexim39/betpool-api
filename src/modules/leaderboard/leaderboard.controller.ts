@@ -8,7 +8,16 @@ export class LeaderboardController {
       const period = (req.query.period as LeaderboardPeriod) || 'month';
       const page = parseInt(String(req.query.page || '1'), 10);
       const limit = parseInt(String(req.query.limit || '25'), 10);
-      const data = await leaderboardService.getLeaderboard(req.user!.userId, period, page, limit);
+      const search = typeof req.query.search === 'string' ? req.query.search.slice(0, 120) : undefined;
+      const sortField = typeof req.query.sortField === 'string' ? req.query.sortField.slice(0, 40) : undefined;
+      const sortOrder = (req.query.sortOrder === 'asc' || req.query.sortOrder === 'desc')
+        ? req.query.sortOrder
+        : undefined;
+      const data = await leaderboardService.getLeaderboard(req.user!.userId, period, page, limit, {
+        search,
+        sortField,
+        sortOrder,
+      });
       res.json({ success: true, data });
     } catch (error: any) {
       res.status(500).json({ success: false, message: error.message || 'Failed to load leaderboard' });

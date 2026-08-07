@@ -50,5 +50,6 @@ GameAnalysisSchema.index({ matchDate: 1, podId: 1 });
 GameAnalysisSchema.index({ league: 1, matchDate: 1 });
 GameAnalysisSchema.index({ analyzedAt: -1 });
 GameAnalysisSchema.index({ matchStatus: 1, matchDate: 1 });
+GameAnalysisSchema.index({ createdAt: -1 });
 
 export const GameAnalysisModel = mongoose.model<IGameAnalysis>('GameAnalysis', GameAnalysisSchema);

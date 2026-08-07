@@ -10,6 +10,7 @@ export interface IBetManagerDeposit extends Document {
   depositedAt: Date;
   withdrawableAt: Date | null;
   status: 'locked' | 'unlocked' | 'withdrawn';
+  reference: string;
   createdAt: Date;
 }
 
@@ -23,9 +24,12 @@ const BetManagerDepositSchema = new Schema<IBetManagerDeposit>({
   depositedAt: { type: Date, default: Date.now },
   withdrawableAt: { type: Date, default: null },
   status: { type: String, enum: ['locked', 'unlocked', 'withdrawn'], default: 'locked' },
+  reference: { type: String, trim: true, default: '' },
 }, { timestamps: true });
 
 BetManagerDepositSchema.index({ accountId: 1, status: 1 });
 BetManagerDepositSchema.index({ userId: 1, createdAt: -1 });
+BetManagerDepositSchema.index({ userId: 1, type: 1, status: 1, depositedAt: -1 });
+BetManagerDepositSchema.index({ reference: 1 });
 
 export const BetManagerDepositModel = mongoose.model<IBetManagerDeposit>('BetManagerDeposit', BetManagerDepositSchema);

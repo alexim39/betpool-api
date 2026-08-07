@@ -14,6 +14,10 @@ export interface IBetManagerCycle extends Document {
   platformFee: number;
   performanceFee: number;
   feePaid: boolean;
+  guaranteeTopUp: number;
+  guaranteeShortfall: number;
+  excessCap: number;
+  guaranteePaid: boolean;
   status: 'active' | 'settled';
   settledAt: Date | null;
   createdAt: Date;
@@ -33,6 +37,10 @@ const BetManagerCycleSchema = new Schema<IBetManagerCycle>({
   platformFee: { type: Number, default: 0 },
   performanceFee: { type: Number, default: 0 },
   feePaid: { type: Boolean, default: false },
+  guaranteeTopUp: { type: Number, default: 0 },
+  guaranteeShortfall: { type: Number, default: 0 },
+  excessCap: { type: Number, default: 0 },
+  guaranteePaid: { type: Boolean, default: false },
   status: { type: String, enum: ['active', 'settled'], default: 'active' },
   settledAt: { type: Date, default: null },
 }, { timestamps: true });

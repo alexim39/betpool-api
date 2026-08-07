@@ -27,13 +27,29 @@ export interface OraRecord {
 
 const TTL_MS = 60_000;
 const MIN_SAMPLE = parseInt(process.env.CURATION_ACCURACY_MIN_SAMPLE || '5', 10);
+const MAX_LEAGUES = 20;
+
+export interface OraRecordQuery {
+  league?: string;
+  limit?: number;
+  refresh?: boolean;
+}
+
+function clampInt(value: unknown, fallback: number, min: number, max: number): number {
+  const n = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
 
 export class OraRecordService {
   private cache: { at: number; data: OraRecord } | null = null;
 
-  async getRecord(force = false): Promise<OraRecord> {
+  async getRecord(force = false, query: OraRecordQuery = {}): Promise<OraRecord> {
+    const league = String(query.league ?? '').trim().slice(0, 120).toLowerCase();
+    const limit = clampInt(query.limit, MAX_LEAGUES, 1, MAX_LEAGUES);
     const now = Date.now();
-    if (!force && this.cache && now - this.cache.at < TTL_MS) return this.cache.data;
+    const cacheable = !force && !league;
+    if (cacheable && this.cache && now - this.cache.at < TTL_MS) return this.cache.data;
 
     const start = new Date(Date.now() - 30 * 86400000);
     const accuracy = await curationAccuracyService.getStats();
@@ -54,7 +70,7 @@ export class OraRecordService {
     const totalStaked = settlement?.count ?? 0;
 
     const byLeague: OraLeagueStat[] = (accuracy?.byLeague || [])
-      .filter(l => l.played > 0)
+      .filter(l => l.played > 0 && (!league || String(l.key).toLowerCase() === league))
       .map(l => ({
         league: l.key,
         played: l.played,
@@ -63,7 +79,7 @@ export class OraRecordService {
         sample: (l.played >= MIN_SAMPLE ? 'sufficient' : 'low') as 'sufficient' | 'low',
       }))
       .sort((a, b) => b.played - a.played)
-      .slice(0, 20);
+      .slice(0, limit);
 
     const overall = accuracy && accuracy.played > 0
       ? { played: accuracy.played, won: accuracy.won, winRate: accuracy.winRate }
@@ -83,7 +99,7 @@ export class OraRecordService {
     };
 
     record.signature = this.sign(record);
-    this.cache = { at: now, data: record };
+    if (cacheable) this.cache = { at: now, data: record };
     return record;
   }
 

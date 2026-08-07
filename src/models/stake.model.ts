@@ -133,6 +133,7 @@ StakeSchema.index({ pod: 1, status: 1 });
 StakeSchema.index({ status: 1, createdAt: -1 });
 StakeSchema.index({ user: 1, pod: 1 });
 StakeSchema.index({ 'items.pod': 1 });
+StakeSchema.index({ status: 1, settledAt: -1 });
 
 StakeSchema.virtual('isActive').get(function(this: IStake) {
   return ['pending', 'confirmed'].includes(this.status);

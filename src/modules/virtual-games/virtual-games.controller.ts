@@ -53,6 +53,17 @@ class VirtualGamesController {
       res.status(500).json({ success: false, message: e.message || 'Failed to load stats' });
     }
   }
+
+  async adminSummary(req: Request, res: Response) {
+    try {
+      const from = typeof req.query.from === 'string' ? req.query.from : undefined;
+      const to = typeof req.query.to === 'string' ? req.query.to : undefined;
+      const data = await virtualGamesService.adminSummary({ from, to });
+      res.json({ success: true, data });
+    } catch (e: any) {
+      res.status(400).json({ success: false, message: e.message || 'Failed to load virtual games summary' });
+    }
+  }
 }
 
 export const virtualGamesController = new VirtualGamesController();

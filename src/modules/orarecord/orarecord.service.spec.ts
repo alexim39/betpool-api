@@ -71,4 +71,26 @@ describe('OraRecordService.getRecord', () => {
     expect(stakeAgg).toHaveBeenCalledTimes(1);
     expect(second.sampledAt).toBeDefined();
   });
+
+  it('filters by league, clamps limit and re-computes the signature', async () => {
+    const record = await oraRecordService.getRecord(false, { league: 'la liga', limit: 1 });
+
+    expect(record.byLeague).toHaveLength(1);
+    expect(record.byLeague[0].league).toBe('La Liga');
+    expect(record.byLeague[0].sample).toBe('low');
+    expect(record.signature).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('bypasses the cache when force refresh is requested', async () => {
+    await oraRecordService.getRecord();
+    await oraRecordService.getRecord(true);
+
+    expect(stakeAgg).toHaveBeenCalledTimes(2);
+  });
+
+  it('clamps NaN limit to the default and returns an empty list for unknown leagues', async () => {
+    const record = await oraRecordService.getRecord(false, { league: 'Serie A', limit: 'abc' as any });
+
+    expect(record.byLeague).toHaveLength(0);
+  });
 });

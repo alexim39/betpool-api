@@ -24,11 +24,15 @@ export class BetManagerAdminController {
 
   async listAccounts(req: AuthRequest, res: Response): Promise<void> {
     try {
-      const page = parseInt(req.query.page as string) || 1;
-      const limit = parseInt(req.query.limit as string) || 20;
-      const tier = req.query.tier as string | undefined;
-      const search = req.query.search as string | undefined;
-      const result = await betManagerService.listAllAccounts(page, limit, tier, search);
+      const page = parseInt(String(req.query.page || ''), 10);
+      const limit = parseInt(String(req.query.limit || ''), 10);
+      const tier = typeof req.query.tier === 'string' ? req.query.tier.slice(0, 20) : undefined;
+      const search = typeof req.query.search === 'string' ? req.query.search.slice(0, 120) : undefined;
+      const from = typeof req.query.from === 'string' ? req.query.from.slice(0, 40) : undefined;
+      const to = typeof req.query.to === 'string' ? req.query.to.slice(0, 40) : undefined;
+      const sortField = typeof req.query.sortField === 'string' ? req.query.sortField.slice(0, 40) : undefined;
+      const sortOrder = req.query.sortOrder === 'asc' || req.query.sortOrder === 'desc' ? req.query.sortOrder : undefined;
+      const result = await betManagerService.listAllAccounts(page, limit, tier, search, from, to, sortField, sortOrder);
       res.json({ success: true, data: result });
     } catch (error: any) {
       logger.error('BetManager admin listAccounts error', error);

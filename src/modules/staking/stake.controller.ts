@@ -65,11 +65,18 @@ export class StakeController {
         return;
       }
 
-      const { status, page, limit } = req.query;
+      const { status, page, limit, search, sortField, sortOrder, from, to } = req.query;
+      const pageNum = parseInt(page as string, 10);
+      const limitNum = parseInt(limit as string, 10);
       const result = await stakeService.getUserStakes(userId, {
         status: status as any,
-        page: page ? parseInt(page as string) : 1,
-        limit: limit ? parseInt(limit as string) : 20
+        page: isNaN(pageNum) ? 1 : pageNum,
+        limit: isNaN(limitNum) ? 20 : limitNum,
+        search: typeof search === 'string' ? search : undefined,
+        sortField: typeof sortField === 'string' ? sortField : undefined,
+        sortOrder: sortOrder === 'asc' ? 'asc' : sortOrder === 'desc' ? 'desc' : undefined,
+        from: typeof from === 'string' ? from : undefined,
+        to: typeof to === 'string' ? to : undefined
       });
 
       res.json({ success: true, data: result });

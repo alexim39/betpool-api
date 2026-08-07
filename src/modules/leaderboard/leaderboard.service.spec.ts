@@ -61,6 +61,43 @@ describe('LeaderboardService.getLeaderboard', () => {
     expect(page.items[0]).toMatchObject({ rank: 1, userId: 'user-1' });
     expect(page.items[1].userId).toBe('user-9');
   });
+
+  it('searches ranked users by name/phone with escaped regex and skips viewer pinning', async () => {
+    stakeAgg
+      .mockResolvedValueOnce([row('user-2', 45_000, 10_000)])
+      .mockResolvedValueOnce([{ count: 3 }]);
+
+    const page = await leaderboardService.getLeaderboard('user-1', 'month', 1, 25, { search: 'a.c (x)?' });
+
+    const pipeline = stakeAgg.mock.calls[0][0] as any[];
+    const lookup = pipeline.find(s => s.$lookup);
+    expect(lookup.$lookup.from).toBe('users');
+    const userMatch = pipeline.find(s => s.$match && s.$match.$or);
+    expect(userMatch.$match.$or[0]['u.fullName'].source).toBe('a\\.c \\(x\\)\\?');
+    const countPipeline = stakeAgg.mock.calls[1][0] as any[];
+    expect(countPipeline[countPipeline.length - 1]).toEqual({ $count: 'count' });
+    expect(page.total).toBe(3);
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0].userId).toBe('user-2');
+  });
+
+  it('clamps NaN page/limit and rejects unknown sort fields with safe defaults', async () => {
+    stakeAgg
+      .mockResolvedValueOnce([row('user-1', 60_000)])
+      .mockResolvedValueOnce([{ count: 1 }]);
+
+    const page = await leaderboardService.getLeaderboard('user-1', 'all', 'abc' as any, 999, {
+      sortField: 'password',
+      sortOrder: 'asc',
+    });
+
+    const pipeline = stakeAgg.mock.calls[0][0] as any[];
+    expect(pipeline[pipeline.length - 3]).toEqual({ $sort: { totalStaked: 1 } });
+    expect(pipeline[pipeline.length - 2]).toEqual({ $skip: 0 });
+    expect(pipeline[pipeline.length - 1]).toEqual({ $limit: 100 });
+    expect(page.page).toBe(1);
+    expect(page.limit).toBe(100);
+  });
 });
 
 describe('LeaderboardService.myRank', () => {
