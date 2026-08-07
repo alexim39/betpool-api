@@ -9,6 +9,36 @@ import { userService } from './user.service';
 import { notifyDepositSuccess, notifyDepositFailed, notifyWithdrawalSubmitted, notifyWithdrawalCompleted, notifyWithdrawalFailed } from './notification.service';
 import { runTransaction } from '../utils/transaction';
 import { logger } from './logger.service';
+import {
+  TransactionHistoryQuery,
+  TransactionHistoryResult,
+  WALLET_TYPES,
+  WALLET_STATUSES,
+} from '../modules/wallet/wallet.dto';
+
+function clampInt(value: unknown, fallback: number, min: number, max: number): number {
+  const n = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+function escapeRegex(s: string): string {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function parseDate(value: unknown): Date | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const d = new Date(String(value));
+  if (Number.isNaN(d.getTime())) return undefined;
+  return d;
+}
+
+const HISTORY_SORT_FIELDS: Record<string, string> = {
+  createdAt: 'createdAt',
+  amount: 'amount',
+  type: 'type',
+  status: 'status',
+};
 
 interface DepositResult {
   success: boolean;
@@ -756,37 +786,46 @@ export class WalletService {
 
   async getTransactionHistory(
     userId: string,
-    options: { 
-      page?: number; 
-      limit?: number; 
-      type?: string; 
-      status?: string;
-      startDate?: Date;
-      endDate?: Date;
-    } = {}
-  ): Promise<{ transactions: ITransaction[]; total: number }> {
+    options: TransactionHistoryQuery = {}
+  ): Promise<TransactionHistoryResult> {
     const query: Record<string, any> = { user: userId };
-    if (options.type) query.type = options.type;
-    if (options.status) query.status = options.status;
-    if (options.startDate || options.endDate) {
+    if (options.type && WALLET_TYPES.includes(options.type as any)) query.type = options.type;
+    if (options.status && WALLET_STATUSES.includes(options.status as any)) query.status = options.status;
+
+    const start = parseDate(options.startDate ?? options.from);
+    const end = parseDate(options.endDate ?? options.to);
+    if (start || end) {
       query.createdAt = {};
-      if (options.startDate) query.createdAt.$gte = options.startDate;
-      if (options.endDate) query.createdAt.$lte = options.endDate;
+      if (start) query.createdAt.$gte = start;
+      if (end) query.createdAt.$lte = end;
     }
 
-    const page = options.page || 1;
-    const limit = Math.min(options.limit || 20, 100);
+    if (options.search && String(options.search).trim()) {
+      const term = escapeRegex(String(options.search).trim().slice(0, 120));
+      const ors: Record<string, any>[] = [
+        { reference: { $regex: term, $options: 'i' } },
+        { 'metadata.description': { $regex: term, $options: 'i' } },
+      ];
+      const amountNum = Number(String(options.search).trim().replace(/[^\d.-]/g, ''));
+      if (Number.isFinite(amountNum) && amountNum > 0) ors.push({ amount: amountNum });
+      query.$or = ors;
+    }
+
+    const page = clampInt(options.page, 1, 1, 10000);
+    const limit = clampInt(options.limit, 20, 5, 100);
+    const sortField = HISTORY_SORT_FIELDS[options.sortField || 'createdAt'] || 'createdAt';
+    const sortOrder: 1 | -1 = options.sortOrder === 'asc' ? 1 : -1;
 
     const [transactions, total] = await Promise.all([
       TransactionModel.find(query)
-        .sort({ createdAt: -1 })
+        .sort({ [sortField]: sortOrder })
         .skip((page - 1) * limit)
         .limit(limit)
         .lean() as unknown as Promise<ITransaction[]>,
       TransactionModel.countDocuments(query)
     ]);
 
-    return { transactions, total };
+    return { transactions, total, page, limit };
   }
 
   async getWalletSummary(userId: string): Promise<{

@@ -28,14 +28,21 @@ export class WalletController {
         return;
       }
 
-      const { type, status, page, limit, startDate, endDate } = req.query;
+      const { type, status, page, limit, startDate, endDate, from, to, search, sortField, sortOrder } = req.query;
       const result = await walletService.getTransactionHistory(userId, {
-        type: type as any,
-        status: status as any,
-        page: page ? parseInt(page as string) : 1,
-        limit: limit ? parseInt(limit as string) : 20,
-        startDate: startDate ? new Date(startDate as string) : undefined,
-        endDate: endDate ? new Date(endDate as string) : undefined
+        type: typeof type === 'string' ? type.slice(0, 20) : undefined,
+        status: typeof status === 'string' ? status.slice(0, 20) : undefined,
+        search: typeof search === 'string' ? search.slice(0, 120) : undefined,
+        page: page ? Number.parseInt(String(page), 10) : undefined,
+        limit: limit ? Number.parseInt(String(limit), 10) : undefined,
+        from: typeof from === 'string' ? from.slice(0, 40) : undefined,
+        to: typeof to === 'string' ? to.slice(0, 40) : undefined,
+        startDate: startDate ? new Date(String(startDate).slice(0, 40)) : undefined,
+        endDate: endDate ? new Date(String(endDate).slice(0, 40)) : undefined,
+        sortField: sortField === 'createdAt' || sortField === 'amount' || sortField === 'type' || sortField === 'status'
+          ? String(sortField)
+          : undefined,
+        sortOrder: sortOrder === 'asc' || sortOrder === 'desc' ? sortOrder : undefined
       });
 
       res.json({ success: true, data: result });
