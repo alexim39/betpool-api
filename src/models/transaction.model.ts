@@ -154,6 +154,7 @@ const TransactionSchema = new Schema({
 TransactionSchema.index({ user: 1, createdAt: -1 });
 TransactionSchema.index({ user: 1, type: 1, status: 1 });
 TransactionSchema.index({ status: 1, createdAt: -1 });
+TransactionSchema.index({ type: 1, status: 1, completedAt: -1 });
 
 TransactionSchema.set('toJSON', { virtuals: true });
 TransactionSchema.set('toObject', { virtuals: true });
