@@ -26,5 +26,6 @@ const BetManagerAllocationSchema = new Schema<IBetManagerAllocation>({
 }, { timestamps: true });
 
 BetManagerAllocationSchema.index({ cycleId: 1, status: 1 });
+BetManagerAllocationSchema.index({ tier: 1, status: 1, createdAt: -1 });
 
 export const BetManagerAllocationModel = mongoose.model<IBetManagerAllocation>('BetManagerAllocation', BetManagerAllocationSchema);

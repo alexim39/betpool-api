@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
+import { StakeModel } from '../../models/stake.model';
 import { BetManagerAccountModel, IBetManagerAccount, BetManagerTier } from '../../models/bet-manager-account.model';
-import { BetManagerDepositModel, IBetManagerDeposit } from '../../models/bet-manager-deposit.model';
+import { BetManagerDepositModel } from '../../models/bet-manager-deposit.model';
 import { BetManagerCycleModel, IBetManagerCycle } from '../../models/bet-manager-cycle.model';
 import { BetManagerAllocationModel } from '../../models/bet-manager-allocation.model';
 import { WalletModel } from '../../models/wallet.model';
@@ -22,6 +23,29 @@ export const POOL_WALLET_IDS: Record<BetManagerTier, mongoose.Types.ObjectId> = 
   midfielder: new mongoose.Types.ObjectId('000000000000000000000002'),
   striker: new mongoose.Types.ObjectId('000000000000000000000003'),
 };
+
+const VALID_TIERS: BetManagerTier[] = ['goalkeeper', 'defender', 'midfielder', 'striker'];
+const VALID_DEPOSIT_STATUSES = ['locked', 'unlocked', 'withdrawn'];
+
+export interface DepositHistoryQuery {
+  type?: 'deposit' | 'withdrawal';
+  status?: string;
+  from?: string;
+  to?: string;
+  search?: string;
+  sortField?: string;
+  sortOrder?: 'asc' | 'desc';
+}
+
+function clampInt(value: unknown, fallback: number, min: number, max: number): number {
+  const n = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+function escapeRegex(s: string): string {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 export class BetManagerService {
   async getOrCreatePoolWallet(tier: BetManagerTier): Promise<mongoose.Types.ObjectId> {
@@ -83,7 +107,7 @@ export class BetManagerService {
     ]);
     const units = totalUnits[0]?.total || 0;
     const allocs = await BetManagerAllocationModel.aggregate([
-      { $match: { tier, status: { $ne: 'settled' } } },
+      { $match: { tier, status: 'active' } },
       { $group: { _id: null, total: { $sum: '$amount' } } },
     ]);
     const stakedValue = allocs[0]?.total || 0;
@@ -211,6 +235,7 @@ export class BetManagerService {
         depositedAt: new Date(),
         withdrawableAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
         status: 'locked',
+        reference: `BM_DEP_${userId.slice(-6)}_${Date.now()}`,
       }], { session });
 
       const cycle = await BetManagerCycleModel.findOne({ tier, status: 'active' }).session(session);
@@ -224,15 +249,51 @@ export class BetManagerService {
     });
   }
 
-  async getDepositHistory(userId: string, tier: BetManagerTier, page = 1, limit = 20): Promise<{ deposits: IBetManagerDeposit[]; total: number }> {
+  async getDepositHistory(
+    userId: string,
+    tier: BetManagerTier,
+    page = 1,
+    limit = 20,
+    options: DepositHistoryQuery = {}
+  ): Promise<{ deposits: any[]; total: number; page: number; limit: number }> {
+    page = clampInt(page, 1, 1, 10000);
+    limit = clampInt(limit, 20, 5, 100);
     const account = await BetManagerAccountModel.findOne({ userId, tier });
-    if (!account) return { deposits: [], total: 0 };
-    const query = { accountId: account._id };
+    if (!account) return { deposits: [], total: 0, page, limit };
+
+    const query: Record<string, any> = { accountId: account._id };
+    if (options.type === 'deposit' || options.type === 'withdrawal') query.type = options.type;
+    if (options.status && VALID_DEPOSIT_STATUSES.includes(options.status)) query.status = options.status;
+
+    if (options.from || options.to) {
+      const range: Record<string, Date> = {};
+      const from = new Date(String(options.from ?? ''));
+      if (!isNaN(from.getTime())) range.$gte = from;
+      const to = new Date(String(options.to ?? ''));
+      if (!isNaN(to.getTime())) range.$lte = new Date(to.getTime() + 86399999);
+      if (Object.keys(range).length > 0) query.depositedAt = range;
+    }
+
+    if (options.search && options.search.trim()) {
+      const term = escapeRegex(options.search.trim().slice(0, 120));
+      const amountNum = Number(options.search.trim().replace(/[^\d.-]/g, ''));
+      query.$or = [{ reference: { $regex: term, $options: 'i' } }];
+      if (Number.isFinite(amountNum) && amountNum > 0) query.$or.push({ amount: amountNum });
+    }
+
+    const SORT_FIELDS: Record<string, string> = { depositedAt: 'depositedAt', amount: 'amount' };
+    const sortField = SORT_FIELDS[options.sortField || 'depositedAt'] || 'depositedAt';
+    const sortOrder: 1 | -1 = options.sortOrder === 'asc' ? 1 : -1;
+
     const [deposits, total] = await Promise.all([
-      BetManagerDepositModel.find(query).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean() as unknown as Promise<IBetManagerDeposit[]>,
+      BetManagerDepositModel.find(query)
+        .sort({ [sortField]: sortOrder })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
       BetManagerDepositModel.countDocuments(query),
     ]);
-    return { deposits, total };
+    return { deposits, total, page, limit };
   }
 
   async getPerformance(userId: string, tier: BetManagerTier): Promise<{
@@ -261,22 +322,29 @@ export class BetManagerService {
 
   async withdraw(userId: string, tier: BetManagerTier): Promise<{ success: boolean; message: string }> {
     return runTransaction(async (session) => {
-      const summary = await this.getAccountSummary(userId, tier);
-      if (summary.unlockedBalance <= 0) return { success: false, message: 'No unlockable balance available. Deposits are locked for 30 days.' };
-
-      const poolWalletId = POOL_WALLET_IDS[tier];
-      const poolWallet = await WalletModel.findById(poolWalletId).session(session);
-      if (!poolWallet || poolWallet.balance < summary.unlockedBalance) return { success: false, message: 'Insufficient pool liquidity for withdrawal. Try again later.' };
-
       const account = await BetManagerAccountModel.findOne({ userId, tier }).session(session);
       if (!account) return { success: false, message: 'Account not found' };
 
+      const unlockedDeposits = await BetManagerDepositModel.find({
+        accountId: account._id, type: 'deposit', status: 'unlocked',
+      }).session(session);
+      if (unlockedDeposits.length === 0) {
+        return { success: false, message: 'No unlockable balance available. Deposits are locked for 30 days.' };
+      }
+
+      const unlockedUnits = unlockedDeposits.reduce((sum, d) => sum + (d.units || 0), 0);
+      const costBasis = unlockedDeposits.reduce((sum, d) => sum + (d.amount || 0), 0);
+
       const navData = await this.getCurrentNav(tier);
-      const withdrawValue = account.units * navData.nav;
-      const withdrawAmount = Math.min(withdrawValue, poolWallet.balance);
+      const poolWalletId = POOL_WALLET_IDS[tier];
+      const poolWallet = await WalletModel.findById(poolWalletId).session(session);
+      if (!poolWallet) return { success: false, message: 'Insufficient pool liquidity for withdrawal. Try again later.' };
+
+      const withdrawValue = Math.floor(unlockedUnits * navData.nav);
+      const withdrawAmount = Math.min(withdrawValue, Math.floor(poolWallet.balance));
+      if (withdrawAmount <= 0) return { success: false, message: 'Your unlockable balance is worth ₦0 right now — check back after results settle.' };
 
       // 20% service charge on profits (deducted at withdrawal)
-      const costBasis = account.totalDeposited;
       const profit = Math.max(0, withdrawAmount - costBasis);
       const serviceCharge = Math.floor(profit * 0.20);
       const netToUser = withdrawAmount - serviceCharge;
@@ -310,11 +378,11 @@ export class BetManagerService {
 
       account.totalWithdrawn += netToUser;
       account.totalProfit += profit - serviceCharge;
-      account.units = 0;
+      account.units = Math.max(0, account.units - unlockedUnits);
       await account.save({ session });
 
       await BetManagerDepositModel.updateMany(
-        { accountId: account._id, status: { $in: ['locked', 'unlocked'] } },
+        { accountId: account._id, type: 'deposit', status: 'unlocked' },
         { status: 'withdrawn' },
       ).session(session);
 
@@ -328,11 +396,12 @@ export class BetManagerService {
         depositedAt: new Date(),
         withdrawableAt: null,
         status: 'withdrawn',
+        reference: `BM_WDR_${userId.slice(-6)}_${Date.now()}`,
       }], { session });
 
       const cycle = await BetManagerCycleModel.findOne({ tier, status: 'active' }).session(session);
       if (cycle) {
-        cycle.cashBalance = (cycle.cashBalance || 0) - netToUser;
+        cycle.cashBalance = Math.max(0, (cycle.cashBalance || 0) - netToUser);
         await cycle.save({ session });
       }
 
@@ -354,11 +423,9 @@ export class BetManagerService {
   }
 
   async allocateDaily(): Promise<void> {
-    const tiers: BetManagerTier[] = ['goalkeeper', 'defender', 'midfielder', 'striker'];
-    for (const tier of tiers) {
+    for (const tier of VALID_TIERS) {
       try {
-        const cycle = await BetManagerCycleModel.findOne({ tier, status: 'active' }).sort({ cycleNumber: -1 });
-        if (!cycle) continue;
+        const cycle = await this.getOrCreateCycle(tier);
 
         const poolWallet = await WalletModel.findById(POOL_WALLET_IDS[tier]);
         const availableCash = poolWallet?.balance || 0;
@@ -373,7 +440,7 @@ export class BetManagerService {
           {
             $match: {
               status: 'active',
-              currentExposure: { $lt: '$maxExposure' },
+              $expr: { $lt: ['$currentExposure', '$maxTotalExposure'] },
               'metadata.fixtureId': { $exists: true },
               matchDate: { $gte: new Date(), $lte: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) },
             },
@@ -385,7 +452,7 @@ export class BetManagerService {
 
         const selected = pods
           .filter(p => {
-            const mult = p.maxPayout && p.minStake ? p.maxPayout / p.minStake : 1;
+            const mult = p.gainsMultiplier || 1;
             return mult >= TIER_CONFIG[tier].minMultiplier && mult <= TIER_CONFIG[tier].maxMultiplier;
           })
           .slice(0, 5);
@@ -394,41 +461,85 @@ export class BetManagerService {
 
         const allocPerPod = Math.floor(maxAlloc / selected.length);
         const tierPoolWalletId = POOL_WALLET_IDS[tier];
+        const now = new Date();
 
         for (const pod of selected) {
-          const mult = pod.maxPayout && pod.minStake ? pod.maxPayout / pod.minStake : 1;
-          const reference = `BM_ALLOC_${tier}_${pod._id.toString().slice(-6)}_${Date.now()}`;
+          try {
+            if (allocPerPod < (pod.minStake || 100)) continue;
+            const stakeAmount = Math.min(allocPerPod, pod.maxStake || allocPerPod);
+            const mult = pod.gainsMultiplier || 1;
+            const potentialPayout = Math.floor(stakeAmount * mult);
+            if (pod.maxPayout && potentialPayout > pod.maxPayout) continue;
 
-          await TransactionModel.create([{
-            user: tierPoolWalletId,
-            wallet: tierPoolWalletId,
-            type: 'stake',
-            status: 'completed',
-            amount: allocPerPod,
-            fee: 0,
-            netAmount: allocPerPod,
-            balanceBefore: poolWallet!.balance,
-            balanceAfter: poolWallet!.balance - allocPerPod,
-            currency: 'NGN',
-            reference,
-            provider: 'internal',
-            metadata: { description: `Bet Manager ${tier} allocation to pod ${pod.title || pod._id}`, tier, podId: pod._id },
-          }]);
+            const updatedPod = await PodModel.findOneAndUpdate(
+              {
+                _id: pod._id,
+                status: 'active',
+                $expr: { $lte: [{ $add: ['$currentExposure', stakeAmount] }, '$maxTotalExposure'] },
+              },
+              { $inc: { currentExposure: stakeAmount, currentParticipants: 1 } },
+              { new: true }
+            );
+            if (!updatedPod) continue;
 
-          poolWallet!.balance -= allocPerPod;
-          await poolWallet!.save();
+            const wallet = await WalletModel.findOneAndUpdate(
+              { _id: tierPoolWalletId, $expr: { $gte: ['$balance', stakeAmount] } },
+              { $inc: { balance: -stakeAmount }, $set: { lastTransactionAt: now } },
+              { new: true }
+            );
+            if (!wallet) {
+              await PodModel.findByIdAndUpdate(pod._id, { $inc: { currentExposure: -stakeAmount, currentParticipants: -1 } });
+              continue;
+            }
 
-          await BetManagerAllocationModel.create({
-            cycleId: cycle._id,
-            tier,
-            stakeId: new mongoose.Types.ObjectId(),
-            podId: pod._id,
-            amount: allocPerPod,
-            expectedMultiplier: mult,
-            status: 'active',
-          });
+            const platformFee = Math.floor(potentialPayout * 0.1);
+            const netPayout = potentialPayout - platformFee;
+            const stake = await StakeModel.create({
+              user: tierPoolWalletId,
+              pod: pod._id,
+              stakeAmount,
+              potentialPayout,
+              netPayout,
+              platformFee,
+              feePercent: 10,
+              refundPercent: pod.refundPercent || 0,
+              refundAmount: Math.floor(stakeAmount * (pod.refundPercent || 0) / 100),
+              status: 'confirmed',
+              metadata: { betManager: true, tier, cycleNumber: cycle.cycleNumber },
+            });
 
-          cycle.totalStaked = (cycle.totalStaked || 0) + allocPerPod;
+            await TransactionModel.create([{
+              user: tierPoolWalletId,
+              wallet: tierPoolWalletId,
+              type: 'stake',
+              status: 'completed',
+              amount: stakeAmount,
+              fee: 0,
+              netAmount: stakeAmount,
+              balanceBefore: wallet.balance + stakeAmount,
+              balanceAfter: wallet.balance,
+              currency: 'NGN',
+              reference: `BM_ALLOC_${tier}_${pod._id.toString().slice(-6)}_${Date.now()}`,
+              provider: 'internal',
+              relatedStake: stake._id,
+              relatedPod: pod._id,
+              metadata: { description: `Bet Manager ${tier} allocation to pod ${pod.title || pod._id}`, tier, podId: pod._id },
+            }]);
+
+            await BetManagerAllocationModel.create({
+              cycleId: cycle._id,
+              tier,
+              stakeId: stake._id,
+              podId: pod._id,
+              amount: stakeAmount,
+              expectedMultiplier: mult,
+              status: 'active',
+            });
+
+            cycle.totalStaked = (cycle.totalStaked || 0) + stakeAmount;
+          } catch (err) {
+            logger.error('BetManager per-pod allocation error', { tier, podId: pod._id, error: err });
+          }
         }
         await cycle.save();
         logger.info('BetManager daily allocation', { tier, podCount: selected.length, totalAlloc: maxAlloc });
@@ -439,48 +550,51 @@ export class BetManagerService {
   }
 
   async reconcileAllocations(): Promise<void> {
-    const activeAllocs = await BetManagerAllocationModel.find({ status: 'active' }).populate('podId');
+    const activeAllocs = await BetManagerAllocationModel.find({ status: 'active' });
+    const cycleIds = new Set<string>();
+
     for (const alloc of activeAllocs) {
       try {
-        const pod = alloc.podId as any;
-        if (!pod || pod.status === 'active' || pod.status === 'published') continue;
-
-        const tierPoolWalletId = POOL_WALLET_IDS[alloc.tier];
-        const poolWallet = await WalletModel.findById(tierPoolWalletId);
-        if (!poolWallet) continue;
+        const stake = await StakeModel.findById(alloc.stakeId);
+        if (!stake || ['pending', 'confirmed'].includes(stake.status)) continue;
 
         let returns = 0;
         let newStatus: string;
-
-        if (pod.status === 'cancelled' || pod.settlementStatus === 'void') {
-          returns = alloc.amount;
-          newStatus = 'refunded';
-        } else if (pod.settlementStatus === 'settled') {
-          const payout = Math.floor(alloc.amount * alloc.expectedMultiplier);
-          returns = payout;
+        if (stake.status === 'won') {
+          returns = stake.netPayout || 0;
           newStatus = 'won';
+        } else if (stake.status === 'void' || stake.status === 'refunded') {
+          returns = stake.stakeAmount;
+          newStatus = 'refunded';
         } else {
-          returns = 0;
+          returns = stake.refundAmount || 0;
           newStatus = 'lost';
         }
-
-        poolWallet.balance += returns;
-        poolWallet.lastTransactionAt = new Date();
-        await poolWallet.save();
 
         alloc.returns = returns;
         alloc.status = newStatus as any;
         alloc.settledAt = new Date();
         await alloc.save();
-
-        const cycle = await BetManagerCycleModel.findById(alloc.cycleId);
-        if (cycle) {
-          cycle.totalStaked = (cycle.totalStaked || 0) - alloc.amount;
-          cycle.cashBalance = (cycle.cashBalance || 0) + returns;
-          await cycle.save();
-        }
+        cycleIds.add(alloc.cycleId.toString());
       } catch (err) {
         logger.error('BetManager reconcile error', { allocId: alloc._id, error: err });
+      }
+    }
+
+    for (const cycleId of cycleIds) {
+      try {
+        const cycle = await BetManagerCycleModel.findById(cycleId);
+        if (!cycle) continue;
+        const poolWallet = await WalletModel.findById(POOL_WALLET_IDS[cycle.tier]);
+        const outstanding = await BetManagerAllocationModel.aggregate([
+          { $match: { cycleId: cycle._id, status: 'active' } },
+          { $group: { _id: null, total: { $sum: '$amount' } } },
+        ]);
+        cycle.totalStaked = outstanding[0]?.total || 0;
+        cycle.cashBalance = poolWallet?.balance || 0;
+        await cycle.save();
+      } catch (err) {
+        logger.error('BetManager cycle sync error', { cycleId, error: err });
       }
     }
   }
@@ -490,7 +604,11 @@ export class BetManagerService {
     if (!cycle || cycle.endDate > new Date()) return;
 
     const poolWallet = await WalletModel.findById(POOL_WALLET_IDS[tier]);
-    const totalValue = poolWallet?.balance || 0;
+    const outstanding = await BetManagerAllocationModel.aggregate([
+      { $match: { tier, status: 'active' } },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]);
+    const totalValue = (poolWallet?.balance || 0) + (outstanding[0]?.total || 0);
     const totalUnits = await BetManagerAccountModel.aggregate([
       { $match: { tier, status: 'active' } },
       { $group: { _id: null, total: { $sum: '$units' } } },
@@ -573,25 +691,52 @@ export class BetManagerService {
     return { totalAccounts, totalAUM, feesCollected, poolBalances, activeCycles, accountsByTier, aumByTier };
   }
 
-  async listAllAccounts(page = 1, limit = 20, tier?: string, search?: string): Promise<{ accounts: any[]; total: number; page: number; totalPages: number }> {
+  async listAllAccounts(
+    page = 1,
+    limit = 20,
+    tier?: string,
+    search?: string,
+    from?: string,
+    to?: string,
+    sortField = 'totalDeposited',
+    sortOrder: 'asc' | 'desc' = 'desc'
+  ): Promise<{ accounts: any[]; total: number; page: number; totalPages: number }> {
+    page = clampInt(page, 1, 1, 10000);
+    limit = clampInt(limit, 20, 5, 100);
     const match: any = { status: 'active' };
-    if (tier && ['goalkeeper', 'defender', 'midfielder', 'striker'].includes(tier)) match.tier = tier;
+    if (tier && VALID_TIERS.includes(tier as BetManagerTier)) match.tier = tier;
 
-    let userIds: string[] | undefined;
-    if (search) {
+    if (search && search.trim()) {
+      const rx = new RegExp(escapeRegex(search.trim().slice(0, 120)), 'i');
       const users = await mongoose.model('User').find({
         $or: [
-          { phone: { $regex: search, $options: 'i' } },
-          { fullName: { $regex: search, $options: 'i' } },
+          { phone: rx },
+          { fullName: rx },
         ],
       }).select('_id').lean();
-      userIds = users.map((u: any) => u._id.toString());
-      match.userId = { $in: userIds };
+      match.userId = { $in: users.map((u: any) => u._id.toString()) };
     }
+
+    if (from || to) {
+      const range: Record<string, Date> = {};
+      const fromDate = new Date(String(from ?? ''));
+      if (!isNaN(fromDate.getTime())) range.$gte = fromDate;
+      const toDate = new Date(String(to ?? ''));
+      if (!isNaN(toDate.getTime())) range.$lte = new Date(toDate.getTime() + 86399999);
+      if (Object.keys(range).length > 0) match.createdAt = range;
+    }
+
+    const SORT_FIELDS: Record<string, string> = {
+      createdAt: 'createdAt',
+      totalDeposited: 'totalDeposited',
+      units: 'units',
+    };
+    const sf = SORT_FIELDS[String(sortField)] || 'totalDeposited';
+    const so: 1 | -1 = sortOrder === 'asc' ? 1 : -1;
 
     const [accounts, total] = await Promise.all([
       BetManagerAccountModel.find(match)
-        .sort({ totalDeposited: -1 })
+        .sort({ [sf]: so })
         .skip((page - 1) * limit)
         .limit(limit)
         .populate('userId', 'phone fullName email')
@@ -605,10 +750,12 @@ export class BetManagerService {
       return { ...a, currentValue, currentNav: navData.nav };
     }));
 
-    return { accounts: enriched, total, page, totalPages: Math.ceil(total / limit) };
+    return { accounts: enriched, total, page, totalPages: Math.max(1, Math.ceil(total / limit)) };
   }
 
   async listAllDeposits(page = 1, limit = 20, tier?: string, userId?: string, status?: string): Promise<{ deposits: any[]; total: number }> {
+    page = clampInt(page, 1, 1, 10000);
+    limit = clampInt(limit, 20, 5, 100);
     const match: any = {};
     if (tier) match.tier = tier;
     if (userId) match.userId = userId;

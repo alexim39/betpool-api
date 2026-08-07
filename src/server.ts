@@ -7,6 +7,7 @@ import { aiGamesService } from './modules/ai/ai-games.service';
 import { walletService } from './services/wallet.service';
 import { aiDigestService } from './modules/digest/ai-digest.service';
 import { oraPickService } from './modules/ora-pick/ora-pick.service';
+import { betManagerScheduler, ensurePoolWallets } from './modules/bet-manager/bet-manager.scheduler';
 import { logger } from './services/logger.service';
 
 // set environment configs
@@ -58,6 +59,13 @@ app.listen(port, () => {
             }).catch(e => logger.error('[T4 Advisory] Check failed', e));
         }, 6 * 60 * 60 * 1000);
         logger.info('[T4 Advisory] Background check started — every 6 hours');
+    }
+    // Start Bet Manager lifecycle scheduler (unlock → reconcile → allocate → settle; every 2 hours)
+    if (process.env.BM_SCHEDULER !== 'disabled') {
+        ensurePoolWallets().then(() => {
+            betManagerScheduler.start();
+            logger.info('[Bet Manager] Lifecycle scheduler started — every 2 hours');
+        }).catch(e => logger.error('[Bet Manager] Pool wallet bootstrap failed', e));
     }
     // Start withdrawal reconciliation (every 5 minutes)
     if (process.env.WITHDRAWAL_RECONCILIATION !== 'disabled') {

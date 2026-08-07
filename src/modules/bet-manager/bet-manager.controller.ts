@@ -87,9 +87,18 @@ export class BetManagerController {
       const userId = req.user!.userId;
       const tier = parseTier(req.params.tier);
       if (!tier) { res.status(400).json({ success: false, message: 'Invalid tier' }); return; }
-      const page = parseInt(req.query.page as string) || 1;
-      const limit = parseInt(req.query.limit as string) || 20;
-      const result = await betManagerService.getDepositHistory(userId, tier, page, limit);
+      const page = parseInt(String(req.query.page || ''), 10);
+      const limit = parseInt(String(req.query.limit || ''), 10);
+      const type = req.query.type === 'deposit' || req.query.type === 'withdrawal' ? req.query.type : undefined;
+      const status = typeof req.query.status === 'string' ? req.query.status.slice(0, 20) : undefined;
+      const from = typeof req.query.from === 'string' ? req.query.from.slice(0, 40) : undefined;
+      const to = typeof req.query.to === 'string' ? req.query.to.slice(0, 40) : undefined;
+      const search = typeof req.query.search === 'string' ? req.query.search.slice(0, 120) : undefined;
+      const sortField = typeof req.query.sortField === 'string' ? req.query.sortField.slice(0, 40) : undefined;
+      const sortOrder = req.query.sortOrder === 'asc' || req.query.sortOrder === 'desc' ? req.query.sortOrder : undefined;
+      const result = await betManagerService.getDepositHistory(userId, tier, page, limit, {
+        type, status, from, to, search, sortField, sortOrder,
+      });
       res.json({ success: true, data: result });
     } catch (error: any) {
       logger.error('BetManager getDepositHistory error', error);

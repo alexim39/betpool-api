@@ -25,5 +25,6 @@ const BetManagerAccountSchema = new Schema<IBetManagerAccount>({
 }, { timestamps: true });
 
 BetManagerAccountSchema.index({ userId: 1, tier: 1 }, { unique: true });
+BetManagerAccountSchema.index({ tier: 1, status: 1, createdAt: -1 });
 
 export const BetManagerAccountModel = mongoose.model<IBetManagerAccount>('BetManagerAccount', BetManagerAccountSchema);
