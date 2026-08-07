@@ -245,6 +245,69 @@ describe('AIGamesService.list status filters', () => {
   });
 });
 
+describe('AIGamesService.list pagination & sorting security', () => {
+  function mockListFindSpy(docs: any[]) {
+    const calls: any[] = [];
+    const lean = jest.fn().mockResolvedValue(docs);
+    const chain = () => ({
+      sort: (s: any) => {
+        calls.push({ sort: s });
+        return {
+          skip: (p: number) => {
+            calls.push({ skip: p });
+            return {
+              limit: (l: number) => {
+                calls.push({ limit: l });
+                return { lean };
+              },
+            };
+          },
+        };
+      },
+    });
+    findMock.mockReturnValue({ select: chain, collation: chain });
+    countMock.mockResolvedValue(docs.length);
+    distinctMock.mockResolvedValue([]);
+    return calls;
+  }
+
+  it('allows createdAt (timestamp) sorting and clamps page/limit', async () => {
+    const calls = mockListFindSpy([]);
+    const res = await aiGamesService.list({ sortField: 'createdAt', sortOrder: 'desc', page: 0, limit: 500 });
+    const sortCalls = calls.filter(c => 'sort' in c);
+    expect(sortCalls[sortCalls.length - 1].sort).toEqual({ createdAt: -1 });
+    const skipCalls = calls.filter(c => 'skip' in c);
+    expect(skipCalls[skipCalls.length - 1].skip).toBe(0);
+    const limitCalls = calls.filter(c => 'limit' in c);
+    expect(limitCalls[limitCalls.length - 1].limit).toBe(100);
+    expect(res.totalPages).toBe(1);
+  });
+
+  it('escapes regex metacharacters in search terms', async () => {
+    mockListFindSpy([]);
+    await aiGamesService.list({ search: 'a.c (x)? [y]' });
+    const findCall = findMock.mock.calls.find(c => (c[0] as any).$or);
+    expect(findCall).toBeDefined();
+    const rx = (findCall![0] as any).$or[0].homeTeam as RegExp;
+    expect(rx.source).toBe('a\\.c \\(x\\)\\? \\[y\\]');
+    expect(() => new RegExp(rx.source, 'i')).not.toThrow();
+    expect(rx.flags).toBe('i');
+  });
+
+  it('rejects unknown status values and unknown sort fields', async () => {
+    const calls = mockListFindSpy([]);
+    await aiGamesService.list({ status: 'hacked' as any, sortField: 'password', sortOrder: 'desc' });
+    const findCall = findMock.mock.calls.find(c => {
+      const f = c[0] as any;
+      return f.matchDate && f.matchDate.$gte && f.matchDate.$lt && !f.matchStatus;
+    });
+    expect(findCall).toBeDefined();
+    expect((findCall![0] as any).matchStatus).toBeUndefined();
+    const sortCalls = calls.filter(c => 'sort' in c);
+    expect(sortCalls[sortCalls.length - 1].sort).toEqual({ matchDate: -1 });
+  });
+});
+
 describe('AIGamesService personalization', () => {
   function mockListFind(docs: any[]) {
     const lean = jest.fn().mockResolvedValue(docs);

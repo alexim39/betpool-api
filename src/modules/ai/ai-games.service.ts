@@ -759,7 +759,7 @@ Return ONLY valid JSON with no markdown:
   }
 
   async list(query: GamesListQuery = {}, userId?: string): Promise<GamesListResult> {
-    const ALLOWED_SORTS = new Set(['matchDate', 'confidence', 'gainsMultiplier', 'homeTeam', 'awayTeam', 'league', 'analyzedAt']);
+    const ALLOWED_SORTS = new Set(['matchDate', 'confidence', 'gainsMultiplier', 'homeTeam', 'awayTeam', 'league', 'analyzedAt', 'createdAt']);
 
     // Security: sanitize + clamp every input before it touches the query
     const page = Math.max(1, parseInt(String(query.page ?? '1'), 10) || 1);
@@ -804,13 +804,13 @@ Return ONLY valid JSON with no markdown:
     if (status === 'finished') filter.matchStatus = 'finished';
     if (status === 'live') filter.matchStatus = { $in: GAME_LIVE_STATUSES };
 
-    const search = String(query.search ?? '').trim();
+    const search = String(query.search ?? '').trim().slice(0, 120);
     if (search) {
       const rx = new RegExp(this.escapeRegex(search), 'i');
       filter.$or = [{ homeTeam: rx }, { awayTeam: rx }, { league: rx }];
     }
-    if (query.league) filter.league = { $eq: query.league };
-    if (query.marketType) filter.marketType = query.marketType;
+    if (query.league) filter.league = { $eq: String(query.league).slice(0, 120) };
+    if (query.marketType) filter.marketType = String(query.marketType).slice(0, 80);
     if (minConfidence > 0) filter.confidence = { $gte: minConfidence };
     if (stakableOnly) filter.podId = { $ne: null };
 
@@ -853,7 +853,7 @@ Return ONLY valid JSON with no markdown:
       stakableTotal,
       page,
       limit,
-      totalPages: Math.ceil(total / limit),
+      totalPages: Math.max(1, Math.ceil(total / limit)),
       leagues: leagues.filter(Boolean).sort((a: string, b: string) => a.localeCompare(b)),
       personalized,
     };
