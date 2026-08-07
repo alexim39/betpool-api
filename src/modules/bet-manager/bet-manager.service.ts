@@ -24,6 +24,16 @@ export const POOL_WALLET_IDS: Record<BetManagerTier, mongoose.Types.ObjectId> = 
   striker: new mongoose.Types.ObjectId('000000000000000000000003'),
 };
 
+export const GUARANTEE_RESERVE_WALLET_ID = new mongoose.Types.ObjectId('000000000000000000000005');
+export const BUSINESS_WALLET_ID = new mongoose.Types.ObjectId('000000000000000000000006');
+
+export const PERFORMANCE_FEE_RATE = 0.1;
+export const WITHDRAWAL_SERVICE_CHARGE_RATE = 0.1;
+export const RESERVE_FUND_SPLIT = 0.5;
+export const GUARANTEED_MIN_RETURN_PCT = 0.01;
+export const MAX_RETURN_PCT = 0.1;
+export const RESERVE_SEED_AMOUNT = 1_000_000;
+
 const VALID_TIERS: BetManagerTier[] = ['goalkeeper', 'defender', 'midfielder', 'striker'];
 const VALID_DEPOSIT_STATUSES = ['locked', 'unlocked', 'withdrawn'];
 
@@ -61,6 +71,45 @@ export class BetManagerService {
     });
     logger.info('BetManager pool wallet created', { tier, walletId: walletId.toString() });
     return walletId;
+  }
+
+  async getOrCreateSystemWallet(walletId: mongoose.Types.ObjectId, label: string): Promise<mongoose.Types.ObjectId> {
+    const existing = await WalletModel.findById(walletId);
+    if (existing) return walletId;
+    await WalletModel.create({
+      _id: walletId,
+      user: walletId,
+      balance: 0,
+      lockedBalance: 0,
+      currency: 'NGN',
+    });
+    logger.info('BetManager system wallet created', { label, walletId: walletId.toString() });
+    return walletId;
+  }
+
+  async seedGuaranteeReserve(): Promise<void> {
+    await this.getOrCreateSystemWallet(GUARANTEE_RESERVE_WALLET_ID, 'guarantee-reserve');
+    await this.getOrCreateSystemWallet(BUSINESS_WALLET_ID, 'business');
+    if (RESERVE_SEED_AMOUNT <= 0) return;
+
+    const reserve = await WalletModel.findById(GUARANTEE_RESERVE_WALLET_ID);
+    if (!reserve || reserve.balance > 0) return;
+
+    const seeded = await WalletModel.findOneAndUpdate(
+      { _id: BUSINESS_WALLET_ID, balance: { $gte: RESERVE_SEED_AMOUNT } },
+      { $inc: { balance: -RESERVE_SEED_AMOUNT }, $set: { lastTransactionAt: new Date() } },
+      { new: true }
+    );
+    if (!seeded) {
+      logger.warn('BetManager guarantee reserve seed SKIPPED — business wallet balance below seed amount');
+      return;
+    }
+    await WalletModel.findOneAndUpdate(
+      { _id: GUARANTEE_RESERVE_WALLET_ID },
+      { $inc: { balance: RESERVE_SEED_AMOUNT }, $set: { lastTransactionAt: new Date() } },
+      { new: true }
+    );
+    logger.info('BetManager guarantee reserve seeded', { amount: RESERVE_SEED_AMOUNT });
   }
 
   private async getOrCreateCycle(tier: BetManagerTier): Promise<IBetManagerCycle> {
@@ -344,9 +393,9 @@ export class BetManagerService {
       const withdrawAmount = Math.min(withdrawValue, Math.floor(poolWallet.balance));
       if (withdrawAmount <= 0) return { success: false, message: 'Your unlockable balance is worth ₦0 right now — check back after results settle.' };
 
-      // 20% service charge on profits (deducted at withdrawal)
+      // 10% service charge on profits (deducted at withdrawal)
       const profit = Math.max(0, withdrawAmount - costBasis);
-      const serviceCharge = Math.floor(profit * 0.20);
+      const serviceCharge = Math.floor(profit * WITHDRAWAL_SERVICE_CHARGE_RATE);
       const netToUser = withdrawAmount - serviceCharge;
 
       const userWallet = await WalletModel.findOne({ user: userId }).session(session);
@@ -601,40 +650,135 @@ export class BetManagerService {
 
   async settleCycle(tier: BetManagerTier): Promise<void> {
     const cycle = await BetManagerCycleModel.findOne({ tier, status: 'active' }).sort({ cycleNumber: -1 });
-    if (!cycle || cycle.endDate > new Date()) return;
+    if (!cycle || cycle.status !== 'active' || cycle.endDate > new Date()) return;
 
-    const poolWallet = await WalletModel.findById(POOL_WALLET_IDS[tier]);
+    const poolWalletId = POOL_WALLET_IDS[tier];
+    const poolWallet = await WalletModel.findById(poolWalletId);
     const outstanding = await BetManagerAllocationModel.aggregate([
       { $match: { tier, status: 'active' } },
       { $group: { _id: null, total: { $sum: '$amount' } } },
     ]);
-    const totalValue = (poolWallet?.balance || 0) + (outstanding[0]?.total || 0);
     const totalUnits = await BetManagerAccountModel.aggregate([
       { $match: { tier, status: 'active' } },
       { $group: { _id: null, total: { $sum: '$units' } } },
     ]);
     const units = totalUnits[0]?.total || 0;
-    const endingNav = units > 0 ? totalValue / units : cycle.startingNav;
-    const netProfit = totalValue - (cycle.startingNav * cycle.startingUnits);
+    const poolBalance = poolWallet?.balance || 0;
+    const totalValue = poolBalance + (outstanding[0]?.total || 0);
+    const grossEndingNav = units > 0 ? totalValue / units : cycle.startingNav;
+    const realProfit = totalValue - (cycle.startingNav * cycle.startingUnits);
+    const grossReturn = cycle.startingNav > 0 ? (grossEndingNav - cycle.startingNav) / cycle.startingNav : 0;
 
-    let performanceFee = 0;
-    if (netProfit > 0) {
-      performanceFee = Math.floor(netProfit * 0.2);
+    const now = new Date();
+    let netAdjustment = 0;
+    let guaranteeTopUp = 0;
+    let guaranteeShortfall = 0;
+    let excessCap = 0;
+
+    // 1) Guaranteed minimum return floor (1% per cycle) — funded by the Guarantee Reserve, never minted
+    if (grossReturn < GUARANTEED_MIN_RETURN_PCT) {
+      const targetNav = cycle.startingNav * (1 + GUARANTEED_MIN_RETURN_PCT);
+      const required = Math.floor((targetNav - grossEndingNav) * units);
+      if (required > 0) {
+        const reserve = await WalletModel.findById(GUARANTEE_RESERVE_WALLET_ID);
+        const available = reserve?.balance || 0;
+        guaranteeTopUp = Math.min(required, available);
+        if (guaranteeTopUp > 0) {
+          const moved = await WalletModel.findOneAndUpdate(
+            { _id: GUARANTEE_RESERVE_WALLET_ID, balance: { $gte: guaranteeTopUp } },
+            { $inc: { balance: -guaranteeTopUp }, $set: { lastTransactionAt: now } },
+            { new: true }
+          );
+          if (moved) {
+            await WalletModel.findOneAndUpdate(
+              { _id: poolWalletId },
+              { $inc: { balance: guaranteeTopUp }, $set: { lastTransactionAt: now } },
+              { new: true }
+            );
+            netAdjustment += guaranteeTopUp;
+          } else {
+            guaranteeTopUp = 0;
+          }
+        }
+        guaranteeShortfall = required - guaranteeTopUp;
+        if (guaranteeShortfall > 0) {
+          logger.warn('BetManager guarantee shortfall — reserve insufficient', { tier, shortfall: guaranteeShortfall });
+        }
+      }
     }
 
-    const platformFee = TIER_CONFIG[tier].platformFee;
+    // 2) Returns above the 10% advertised ceiling flow into the Guarantee Reserve (compounds safety, keeps the promise exact)
+    if (grossReturn > MAX_RETURN_PCT) {
+      const capNav = cycle.startingNav * (1 + MAX_RETURN_PCT);
+      const excess = Math.floor((grossEndingNav - capNav) * units);
+      if (excess > 0) {
+        const moved = await WalletModel.findOneAndUpdate(
+          { _id: poolWalletId, balance: { $gte: excess } },
+          { $inc: { balance: -excess }, $set: { lastTransactionAt: now } },
+          { new: true }
+        );
+        if (moved) {
+          await WalletModel.findOneAndUpdate(
+            { _id: GUARANTEE_RESERVE_WALLET_ID },
+            { $inc: { balance: excess }, $set: { lastTransactionAt: now } },
+            { new: true }
+          );
+          excessCap = excess;
+          netAdjustment -= excess;
+        }
+      }
+    }
+
+    // 3) Performance fee on REAL net profit only (never on guarantee top-ups); 50% funds the reserve, 50% is business revenue.
+    //    When the guarantee engaged, the fixed platform fee is waived so the promised floor is never eroded.
+    const platformFee = guaranteeTopUp > 0 ? 0 : TIER_CONFIG[tier].platformFee;
+    const performanceFee = realProfit > 0 ? Math.floor(realProfit * PERFORMANCE_FEE_RATE) : 0;
+    const totalFee = performanceFee + platformFee;
+    let feesDeducted = 0;
+    if (totalFee > 0) {
+      const moved = await WalletModel.findOneAndUpdate(
+        { _id: poolWalletId, balance: { $gte: totalFee } },
+        { $inc: { balance: -totalFee }, $set: { lastTransactionAt: now } },
+        { new: true }
+      );
+      if (moved) {
+        const reserveShare = Math.floor((performanceFee * RESERVE_FUND_SPLIT) + platformFee);
+        const businessShare = performanceFee - Math.floor(performanceFee * RESERVE_FUND_SPLIT);
+        await WalletModel.findOneAndUpdate(
+          { _id: GUARANTEE_RESERVE_WALLET_ID },
+          { $inc: { balance: reserveShare }, $set: { lastTransactionAt: now } },
+          { new: true }
+        );
+        await WalletModel.findOneAndUpdate(
+          { _id: BUSINESS_WALLET_ID },
+          { $inc: { balance: businessShare }, $set: { lastTransactionAt: now } },
+          { new: true }
+        );
+        feesDeducted = totalFee;
+        netAdjustment -= totalFee;
+      }
+    }
+
+    const endingNav = units > 0 ? (totalValue + netAdjustment) / units : grossEndingNav;
 
     cycle.endingNav = endingNav;
-    cycle.netProfit = netProfit;
+    cycle.netProfit = realProfit;
     cycle.performanceFee = performanceFee;
     cycle.platformFee = platformFee;
-    cycle.feePaid = true;
+    cycle.feePaid = feesDeducted === totalFee;
+    cycle.guaranteeTopUp = guaranteeTopUp;
+    cycle.guaranteeShortfall = guaranteeShortfall;
+    cycle.excessCap = excessCap;
+    cycle.guaranteePaid = guaranteeTopUp > 0;
     cycle.status = 'settled';
-    cycle.settledAt = new Date();
+    cycle.settledAt = now;
     await cycle.save();
 
     await this.getOrCreateCycle(tier);
-    logger.info('BetManager cycle settled', { tier, cycleNumber: cycle.cycleNumber, netProfit, performanceFee });
+    logger.info('BetManager cycle settled', {
+      tier, cycleNumber: cycle.cycleNumber, grossReturn: parseFloat(grossReturn.toFixed(4)),
+      netProfit: realProfit, performanceFee, guaranteeTopUp, guaranteeShortfall, excessCap, endingNav: parseFloat(endingNav.toFixed(4)),
+    });
   }
 
   async getNavHistory(tier: BetManagerTier): Promise<Array<{ cycleNumber: number; startDate: Date; endDate: Date; startingNav: number; endingNav: number | null; returnPct: number }>> {
@@ -657,6 +801,11 @@ export class BetManagerService {
     activeCycles: number;
     accountsByTier: Record<string, number>;
     aumByTier: Record<string, number>;
+    guaranteeReserve: number;
+    businessBalance: number;
+    totalGuaranteeTopUps: number;
+    totalGuaranteeShortfalls: number;
+    totalExcessCapped: number;
   }> {
     const tiers: BetManagerTier[] = ['goalkeeper', 'defender', 'midfielder', 'striker'];
     const poolBalances: Record<string, number> = {};
@@ -687,8 +836,36 @@ export class BetManagerService {
     const feesCollected = feeResult[0]?.total || 0;
     const activeCycles = await BetManagerCycleModel.countDocuments({ status: 'active' });
 
+    const guaranteeResult = await BetManagerCycleModel.aggregate([
+      { $match: { status: 'settled' } },
+      {
+        $group: {
+          _id: null,
+          topUps: { $sum: '$guaranteeTopUp' },
+          shortfalls: { $sum: '$guaranteeShortfall' },
+          caps: { $sum: '$excessCap' },
+        },
+      },
+    ]);
+    const guaranteeAgg = guaranteeResult[0] || { topUps: 0, shortfalls: 0, caps: 0 };
+    const reserveWallet = await WalletModel.findById(GUARANTEE_RESERVE_WALLET_ID);
+    const businessWallet = await WalletModel.findById(BUSINESS_WALLET_ID);
+
     const totalAccounts = await BetManagerAccountModel.countDocuments({ status: 'active' });
-    return { totalAccounts, totalAUM, feesCollected, poolBalances, activeCycles, accountsByTier, aumByTier };
+    return {
+      totalAccounts,
+      totalAUM,
+      feesCollected,
+      poolBalances,
+      activeCycles,
+      accountsByTier,
+      aumByTier,
+      guaranteeReserve: reserveWallet?.balance || 0,
+      businessBalance: businessWallet?.balance || 0,
+      totalGuaranteeTopUps: guaranteeAgg.topUps,
+      totalGuaranteeShortfalls: guaranteeAgg.shortfalls,
+      totalExcessCapped: guaranteeAgg.caps,
+    };
   }
 
   async listAllAccounts(

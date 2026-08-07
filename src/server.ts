@@ -7,7 +7,7 @@ import { aiGamesService } from './modules/ai/ai-games.service';
 import { walletService } from './services/wallet.service';
 import { aiDigestService } from './modules/digest/ai-digest.service';
 import { oraPickService } from './modules/ora-pick/ora-pick.service';
-import { betManagerScheduler, ensurePoolWallets } from './modules/bet-manager/bet-manager.scheduler';
+import { betManagerScheduler, ensureSystemWallets } from './modules/bet-manager/bet-manager.scheduler';
 import { logger } from './services/logger.service';
 
 // set environment configs
@@ -62,7 +62,7 @@ app.listen(port, () => {
     }
     // Start Bet Manager lifecycle scheduler (unlock → reconcile → allocate → settle; every 2 hours)
     if (process.env.BM_SCHEDULER !== 'disabled') {
-        ensurePoolWallets().then(() => {
+        ensureSystemWallets().then(() => {
             betManagerScheduler.start();
             logger.info('[Bet Manager] Lifecycle scheduler started — every 2 hours');
         }).catch(e => logger.error('[Bet Manager] Pool wallet bootstrap failed', e));

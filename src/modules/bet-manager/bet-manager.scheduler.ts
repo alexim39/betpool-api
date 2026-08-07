@@ -63,4 +63,9 @@ export function ensurePoolWallets(): Promise<mongoose.Types.ObjectId[]> {
   return Promise.all(TIERS.map(tier => betManagerService.getOrCreatePoolWallet(tier)));
 }
 
+export async function ensureSystemWallets(): Promise<void> {
+  await Promise.all(TIERS.map(tier => betManagerService.getOrCreatePoolWallet(tier)));
+  await betManagerService.seedGuaranteeReserve();
+}
+
 export { POOL_WALLET_IDS };

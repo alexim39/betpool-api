@@ -6,7 +6,7 @@ import { BetManagerAllocationModel } from '../../models/bet-manager-allocation.m
 import { WalletModel } from '../../models/wallet.model';
 import { TransactionModel } from '../../models/transaction.model';
 import { PodModel } from '../../models/pod.model';
-import { betManagerService, POOL_WALLET_IDS } from './bet-manager.service';
+import { betManagerService, POOL_WALLET_IDS, GUARANTEE_RESERVE_WALLET_ID } from './bet-manager.service';
 
 jest.mock('../../models/stake.model', () => ({
   StakeModel: { create: jest.fn(), findById: jest.fn() },
@@ -227,7 +227,7 @@ describe('BetManagerService.reconcileAllocations', () => {
 });
 
 describe('BetManagerService.withdraw', () => {
-  it('redeems only unlocked deposits and deducts a 20% service charge on profit', async () => {
+  it('redeems only unlocked deposits and deducts a 10% service charge on profit', async () => {
     accountFindOne.mockReturnValue(sessioned({
       _id: 'account-1',
       tier: 'goalkeeper',
@@ -265,7 +265,7 @@ describe('BetManagerService.withdraw', () => {
     expect(depositCreate.mock.calls[0][0]).toEqual([expect.objectContaining({ type: 'withdrawal', status: 'withdrawn' })]);
     const tx = (TransactionModel.create as jest.Mock).mock.calls[0][0][0];
     expect(tx.reference).toMatch(/^BM_WDR_/);
-    expect(tx.fee).toBeGreaterThan(0);
+    expect(tx.fee).toBe(500);
   });
 
   it('rejects withdrawal when nothing is unlocked yet', async () => {
@@ -280,20 +280,87 @@ describe('BetManagerService.withdraw', () => {
 });
 
 describe('BetManagerService.settleCycle', () => {
-  it('includes outstanding active allocations in the total value and charges 20% performance fee on profit', async () => {
-    const settled: any = activeCycle('goalkeeper', 1, { endDate: new Date(Date.now() - 1000) });
-    cycleFindOne.mockReturnValue(sortedCycle(settled));
-    walletFindById.mockResolvedValue({ balance: 30_000 });
-    allocAggregate.mockResolvedValueOnce([{ _id: null, total: 40_000 }]);
-    accountAggregate.mockResolvedValueOnce([{ _id: null, total: 100 }]);
+  const settleFixture = (overrides: Record<string, unknown> = {}) => ({
+    poolBalance: 30_000,
+    outstanding: 0,
+    units: 100_000,
+    startingNav: 1,
+    startingUnits: 100_000,
+    ...overrides,
+  });
 
+  async function runSettle(f: Record<string, unknown>, walletQueue: any[] = []) {
+    const settled: any = activeCycle('goalkeeper', 1, { endDate: new Date(Date.now() - 1000), startingNav: f.startingNav, startingUnits: f.startingUnits });
+    cycleFindOne.mockReturnValue(sortedCycle(settled));
+    walletFindById.mockReset();
+    walletFindById
+      .mockResolvedValueOnce({ _id: POOL_WALLET_IDS.goalkeeper, balance: f.poolBalance })
+      .mockResolvedValueOnce({ _id: 'reserve', balance: f.reserveBalance ?? 0 })
+      .mockResolvedValue({ _id: POOL_WALLET_IDS.goalkeeper, balance: 0 });
+    allocAggregate.mockResolvedValueOnce([{ _id: null, total: f.outstanding }]);
+    accountAggregate.mockResolvedValueOnce([{ _id: null, total: f.units }]);
+    walletFindOneAndUpdate.mockReturnValue({ balance: 0, lastTransactionAt: null });
+    walletFindOneAndUpdate
+      .mockImplementationOnce(() => ({ balance: ((f.poolBalance as number) ?? 0) - 1, lastTransactionAt: null }))
+      .mockImplementationOnce(() => ({ balance: 1, lastTransactionAt: null }));
     await betManagerService.settleCycle('goalkeeper');
+    return settled;
+  }
+
+  it('includes outstanding active allocations in the total value and charges 10% performance fee on real profit', async () => {
+    const f = settleFixture({ poolBalance: 30_000, outstanding: 73_000, units: 100_000 });
+    const settled = await runSettle(f);
 
     expect(settled.status).toBe('settled');
-    expect(settled.endingNav).toBe(700);
-    expect(settled.netProfit).toBe(69_900);
-    expect(settled.performanceFee).toBe(13_980);
+    expect(settled.netProfit).toBe(3_000);
+    expect(settled.performanceFee).toBe(300);
+    expect(settled.excessCap).toBe(0);
+    expect(settled.guaranteeTopUp).toBe(0);
     expect(settled.save).toHaveBeenCalled();
+  });
+
+  it('tops up from the reserve to hit the 1% minimum floor when the pool loses money', async () => {
+    const f = settleFixture({ poolBalance: 100_000, reserveBalance: 10_000 });
+    const settled = await runSettle(f);
+
+    expect(settled.guaranteeTopUp).toBe(1_000);
+    expect(settled.guaranteeShortfall).toBe(0);
+    expect(settled.guaranteePaid).toBe(true);
+    expect(settled.endingNav).toBeCloseTo(1.01, 4);
+    expect(settled.performanceFee).toBe(0);
+    expect(settled.platformFee).toBe(0);
+    expect(walletFindOneAndUpdate.mock.calls[0][0]).toMatchObject({ _id: GUARANTEE_RESERVE_WALLET_ID });
+  });
+
+  it('pays out only what the reserve holds and flags the unfunded shortfall', async () => {
+    const f = settleFixture({ poolBalance: 99_000, reserveBalance: 500 });
+    const settled = await runSettle(f);
+
+    expect(settled.guaranteeTopUp).toBe(500);
+    expect(settled.guaranteeShortfall).toBe(1_500);
+    expect(settled.endingNav).toBeCloseTo(0.995, 4);
+  });
+
+  it('caps returns above 10% and diverts the excess into the reserve', async () => {
+    const f = settleFixture({ poolBalance: 112_000, reserveBalance: 5_000 });
+    const settled = await runSettle(f);
+
+    expect(settled.excessCap).toBe(2_000);
+    expect(settled.endingNav).toBeCloseTo(1.085, 3);
+    expect(settled.guaranteeTopUp).toBe(0);
+  });
+
+  it('does not settle a cycle that is still within its window or already settled', async () => {
+    const active = activeCycle('goalkeeper');
+    cycleFindOne.mockReturnValue(sortedCycle(active));
+    await betManagerService.settleCycle('goalkeeper');
+    expect(active.save).not.toHaveBeenCalled();
+
+    const settled = activeCycle('goalkeeper', 1, { status: 'settled', endDate: new Date(Date.now() - 1000) });
+    cycleFindOne.mockReturnValue(sortedCycle(settled));
+    await betManagerService.settleCycle('goalkeeper');
+    expect(settled.save).not.toHaveBeenCalled();
+    expect(walletFindById).not.toHaveBeenCalled();
   });
 });
 
