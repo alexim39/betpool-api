@@ -6,6 +6,8 @@ const router = Router();
 
 router.get('/', authMiddleware, notificationController.getNotifications);
 router.put('/read-all', authMiddleware, notificationController.markAllAsRead);
+router.put('/bulk-read', authMiddleware, notificationController.bulkMarkAsRead);
+router.put('/bulk-unread', authMiddleware, notificationController.bulkMarkAsUnread);
 router.put('/:id/read', authMiddleware, notificationController.markAsRead);
 router.put('/:id/unread', authMiddleware, notificationController.markAsUnread);
 router.delete('/:id', authMiddleware, notificationController.deleteNotification);
