@@ -1,52 +1,75 @@
 import { Request, Response } from 'express';
-import Notification from '../../models/notification.model';
+import mongoose from 'mongoose';
+import { notificationRepository } from './notification.repository';
 import { logger } from '../../services/logger.service';
 
 const VALID_TYPES = ['deposit', 'withdrawal', 'stake', 'payout', 'referral', 'kyc', 'auth', 'system'];
+const SORT_FIELDS = ['createdAt', 'title', 'type'];
+const MAX_BULK = 100;
+
+function getUserId(req: Request): string | null {
+  return (req as any).user?.userId || (req as any).user?._id || null;
+}
+
+function parseObjectIds(ids: unknown): string[] | null {
+  if (!Array.isArray(ids) || ids.length === 0) return null;
+  if (ids.length > MAX_BULK) return null;
+  if (!ids.every((id) => typeof id === 'string' && mongoose.isValidObjectId(id))) return null;
+  return ids as string[];
+}
 
 export class NotificationController {
   async getNotifications(req: Request, res: Response): Promise<void> {
     try {
-      const userId = (req as any).user?.userId || (req as any).user?._id;
+      const userId = getUserId(req);
       if (!userId) {
         res.status(401).json({ success: false, message: 'Unauthorized' });
         return;
       }
 
-      const page = Math.max(1, parseInt(req.query.page as string) || 1);
-      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
-      const skip = (page - 1) * limit;
+      const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
+      const limit = Math.min(MAX_BULK, Math.max(1, parseInt(req.query.limit as string, 10) || 20));
 
-      const filter: any = { user: userId };
-      if (req.query.type && VALID_TYPES.includes(req.query.type as string)) {
-        filter.type = req.query.type;
-      }
-      if (req.query.read === 'true') filter.read = true;
-      else if (req.query.read === 'false') filter.read = false;
+      const type = req.query.type as string;
+      const readParam = req.query.read as string;
+      const search = typeof req.query.search === 'string' ? req.query.search.trim().slice(0, 100) : '';
+
+      let from: Date | undefined;
+      let to: Date | undefined;
       if (req.query.from || req.query.to) {
-        filter.createdAt = {};
-        if (req.query.from) filter.createdAt.$gte = new Date(req.query.from as string);
-        if (req.query.to) filter.createdAt.$lte = new Date(req.query.to as string);
+        if (req.query.from) {
+          const parsed = new Date(req.query.from as string);
+          if (!isNaN(parsed.getTime())) from = parsed;
+        }
+        if (req.query.to) {
+          const parsed = new Date(req.query.to as string);
+          if (!isNaN(parsed.getTime())) to = parsed;
+        }
       }
 
-      const sortField = req.query.sortField === 'createdAt' ? 'createdAt' : 'createdAt';
+      const sortField = SORT_FIELDS.includes(req.query.sortField as string) ? (req.query.sortField as 'createdAt' | 'title' | 'type') : 'createdAt';
       const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
 
-      const [notifications, total] = await Promise.all([
-        Notification.find(filter)
-          .sort({ [sortField]: sortOrder })
-          .skip(skip)
-          .limit(limit)
-          .lean(),
-        Notification.countDocuments(filter)
+      const [{ items, total }, unreadCount] = await Promise.all([
+        notificationRepository.findPage({
+          userId,
+          type: type && VALID_TYPES.includes(type) ? type : undefined,
+          read: readParam === 'true' ? true : readParam === 'false' ? false : undefined,
+          search: search || undefined,
+          from,
+          to,
+          sortField,
+          sortOrder,
+          page,
+          limit
+        }),
+        notificationRepository.countUnread(userId)
       ]);
-
-      const unreadCount = await Notification.countDocuments({ user: userId, read: false });
 
       res.json({
         success: true,
         data: {
-          notifications,
+          notifications: items,
           total,
           unreadCount,
           page,
@@ -61,19 +84,17 @@ export class NotificationController {
 
   async markAsRead(req: Request, res: Response): Promise<void> {
     try {
-      const userId = (req as any).user?.userId || (req as any).user?._id;
+      const userId = getUserId(req);
       if (!userId) {
         res.status(401).json({ success: false, message: 'Unauthorized' });
         return;
       }
+      if (!mongoose.isValidObjectId(req.params.id)) {
+        res.status(400).json({ success: false, message: 'Invalid notification ID' });
+        return;
+      }
 
-      const { id } = req.params;
-      const notification = await Notification.findOneAndUpdate(
-        { _id: id, user: userId },
-        { read: true },
-        { new: true }
-      );
-
+      const notification = await notificationRepository.markRead(req.params.id, userId);
       if (!notification) {
         res.status(404).json({ success: false, message: 'Notification not found' });
         return;
@@ -86,41 +107,19 @@ export class NotificationController {
     }
   }
 
-  async markAllAsRead(req: Request, res: Response): Promise<void> {
-    try {
-      const userId = (req as any).user?.userId || (req as any).user?._id;
-      if (!userId) {
-        res.status(401).json({ success: false, message: 'Unauthorized' });
-        return;
-      }
-
-      await Notification.updateMany(
-        { user: userId, read: false },
-        { read: true }
-      );
-
-      res.json({ success: true, message: 'All notifications marked as read' });
-    } catch (error) {
-      logger.error('Mark all read error', error);
-      res.status(500).json({ success: false, message: 'Failed to mark notifications as read' });
-    }
-  }
-
   async markAsUnread(req: Request, res: Response): Promise<void> {
     try {
-      const userId = (req as any).user?.userId || (req as any).user?._id;
+      const userId = getUserId(req);
       if (!userId) {
         res.status(401).json({ success: false, message: 'Unauthorized' });
         return;
       }
+      if (!mongoose.isValidObjectId(req.params.id)) {
+        res.status(400).json({ success: false, message: 'Invalid notification ID' });
+        return;
+      }
 
-      const { id } = req.params;
-      const notification = await Notification.findOneAndUpdate(
-        { _id: id, user: userId },
-        { read: false },
-        { new: true }
-      );
-
+      const notification = await notificationRepository.markUnread(req.params.id, userId);
       if (!notification) {
         res.status(404).json({ success: false, message: 'Notification not found' });
         return;
@@ -133,17 +132,79 @@ export class NotificationController {
     }
   }
 
-  async deleteNotification(req: Request, res: Response): Promise<void> {
+  async markAllAsRead(req: Request, res: Response): Promise<void> {
     try {
-      const userId = (req as any).user?.userId || (req as any).user?._id;
+      const userId = getUserId(req);
       if (!userId) {
         res.status(401).json({ success: false, message: 'Unauthorized' });
         return;
       }
 
-      const { id } = req.params;
-      const notification = await Notification.findOneAndDelete({ _id: id, user: userId });
+      await notificationRepository.markAllRead(userId);
+      res.json({ success: true, message: 'All notifications marked as read' });
+    } catch (error) {
+      logger.error('Mark all read error', error);
+      res.status(500).json({ success: false, message: 'Failed to mark notifications as read' });
+    }
+  }
 
+  async bulkMarkAsRead(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = getUserId(req);
+      if (!userId) {
+        res.status(401).json({ success: false, message: 'Unauthorized' });
+        return;
+      }
+
+      const ids = parseObjectIds(req.body?.ids);
+      if (!ids) {
+        res.status(400).json({ success: false, message: 'A valid array of up to 100 notification IDs is required' });
+        return;
+      }
+
+      const result = await notificationRepository.bulkMarkRead(ids, userId);
+      res.json({ success: true, message: `${result.modifiedCount} notification(s) marked as read` });
+    } catch (error) {
+      logger.error('Bulk mark read error', error);
+      res.status(500).json({ success: false, message: 'Failed to update notifications' });
+    }
+  }
+
+  async bulkMarkAsUnread(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = getUserId(req);
+      if (!userId) {
+        res.status(401).json({ success: false, message: 'Unauthorized' });
+        return;
+      }
+
+      const ids = parseObjectIds(req.body?.ids);
+      if (!ids) {
+        res.status(400).json({ success: false, message: 'A valid array of up to 100 notification IDs is required' });
+        return;
+      }
+
+      const result = await notificationRepository.bulkMarkUnread(ids, userId);
+      res.json({ success: true, message: `${result.modifiedCount} notification(s) marked as unread` });
+    } catch (error) {
+      logger.error('Bulk mark unread error', error);
+      res.status(500).json({ success: false, message: 'Failed to update notifications' });
+    }
+  }
+
+  async deleteNotification(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = getUserId(req);
+      if (!userId) {
+        res.status(401).json({ success: false, message: 'Unauthorized' });
+        return;
+      }
+      if (!mongoose.isValidObjectId(req.params.id)) {
+        res.status(400).json({ success: false, message: 'Invalid notification ID' });
+        return;
+      }
+
+      const notification = await notificationRepository.deleteById(req.params.id, userId);
       if (!notification) {
         res.status(404).json({ success: false, message: 'Notification not found' });
         return;
@@ -158,24 +219,19 @@ export class NotificationController {
 
   async bulkDelete(req: Request, res: Response): Promise<void> {
     try {
-      const userId = (req as any).user?.userId || (req as any).user?._id;
+      const userId = getUserId(req);
       if (!userId) {
         res.status(401).json({ success: false, message: 'Unauthorized' });
         return;
       }
 
-      const { ids } = req.body;
-      if (!Array.isArray(ids) || ids.length === 0) {
-        res.status(400).json({ success: false, message: 'No notification IDs provided' });
-        return;
-      }
-      if (ids.length > 100) {
-        res.status(400).json({ success: false, message: 'Cannot delete more than 100 notifications at once' });
+      const ids = parseObjectIds(req.body?.ids);
+      if (!ids) {
+        res.status(400).json({ success: false, message: 'A valid array of up to 100 notification IDs is required' });
         return;
       }
 
-      const result = await Notification.deleteMany({ _id: { $in: ids }, user: userId });
-
+      const result = await notificationRepository.bulkDelete(ids, userId);
       res.json({ success: true, message: `${result.deletedCount} notification(s) deleted` });
     } catch (error) {
       logger.error('Bulk delete notifications error', error);
@@ -185,4 +241,3 @@ export class NotificationController {
 }
 
 export const notificationController = new NotificationController();
-

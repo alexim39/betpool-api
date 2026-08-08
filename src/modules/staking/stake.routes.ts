@@ -9,6 +9,7 @@ const router = Router();
 router.post('/', authMiddleware, stakeLimiter, validatePlaceStake, stakeController.placeStake);
 router.get('/', authMiddleware, stakeController.getUserStakes);
 router.get('/active', authMiddleware, stakeController.getActiveStakes);
+router.get('/summary', authMiddleware, stakeController.getUserBetSummary);
 router.get('/calculate', authMiddleware, stakeController.calculatePayout);
 router.get('/:id', authMiddleware, stakeController.getStakeById);
 router.get('/:id/cashout/quote', authMiddleware, stakeController.getCashoutQuote);
