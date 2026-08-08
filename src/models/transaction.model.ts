@@ -94,8 +94,7 @@ const TransactionSchema = new Schema({
   },
   netAmount: {
     type: Number,
-    required: true,
-    min: 0
+    required: true
   },
   balanceBefore: {
     type: Number,

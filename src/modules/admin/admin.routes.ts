@@ -151,6 +151,7 @@ router.get('/bet-manager/tier/:tier', betManagerAdminController.getTierDetail);
 router.post('/bet-manager/settle-cycle', betManagerAdminController.settleCycle);
 router.post('/bet-manager/reconcile', betManagerAdminController.runReconcile);
 router.post('/bet-manager/pools/top-up', betManagerAdminController.topUpPool);
+router.post('/bet-manager/reserve/seed', betManagerAdminController.seedReserve);
 
 // Virtual Games (admin)
 router.get('/virtual-games/summary', virtualGamesController.adminSummary);
