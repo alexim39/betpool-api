@@ -45,8 +45,8 @@ export class BetManagerController {
       const tier = parseTier(req.params.tier);
       if (!tier) { res.status(400).json({ success: false, message: 'Invalid tier' }); return; }
       const nav = await betManagerService.getCurrentNav(tier);
-      const history = await betManagerService.getNavHistory(tier);
-      res.json({ success: true, data: { current: nav, history } });
+      const { history, daily } = await betManagerService.getNavHistory(tier);
+      res.json({ success: true, data: { current: nav, history, daily } });
     } catch (error: any) {
       logger.error('BetManager getNav error', error);
       res.status(500).json({ success: false, message: error.message || 'Failed to fetch NAV' });

@@ -86,7 +86,7 @@ export class BetManagerAdminController {
       const tier = req.params.tier as BetManagerTier;
       if (!VALID_TIERS.includes(tier)) { res.status(400).json({ success: false, message: 'Invalid tier' }); return; }
       const navData = await betManagerService.getCurrentNav(tier);
-      const navHistory = await betManagerService.getNavHistory(tier);
+      const navHistoryResult = await betManagerService.getNavHistory(tier);
       const activeCycle = await BetManagerCycleModel.findOne({ tier, status: 'active' }).sort({ cycleNumber: -1 }).lean();
       const totalAccounts = await BetManagerAccountModel.countDocuments({ tier, status: 'active' });
       const totalDeposits = await BetManagerDepositModel.countDocuments({ tier, type: 'deposit' });
@@ -98,7 +98,8 @@ export class BetManagerAdminController {
       res.json({ success: true, data: {
         tier,
         nav: navData,
-        navHistory,
+        navHistory: navHistoryResult.history,
+        navHistoryDaily: navHistoryResult.daily,
         activeCycle,
         totalAccounts,
         totalDeposits,

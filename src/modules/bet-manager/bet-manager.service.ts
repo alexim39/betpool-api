@@ -3,6 +3,7 @@ import { StakeModel } from '../../models/stake.model';
 import { BetManagerAccountModel, IBetManagerAccount, BetManagerTier } from '../../models/bet-manager-account.model';
 import { BetManagerDepositModel } from '../../models/bet-manager-deposit.model';
 import { BetManagerCycleModel, IBetManagerCycle } from '../../models/bet-manager-cycle.model';
+import { NavSnapshotModel } from '../../models/nav-snapshot.model';
 import { BetManagerAllocationModel } from '../../models/bet-manager-allocation.model';
 import { WalletModel } from '../../models/wallet.model';
 import { TransactionModel } from '../../models/transaction.model';
@@ -787,9 +788,71 @@ export class BetManagerService {
     });
   }
 
-  async getNavHistory(tier: BetManagerTier): Promise<Array<{ cycleNumber: number; startDate: Date; endDate: Date; startingNav: number; endingNav: number | null; returnPct: number }>> {
+  private dayStart(d: Date): Date {
+    const copy = new Date(d);
+    copy.setUTCHours(0, 0, 0, 0);
+    return copy;
+  }
+
+  /** Upserts today's NAV snapshot for a tier (day granularity, UTC). */
+  private async ensureTodaySnapshot(tier: BetManagerTier): Promise<void> {
+    try {
+      const current = await this.getCurrentNav(tier);
+      const active = await BetManagerCycleModel.findOne({ tier, status: 'active' }).sort({ cycleNumber: -1 });
+      if (!active || current.units <= 0) return;
+      await NavSnapshotModel.updateOne(
+        { tier, at: this.dayStart(new Date()) },
+        { $set: { tier, cycleNumber: active.cycleNumber, nav: current.nav, totalValue: current.totalValue, units: current.units, at: this.dayStart(new Date()) } },
+        { upsert: true },
+      );
+    } catch (e: any) {
+      logger.warn(`[NavSnapshot] today snapshot failed for ${tier}: ${e.message}`);
+    }
+  }
+
+  /**
+   * Backfills snapshots with real anchor values only (never fabricated points):
+   * each settled cycle gets startingNav at its startDate and endingNav at its endDate;
+   * the active cycle gets startingNav at its startDate. Called lazily before serving the
+   * daily series so the progress curve is meaningful from day one.
+   */
+  private async backfillCycleAnchors(tier: BetManagerTier): Promise<void> {
+    try {
+      const cycles = await BetManagerCycleModel.find({ tier }).sort({ cycleNumber: -1 }).limit(24).lean();
+      for (const cycle of cycles) {
+        if (!cycle.startingNav || cycle.startingNav <= 0) continue;
+        const anchors: Array<{ at: Date; nav: number }> = [{ at: cycle.startDate, nav: cycle.startingNav }];
+        if (cycle.status === 'settled' && cycle.endingNav) {
+          anchors.push({ at: cycle.endDate, nav: cycle.endingNav });
+        }
+        for (const anchor of anchors) {
+          await NavSnapshotModel.updateOne(
+            { tier, at: this.dayStart(anchor.at) },
+            { $set: { tier, cycleNumber: cycle.cycleNumber, nav: anchor.nav, at: this.dayStart(anchor.at) } },
+            { upsert: true },
+          );
+        }
+      }
+    } catch (e: any) {
+      logger.warn(`[NavSnapshot] backfill failed for ${tier}: ${e.message}`);
+    }
+  }
+
+  /** Daily NAV series for the last 90 days (ascending, zero-storage-safe). */
+  private async getDailySeries(tier: BetManagerTier): Promise<Array<{ date: string; nav: number }>> {
+    const start = this.dayStart(new Date(Date.now() - 90 * 86400000));
+    const snaps = await NavSnapshotModel.find({ tier, at: { $gte: start } }).sort({ at: 1 }).lean();
+    return snaps.map(s => ({ date: s.at.toISOString().slice(0, 10), nav: s.nav }));
+  }
+
+  async getNavHistory(tier: BetManagerTier): Promise<{
+    history: Array<{ cycleNumber: number; startDate: Date; endDate: Date; startingNav: number; endingNav: number | null; returnPct: number }>;
+    daily: Array<{ date: string; nav: number }>;
+  }> {
+    await this.backfillCycleAnchors(tier);
+    await this.ensureTodaySnapshot(tier);
     const cycles = await BetManagerCycleModel.find({ tier }).sort({ cycleNumber: -1 }).limit(24).lean();
-    return cycles.map(c => ({
+    const history = cycles.map(c => ({
       cycleNumber: c.cycleNumber,
       startDate: c.startDate,
       endDate: c.endDate,
@@ -797,6 +860,8 @@ export class BetManagerService {
       endingNav: c.endingNav,
       returnPct: c.startingNav > 0 && c.endingNav ? parseFloat((((c.endingNav - c.startingNav) / c.startingNav) * 100).toFixed(2)) : 0,
     }));
+    const daily = await this.getDailySeries(tier);
+    return { history, daily };
   }
 
   async getAdminStats(): Promise<{
