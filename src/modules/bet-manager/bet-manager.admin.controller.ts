@@ -156,6 +156,22 @@ export class BetManagerAdminController {
     }
   }
 
+  async seedReserve(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const before = await betManagerService.getSystemWalletBalances();
+      await betManagerService.seedGuaranteeReserve();
+      const after = await betManagerService.getSystemWalletBalances();
+      const seeded = after.reserve > before.reserve;
+      let message = 'Guarantee reserve seeded';
+      if (after.reserve > 0 && !seeded) message = 'Reserve already funded — no change';
+      if (after.reserve === 0) message = 'Reserve not seeded — business wallet balance below seed amount (₦1,000,000)';
+      res.json({ success: true, message, data: { seeded, ...after } });
+    } catch (error: any) {
+      logger.error('BetManager admin seedReserve error', error);
+      res.status(500).json({ success: false, message: error.message || 'Failed to seed reserve' });
+    }
+  }
+
   async getAccountDetail(req: AuthRequest, res: Response): Promise<void> {
     try {
       const accountId = req.params.id;

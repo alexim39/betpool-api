@@ -87,6 +87,12 @@ export class BetManagerService {
     return walletId;
   }
 
+  async getSystemWalletBalances(): Promise<{ reserve: number; business: number }> {
+    const reserve = await WalletModel.findById(GUARANTEE_RESERVE_WALLET_ID);
+    const business = await WalletModel.findById(BUSINESS_WALLET_ID);
+    return { reserve: reserve?.balance || 0, business: business?.balance || 0 };
+  }
+
   async seedGuaranteeReserve(): Promise<void> {
     await this.getOrCreateSystemWallet(GUARANTEE_RESERVE_WALLET_ID, 'guarantee-reserve');
     await this.getOrCreateSystemWallet(BUSINESS_WALLET_ID, 'business');
