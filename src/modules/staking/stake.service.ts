@@ -312,8 +312,77 @@ export class StakeService {
       total,
       page,
       limit,
-      totalPages: Math.max(1, Math.ceil(total / limit))
+      totalPages: Math.max(1, Math.ceil(total / limit)),
     };
+  }
+
+  /**
+   * Settled-bet win/loss summary: lifetime outcome counts plus a zero-filled
+   * daily series (last 14 days, UTC) grouped by settledAt. Voided and
+   * cancelled bets are excluded from the daily bars but shown in overall counts.
+   */
+  async getUserBetSummary(userId: string): Promise<{
+    overall: { played: number; won: number; lost: number; void: number; cashedOut: number; winRate: number } | null;
+    daily: Array<{ date: string; won: number; lost: number; played: number }>;
+  }> {
+    const userIdMatch = new mongoose.Types.ObjectId(userId);
+    const start = new Date(Date.now() - 13 * 86400000);
+    start.setUTCHours(0, 0, 0, 0);
+
+    const [dailyRows, overallRows] = await Promise.all([
+      StakeModel.aggregate([
+        { $match: { user: userIdMatch, status: { $in: ['won', 'lost', 'void'] }, settledAt: { $gte: start } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$settledAt', timezone: 'UTC' } },
+            won: { $sum: { $cond: [{ $eq: ['$status', 'won'] }, 1, 0] } },
+            lost: { $sum: { $cond: [{ $eq: ['$status', 'lost'] }, 1, 0] } },
+          },
+        },
+      ]),
+      StakeModel.aggregate([
+        { $match: { user: userIdMatch, status: { $in: ['won', 'lost', 'void', 'refunded', 'cashed_out', 'cancelled'] } } },
+        {
+          $group: {
+            _id: null,
+            won: { $sum: { $cond: [{ $eq: ['$status', 'won'] }, 1, 0] } },
+            lost: { $sum: { $cond: [{ $in: ['$status', ['lost', 'refunded']] }, 1, 0] } },
+            void: { $sum: { $cond: [{ $in: ['$status', ['void', 'cancelled']] }, 1, 0] } },
+            cashedOut: { $sum: { $cond: [{ $eq: ['$status', 'cashed_out'] }, 1, 0] } },
+          },
+        },
+      ]),
+    ]);
+
+    const dayMap = new Map<string, { won: number; lost: number }>(
+      dailyRows.map(r => [r._id, { won: r.won || 0, lost: r.lost || 0 }]),
+    );
+    const daily: Array<{ date: string; won: number; lost: number; played: number }> = [];
+    for (let i = 13; i >= 0; i--) {
+      const date = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+      const row = dayMap.get(date);
+      const won = row?.won ?? 0;
+      const lost = row?.lost ?? 0;
+      daily.push({ date, won, lost, played: won + lost });
+    }
+
+    const o = overallRows[0];
+    const won = o?.won ?? 0;
+    const lost = o?.lost ?? 0;
+    const voided = o?.void ?? 0;
+    const cashedOut = o?.cashedOut ?? 0;
+    const overall = won + lost + voided + cashedOut > 0
+      ? {
+          played: won + lost + voided + cashedOut,
+          won,
+          lost,
+          void: voided,
+          cashedOut,
+          winRate: won + lost > 0 ? Math.round((won / (won + lost)) * 100) : 0,
+        }
+      : null;
+
+    return { overall, daily };
   }
 
   async getActiveStakes(userId: string): Promise<IStake[]> {

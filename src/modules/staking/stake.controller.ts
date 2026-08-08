@@ -102,6 +102,22 @@ export class StakeController {
     }
   }
 
+  async getUserBetSummary(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) {
+        res.status(401).json({ success: false, message: 'Unauthorized' });
+        return;
+      }
+
+      const result = await stakeService.getUserBetSummary(userId);
+      res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('Get user bet summary error:', error);
+      res.status(500).json({ success: false, message: 'Failed to fetch bet summary' });
+    }
+  }
+
   async getStakeById(req: AuthRequest, res: Response): Promise<void> {
     try {
       const userId = req.user?.userId;
