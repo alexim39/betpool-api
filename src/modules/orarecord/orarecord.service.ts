@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import crypto from 'crypto';
 import { StakeModel } from '../../models/stake.model';
 import { TransactionModel } from '../../models/transaction.model';
+import { PickOutcomeModel } from '../../models/pick-outcome.model';
 import { curationAccuracyService } from '../ai/curation-accuracy.service';
 
 export interface OraLeagueStat {
@@ -12,8 +13,17 @@ export interface OraLeagueStat {
   sample: 'sufficient' | 'low';
 }
 
+export interface OraDailyStat {
+  day: string;
+  played: number;
+  won: number;
+  lost: number;
+  winRate: number;
+}
+
 export interface OraRecord {
   byLeague: OraLeagueStat[];
+  daily: OraDailyStat[];
   overall: { played: number; won: number; winRate: number } | null;
   settledPots30d: number;
   avgSettlementMs: number | null;
@@ -54,7 +64,7 @@ export class OraRecordService {
     const start = new Date(Date.now() - 30 * 86400000);
     const accuracy = await curationAccuracyService.getStats();
 
-    const [settlementAgg, payoutAgg] = await Promise.all([
+    const [settlementAgg, payoutAgg, dailyAgg] = await Promise.all([
       StakeModel.aggregate([
         { $match: { settledAt: { $gte: start }, status: { $in: ['won', 'lost', 'void'] } } },
         { $group: { _id: null, count: { $sum: 1 }, avgMs: { $avg: { $subtract: ['$settledAt', '$createdAt'] } } } },
@@ -62,6 +72,16 @@ export class OraRecordService {
       TransactionModel.aggregate([
         { $match: { type: 'payout', status: 'completed', completedAt: { $gte: start } } },
         { $group: { _id: null, count: { $sum: 1 }, total: { $sum: '$netAmount' }, avgMs: { $avg: { $subtract: ['$completedAt', '$createdAt'] } } } },
+      ]),
+      PickOutcomeModel.aggregate([
+        { $match: { outcome: { $in: ['won', 'lost'] }, settledAt: { $gte: start } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$settledAt', timezone: 'UTC' } },
+            played: { $sum: 1 },
+            won: { $sum: { $cond: [{ $eq: ['$outcome', 'won'] }, 1, 0] } },
+          },
+        },
       ]),
     ]);
 
@@ -85,8 +105,27 @@ export class OraRecordService {
       ? { played: accuracy.played, won: accuracy.won, winRate: accuracy.winRate }
       : null;
 
+    const dailyMap = new Map<string, { played: number; won: number }>(
+      dailyAgg.map(r => [r._id, { played: r.played || 0, won: r.won || 0 }]),
+    );
+    const daily: OraDailyStat[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const day = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+      const row = dailyMap.get(day);
+      const played = row?.played ?? 0;
+      const won = row?.won ?? 0;
+      daily.push({
+        day,
+        played,
+        won,
+        lost: played - won,
+        winRate: played ? Math.round((won / played) * 100) : 0,
+      });
+    }
+
     const record: OraRecord = {
       byLeague,
+      daily,
       overall,
       settledPots30d: totalStaked,
       avgSettlementMs: settlement ? Math.round(settlement.avgMs) : null,
@@ -108,6 +147,7 @@ export class OraRecordService {
     const payload = JSON.stringify({
       overall: record.overall,
       byLeague: record.byLeague,
+      daily: record.daily,
       settledPots30d: record.settledPots30d,
       avgSettlementMs: record.avgSettlementMs,
       payouts30d: record.payouts30d,
