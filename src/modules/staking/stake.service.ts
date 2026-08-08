@@ -452,6 +452,7 @@ export class StakeService {
         pod: p._id,
         homeTeam: p.homeTeam,
         awayTeam: p.awayTeam,
+        league: p.league,
         selection: p.selection,
         gainsMultiplier: p.gainsMultiplier,
         matchDate: p.matchDate,
