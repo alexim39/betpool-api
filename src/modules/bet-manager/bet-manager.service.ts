@@ -12,17 +12,21 @@ import { logger } from '../../services/logger.service';
 import { runTransaction } from '../../utils/transaction';
 
 const TIER_CONFIG = {
+  academy: { minDeposit: 10_000, maxAllocPct: 0.6, minMultiplier: 1.0, maxMultiplier: 1.3, platformFee: 300 },
   goalkeeper: { minDeposit: 20_000, maxAllocPct: 0.7, minMultiplier: 1.1, maxMultiplier: 1.5, platformFee: 300 },
   defender: { minDeposit: 50_000, maxAllocPct: 0.8, minMultiplier: 1.2, maxMultiplier: 1.8, platformFee: 500 },
   midfielder: { minDeposit: 100_000, maxAllocPct: 0.85, minMultiplier: 1.5, maxMultiplier: 2.5, platformFee: 500 },
   striker: { minDeposit: 200_000, maxAllocPct: 0.9, minMultiplier: 2.0, maxMultiplier: 5.0, platformFee: 500 },
+  chairman: { minDeposit: 500_000, maxAllocPct: 0.95, minMultiplier: 2.5, maxMultiplier: 6.0, platformFee: 1000 },
 };
 
 export const POOL_WALLET_IDS: Record<BetManagerTier, mongoose.Types.ObjectId> = {
+  academy: new mongoose.Types.ObjectId('000000000000000000000007'),
   goalkeeper: new mongoose.Types.ObjectId('000000000000000000000004'),
   defender: new mongoose.Types.ObjectId('000000000000000000000001'),
   midfielder: new mongoose.Types.ObjectId('000000000000000000000002'),
   striker: new mongoose.Types.ObjectId('000000000000000000000003'),
+  chairman: new mongoose.Types.ObjectId('000000000000000000000008'),
 };
 
 export const GUARANTEE_RESERVE_WALLET_ID = new mongoose.Types.ObjectId('000000000000000000000005');
@@ -35,7 +39,7 @@ export const GUARANTEED_MIN_RETURN_PCT = 0.01;
 export const MAX_RETURN_PCT = 0.1;
 export const RESERVE_SEED_AMOUNT = 1_000_000;
 
-const VALID_TIERS: BetManagerTier[] = ['goalkeeper', 'defender', 'midfielder', 'striker'];
+const VALID_TIERS: BetManagerTier[] = ['academy', 'goalkeeper', 'defender', 'midfielder', 'striker', 'chairman'];
 const VALID_DEPOSIT_STATUSES = ['locked', 'unlocked', 'withdrawn'];
 
 export interface DepositHistoryQuery {
@@ -210,7 +214,7 @@ export class BetManagerService {
     totalDeposited: number;
     totalProfit: number;
   }>> {
-    const tiers: BetManagerTier[] = ['goalkeeper', 'defender', 'midfielder', 'striker'];
+    const tiers: BetManagerTier[] = ['academy', 'goalkeeper', 'defender', 'midfielder', 'striker', 'chairman'];
     const results = [];
     for (const tier of tiers) {
       const account = await BetManagerAccountModel.findOne({ userId, tier });
@@ -878,7 +882,7 @@ export class BetManagerService {
     totalGuaranteeShortfalls: number;
     totalExcessCapped: number;
   }> {
-    const tiers: BetManagerTier[] = ['goalkeeper', 'defender', 'midfielder', 'striker'];
+    const tiers: BetManagerTier[] = ['academy', 'goalkeeper', 'defender', 'midfielder', 'striker', 'chairman'];
     const poolBalances: Record<string, number> = {};
     const accountsByTier: Record<string, number> = {};
     const aumByTier: Record<string, number> = {};

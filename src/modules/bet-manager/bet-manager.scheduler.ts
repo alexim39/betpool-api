@@ -4,7 +4,7 @@ import { BetManagerCycleModel } from '../../models/bet-manager-cycle.model';
 import { BetManagerTier } from '../../models/bet-manager-account.model';
 import { logger } from '../../services/logger.service';
 
-const TIERS: BetManagerTier[] = ['goalkeeper', 'defender', 'midfielder', 'striker'];
+const TIERS: BetManagerTier[] = ['academy', 'goalkeeper', 'defender', 'midfielder', 'striker', 'chairman'];
 
 export class BetManagerScheduler {
   private schedulerId: ReturnType<typeof setInterval> | null = null;
