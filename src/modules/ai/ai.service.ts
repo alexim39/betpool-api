@@ -262,7 +262,7 @@ function parseActions(text: string): ChatAction[] {
         selection: l.selection || '',
         gainsMultiplier: l.gainsMultiplier || 1.5,
       }));
-      if (legs.some((l: any) => !l.podId || !l.podTitle)) continue;
+      if (legs.some((l: any) => !l.podTitle)) continue;
       const combined = legs.reduce((a: number, l: any) => a * l.gainsMultiplier, 1);
       actions.push({
         type: 'confirm_accumulator',
