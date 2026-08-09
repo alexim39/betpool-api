@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
-export type BetManagerTier = 'defender' | 'midfielder' | 'striker' | 'goalkeeper';
+export type BetManagerTier = 'academy' | 'goalkeeper' | 'defender' | 'midfielder' | 'striker' | 'chairman';
 
 export interface IBetManagerAccount extends Document {
   userId: mongoose.Types.ObjectId;
@@ -16,7 +16,7 @@ export interface IBetManagerAccount extends Document {
 
 const BetManagerAccountSchema = new Schema<IBetManagerAccount>({
   userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
-  tier: { type: String, enum: ['defender', 'midfielder', 'striker', 'goalkeeper'], required: true },
+  tier: { type: String, enum: ['academy', 'goalkeeper', 'defender', 'midfielder', 'striker', 'chairman'], required: true },
   units: { type: Number, default: 0, min: 0 },
   totalDeposited: { type: Number, default: 0, min: 0 },
   totalWithdrawn: { type: Number, default: 0, min: 0 },

@@ -86,7 +86,7 @@ export class AIAutomationService {
 
             try {
               const matchDate = new Date(fixture.matchDate);
-              const stakingClosesAt = new Date(matchDate.getTime() - 24 * 60 * 60 * 1000);
+              const stakingClosesAt = new Date(matchDate.getTime() - 2 * 60 * 60 * 1000);
               const settlementEstimateAt = new Date(matchDate.getTime() + 24 * 60 * 60 * 1000);
 
               await adminService.createPod({
@@ -147,7 +147,7 @@ export class AIAutomationService {
               if (!bestPick) continue;
               try {
                 const matchDate = new Date(fixture.matchDate);
-                const stakingClosesAt = new Date(matchDate.getTime() - 24 * 60 * 60 * 1000);
+                const stakingClosesAt = new Date(matchDate.getTime() - 2 * 60 * 60 * 1000);
                 const settlementEstimateAt = new Date(matchDate.getTime() + 24 * 60 * 60 * 1000);
                 await adminService.createPod({
                   title: `${fixture.homeTeam} vs ${fixture.awayTeam}`,
@@ -200,7 +200,7 @@ export class AIAutomationService {
         const unlocked = await betManagerService.unlockDeposits();
         if (unlocked > 0) logger.info('BetManager deposits unlocked', { count: unlocked });
         await betManagerService.reconcileAllocations();
-        for (const tier of ['goalkeeper', 'defender', 'midfielder', 'striker'] as const) {
+        for (const tier of ['academy', 'goalkeeper', 'defender', 'midfielder', 'striker', 'chairman'] as const) {
           await betManagerService.settleCycle(tier);
         }
         await betManagerService.allocateDaily();

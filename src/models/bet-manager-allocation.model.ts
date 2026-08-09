@@ -2,7 +2,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IBetManagerAllocation extends Document {
   cycleId: mongoose.Types.ObjectId;
-  tier: 'defender' | 'midfielder' | 'striker' | 'goalkeeper';
+  tier: 'academy' | 'goalkeeper' | 'defender' | 'midfielder' | 'striker' | 'chairman';
   stakeId: mongoose.Types.ObjectId;
   podId: mongoose.Types.ObjectId;
   amount: number;
@@ -15,7 +15,7 @@ export interface IBetManagerAllocation extends Document {
 
 const BetManagerAllocationSchema = new Schema<IBetManagerAllocation>({
   cycleId: { type: Schema.Types.ObjectId, ref: 'BetManagerCycle', required: true },
-  tier: { type: String, enum: ['defender', 'midfielder', 'striker', 'goalkeeper'], required: true },
+  tier: { type: String, enum: ['academy', 'goalkeeper', 'defender', 'midfielder', 'striker', 'chairman'], required: true },
   stakeId: { type: Schema.Types.ObjectId, ref: 'Stake', required: true, unique: true },
   podId: { type: Schema.Types.ObjectId, ref: 'Pod', required: true },
   amount: { type: Number, required: true, min: 0 },

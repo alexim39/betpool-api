@@ -24,7 +24,7 @@ export class AICurationController {
 
           try {
             const matchDate = new Date(fixture.matchDate);
-            const stakingClosesAt = new Date(matchDate.getTime() - 24 * 60 * 60 * 1000);
+            const stakingClosesAt = new Date(matchDate.getTime() - 2 * 60 * 60 * 1000);
             const settlementEstimateAt = new Date(matchDate.getTime() + 24 * 60 * 60 * 1000);
 
             const pod = await adminService.createPod({

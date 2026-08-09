@@ -4,7 +4,16 @@ import { betManagerService } from './bet-manager.service';
 import { BetManagerTier } from '../../models/bet-manager-account.model';
 import { logger } from '../../services/logger.service';
 
-const VALID_TIERS: BetManagerTier[] = ['goalkeeper', 'defender', 'midfielder', 'striker'];
+const VALID_TIERS: BetManagerTier[] = ['academy', 'goalkeeper', 'defender', 'midfielder', 'striker', 'chairman'];
+
+const TIER_MIN_DEPOSITS: Record<BetManagerTier, number> = {
+  academy: 10_000,
+  goalkeeper: 20_000,
+  defender: 50_000,
+  midfielder: 100_000,
+  striker: 200_000,
+  chairman: 500_000,
+};
 
 function parseTier(tier: string): BetManagerTier | null {
   return VALID_TIERS.includes(tier as BetManagerTier) ? (tier as BetManagerTier) : null;
@@ -32,7 +41,7 @@ export class BetManagerController {
         res.json({ success: true, data: null, message: 'No account for this tier' });
         return;
       }
-      const minDeposit = tier === 'goalkeeper' ? 20_000 : tier === 'defender' ? 50_000 : tier === 'midfielder' ? 100_000 : 200_000;
+      const minDeposit = TIER_MIN_DEPOSITS[tier];
       res.json({ success: true, data: { ...summary, tier, tierConfig: { minDeposit, platformFee: 500, lockDays: 30 } } });
     } catch (error: any) {
       logger.error('BetManager getAccount error', error);

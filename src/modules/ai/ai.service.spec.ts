@@ -205,6 +205,32 @@ describe('chatWithOra — AI path (provider reachable)', () => {
     expect(res.content).not.toContain('[ACCUM]');
   });
 
+  it('accepts accumulator legs without podId (legs matched by title), as the system prompt instructs', async () => {
+    process.env.DEEPSEEK_API_KEY = 'sk-test';
+    mockPodQuery([]);
+    mockPodByName(mockPod);
+    mockPodByName(mockPod2);
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: 'You want to stake ₦1,000 on a 2-game accumulator? [ACCUM]{"legs":[{"podTitle":"Arsenal vs Chelsea","selection":"Arsenal","gainsMultiplier":2.1},{"podTitle":"Real Madrid vs Barcelona","selection":"Barcelona","gainsMultiplier":1.9}],"stakeAmount":1000,"combinedMultiplier":3.99}[/ACCUM]',
+          },
+        }],
+      }),
+    } as any);
+
+    const res = await chatWithOra([{ role: 'user', content: 'bet 1000 on 2 games' }]);
+
+    expect(res.actions).toHaveLength(1);
+    expect(res.actions[0].type).toBe('confirm_accumulator');
+    expect(data(res.actions[0]).legs.map(l => l.podId)).toEqual(['pod-1', 'pod-3']);
+    expect(data(res.actions[0]).stakeAmount).toBe(1000);
+    expect(data(res.actions[0]).combinedMultiplier).toBeCloseTo(2.1 * 1.9, 5);
+    expect(res.content).not.toContain('[ACCUM]');
+  });
+
   it('keeps valid single cards when only the accumulator legs cannot be resolved', async () => {
     process.env.DEEPSEEK_API_KEY = 'sk-test';
     mockPodById(mockPod);

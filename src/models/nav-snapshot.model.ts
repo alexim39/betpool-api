@@ -1,7 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
 export interface INavSnapshot extends Document {
-  tier: 'defender' | 'midfielder' | 'striker' | 'goalkeeper';
+  tier: 'academy' | 'goalkeeper' | 'defender' | 'midfielder' | 'striker' | 'chairman';
   cycleNumber: number;
   nav: number;
   totalValue: number;
@@ -11,7 +11,7 @@ export interface INavSnapshot extends Document {
 }
 
 const NavSnapshotSchema = new Schema<INavSnapshot>({
-  tier: { type: String, enum: ['defender', 'midfielder', 'striker', 'goalkeeper'], required: true },
+  tier: { type: String, enum: ['academy', 'goalkeeper', 'defender', 'midfielder', 'striker', 'chairman'], required: true },
   cycleNumber: { type: Number, required: true },
   nav: { type: Number, required: true },
   totalValue: { type: Number, default: 0 },
