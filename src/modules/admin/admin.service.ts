@@ -277,7 +277,7 @@ export class AdminService {
     const now = new Date();
     if (pod.stakingClosesAt && pod.stakingClosesAt > now) return;
     if (pod.matchDate && new Date(pod.matchDate) > now) {
-      pod.stakingClosesAt = new Date(pod.matchDate);
+      pod.stakingClosesAt = new Date(new Date(pod.matchDate).getTime() - 2 * 60 * 60 * 1000);
     } else {
       pod.stakingClosesAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
     }
