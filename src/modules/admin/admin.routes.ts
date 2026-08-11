@@ -54,8 +54,9 @@ router.get('/ai/curate/latest', aiCurationController.getLatest);
 router.post('/ai/settle-all', aiSettlementController.settleAll);
 
 // User management
-router.get('/users', adminController.listUsers);
-router.get('/users/:id', adminController.getUser);
+  router.get('/users', adminController.listUsers);
+  router.get('/users/growth', adminController.getUserGrowth);
+  router.get('/users/:id', adminController.getUser);
 router.put('/users/:id', adminController.updateUser);
 router.post('/users/:id/toggle-status', adminController.toggleUserStatus);
 router.post('/users/:id/verify-kyc', adminController.verifyUserKYC);

@@ -168,6 +168,21 @@ export class AdminController {
     }
   }
 
+  async getUserGrowth(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const period = req.query.period as string;
+      if (!['day', 'week', 'month', 'year'].includes(period)) {
+        res.status(400).json({ success: false, message: 'period must be day, week, month or year' });
+        return;
+      }
+      const data = await adminService.getUserGrowth(period as 'day' | 'week' | 'month' | 'year');
+      res.json({ success: true, data });
+    } catch (error) {
+      logger.error('Admin user growth error', error);
+      res.status(500).json({ success: false, message: 'Failed to fetch user growth' });
+    }
+  }
+
   async getUser(req: AuthRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;

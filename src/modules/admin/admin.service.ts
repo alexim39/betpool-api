@@ -754,6 +754,107 @@ export class AdminService {
     };
   }
 
+  async getUserGrowth(period: 'day' | 'week' | 'month' | 'year'): Promise<{
+    period: string;
+    periodUnit: string;
+    total: number;
+    avgPerBucket: number;
+    peak: { label: string; count: number } | null;
+    changePct: number | null;
+    series: Array<{ key: string; label: string; count: number }>;
+  }> {
+    const now = new Date();
+
+    const toKey = (d: Date): { key: string; label: string } => {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      const monthShort = d.toLocaleString('en-GB', { month: 'short' });
+      if (period === 'day') return { key: `${y}-${m}-${day}`, label: `${d.getDate()} ${monthShort}` };
+      if (period === 'week') return { key: `${y}-${m}-${day}`, label: `${d.getDate()} ${monthShort}` };
+      if (period === 'month') return { key: `${y}-${m}`, label: `${monthShort} '${String(y).slice(2)}` };
+      return { key: String(y), label: String(y) };
+    };
+
+    const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const startOfWeek = (d: Date) => {
+      const s = startOfDay(d);
+      const dow = (s.getDay() + 6) % 7;
+      s.setDate(s.getDate() - dow);
+      return s;
+    };
+    const startOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1);
+    const startOfYear = (d: Date) => new Date(d.getFullYear(), 0, 1);
+
+    const advance = (d: Date, n: number) => {
+      if (period === 'day') d.setDate(d.getDate() + n);
+      else if (period === 'week') d.setDate(d.getDate() + n * 7);
+      else if (period === 'month') d.setMonth(d.getMonth() + n);
+      else d.setFullYear(d.getFullYear() + n);
+    };
+
+    const bucketCounts: Record<string, number> = {};
+    const order: Array<{ key: string; label: string }> = [];
+    let cursor = startOfYear(now);
+    if (period === 'day') cursor = startOfDay(now);
+    else if (period === 'week') cursor = startOfWeek(now);
+    else if (period === 'month') cursor = startOfMonth(now);
+    advance(cursor, -(period === 'year' ? 4 : period === 'day' ? 29 : 11));
+    const seriesStart = new Date(cursor);
+
+    for (let i = 0; i < (period === 'year' ? 5 : period === 'day' ? 30 : 12); i++) {
+      order.push(toKey(cursor));
+      cursor = new Date(cursor);
+      advance(cursor, 1);
+    }
+    const windowEnd = new Date(cursor);
+
+    const prevStart = new Date(seriesStart);
+    advance(prevStart, -(period === 'year' ? 5 : period === 'day' ? 30 : 12));
+
+    const users = await UserModel.find({
+      role: 'user',
+      createdAt: { $gte: prevStart, $lt: windowEnd },
+    })
+      .select('createdAt')
+      .lean();
+
+    const bucketKeyOf = (d: Date): string => {
+      if (period === 'week') return toKey(startOfWeek(d)).key;
+      if (period === 'month') return toKey(startOfMonth(d)).key;
+      if (period === 'year') return toKey(startOfYear(d)).key;
+      return toKey(d).key;
+    };
+
+    for (const u of users) {
+      const key = bucketKeyOf(new Date(u.createdAt));
+      if (order.some(o => o.key === key)) bucketCounts[key] = (bucketCounts[key] || 0) + 1;
+    }
+
+    let total = 0;
+    let prevTotal = 0;
+    const prevCut = seriesStart.getTime();
+    for (const u of users) {
+      const t = new Date(u.createdAt).getTime();
+      if (t < prevCut) prevTotal++;
+      else if (t < windowEnd.getTime()) total++;
+    }
+
+    const series = order.map(o => ({ ...o, count: bucketCounts[o.key] || 0 }));
+    const peak = series.reduce<{ label: string; count: number } | null>(
+      (acc, s) => (s.count > (acc?.count || 0) ? { label: s.label, count: s.count } : acc), null);
+
+    return {
+      period,
+      periodUnit: period === 'day' ? 'day' : period === 'week' ? 'week' : period === 'month' ? 'month' : 'year',
+      total,
+      avgPerBucket: Math.round((total / order.length) * 10) / 10,
+      peak,
+      changePct: prevTotal > 0 ? Math.round(((total - prevTotal) / prevTotal) * 1000) / 10 : null,
+      series,
+    };
+  }
+
   async getUser(id: string): Promise<{
     user: IUser | null;
     wallet: any;
