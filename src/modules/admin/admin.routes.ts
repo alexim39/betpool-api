@@ -28,6 +28,7 @@ router.get('/match-pools', matchPoolController.adminListAll);
 router.get('/match-pools/reports', matchPoolController.getReportsAggregate);
 router.post('/match-pools', matchPoolController.createPool);
 router.get('/match-pools/:id', matchPoolController.adminGetDetail);
+router.get('/match-pools/:id/stakes', matchPoolController.listPoolStakes);
 router.get('/match-pools/:id/report', matchPoolController.getReport);
 router.post('/match-pools/:id/close-staking', matchPoolController.closeStaking);
 router.post('/match-pools/:id/settle', matchPoolController.settle);

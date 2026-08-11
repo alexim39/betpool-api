@@ -188,6 +188,32 @@ export class MatchPoolController {
     }
   }
 
+  async listPoolStakes(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      if (!id || !/^[0-9a-fA-F]{24}$/.test(id)) {
+        res.status(400).json({ success: false, message: 'Invalid pool id' });
+        return;
+      }
+      const { page, limit, marketId, search, status, from, to, sortField, sortOrder } = req.query;
+      const result = await matchPoolService.listPoolStakes(id, {
+        page: page ? parseInt(page as string) : 1,
+        limit: limit ? parseInt(limit as string) : 25,
+        marketId: marketId as string,
+        search: search as string,
+        status: status as string,
+        from: from as string,
+        to: to as string,
+        sortField: sortField as string,
+        sortOrder: sortOrder === 'asc' || sortOrder === 'desc' ? sortOrder : 'desc',
+      });
+      res.json({ success: true, data: result });
+    } catch (error: any) {
+      console.error('Admin list pool stakes error:', error);
+      res.status(400).json({ success: false, message: error.message || 'Failed to fetch stakers' });
+    }
+  }
+
   async getReportsAggregate(req: AuthRequest, res: Response): Promise<void> {
     try {
       const { from, to } = req.query;

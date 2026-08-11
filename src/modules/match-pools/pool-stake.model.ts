@@ -23,6 +23,7 @@ const PoolStakeSchema = new Schema<IPoolStake>({
 
 PoolStakeSchema.index({ userId: 1, matchPoolId: 1 }, { unique: true });
 PoolStakeSchema.index({ matchPoolId: 1, marketId: 1 });
+PoolStakeSchema.index({ matchPoolId: 1, marketId: 1, createdAt: -1 });
 PoolStakeSchema.set('toJSON', { virtuals: true });
 PoolStakeSchema.set('toObject', { virtuals: true });
 

@@ -33,6 +33,7 @@ interface PaginationQuery {
   sortOrder?: 'asc' | 'desc';
   from?: string;
   to?: string;
+  marketId?: string;
 }
 
 const SORT_FIELDS: Record<string, string> = {
@@ -41,6 +42,24 @@ const SORT_FIELDS: Record<string, string> = {
   totalPool: 'totalPool',
   eventTitle: 'eventTitle'
 };
+
+const STAKE_SORT_FIELDS: Record<string, string> = {
+  createdAt: 'createdAt',
+  amount: 'amount',
+  status: 'status'
+};
+
+const STAKE_STATUSES = new Set(['confirmed', 'won', 'lost', 'cancelled_refunded']);
+
+function escapeRegex(s: string): string {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function clampInt(value: unknown, fallback: number, min: number, max: number): number {
+  const n = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
 
 interface PaginatedResult<T> {
   items: T[];
@@ -414,17 +433,28 @@ export class MatchPoolService {
     };
   }
 
-  async listAllPools(query: PaginationQuery & { status?: string } = {}): Promise<PaginatedResult<IMatchPool>> {
+  async listAllPools(query: PaginationQuery & { status?: string } = {}): Promise<PaginatedResult<any>> {
     const page = Math.max(1, query.page || 1);
     const limit = Math.min(Math.max(1, query.limit || 20), 100);
     const filter: Record<string, any> = {};
     if (query.status) filter.status = query.status;
 
+    const pipeline: any[] = [
+      { $match: filter },
+      { $sort: { createdAt: -1 } },
+      { $skip: (page - 1) * limit },
+      { $limit: limit },
+      {
+        $lookup: { from: 'poolstakes', localField: '_id', foreignField: 'matchPoolId', as: 'stakes' },
+      },
+      {
+        $addFields: { stakerCount: { $size: { $setUnion: ['$stakes.userId', []] } } },
+      },
+      { $project: { stakes: 0 } },
+    ];
+
     const [items, total] = await Promise.all([
-      MatchPoolModel.find(filter)
-        .sort({ createdAt: -1 })
-        .skip((page - 1) * limit)
-        .limit(limit),
+      MatchPoolModel.aggregate(pipeline),
       MatchPoolModel.countDocuments(filter)
     ]);
     return { items: items as any, total, page, limit, totalPages: Math.ceil(total / limit) };
@@ -455,6 +485,106 @@ export class MatchPoolService {
     });
 
     return { pool, marketBreakdown, totalStakes: stakes.length };
+  }
+
+  async listPoolStakes(poolId: string, query: PaginationQuery = {}): Promise<PaginatedResult<any>> {
+    const pool = await MatchPoolModel.findById(poolId).select('eventTitle markets').lean() as any;
+    if (!pool) throw new Error('Match pool not found');
+    if (!mongoose.Types.ObjectId.isValid(poolId)) throw new Error('Match pool not found');
+
+    const page = clampInt(query.page, 1, 1, 10000);
+    const limit = clampInt(query.limit, 25, 25, 100);
+    const match: Record<string, any> = { matchPoolId: new mongoose.Types.ObjectId(poolId) };
+
+    if (query.marketId) {
+      if (!pool.markets.some((m: any) => m.marketId === query.marketId)) {
+        throw new Error('Invalid market for this pool');
+      }
+      match.marketId = query.marketId;
+    }
+
+    if (query.status) {
+      if (!STAKE_STATUSES.has(query.status)) throw new Error('Invalid stake status');
+      match.status = query.status;
+    }
+
+    if (query.from || query.to) {
+      const range: Record<string, Date> = {};
+      const from = new Date(String(query.from ?? ''));
+      if (!isNaN(from.getTime())) range.$gte = from;
+      const to = new Date(String(query.to ?? ''));
+      if (!isNaN(to.getTime())) range.$lte = new Date(to.getTime() + 86399999);
+      if (Object.keys(range).length > 0) match.createdAt = range;
+    }
+
+    const pipeline: any[] = [{ $match: match }];
+    let countPipeline: any[] | null = null;
+    if (query.search && String(query.search).trim()) {
+      const term = escapeRegex(String(query.search).trim().slice(0, 100));
+      const userStages = [
+        { $lookup: { from: 'users', localField: 'userId', foreignField: '_id', as: 'userRef' } },
+        { $addFields: { searchUser: { $arrayElemAt: ['$userRef', 0] } } },
+        {
+          $match: {
+            $or: [
+              { 'searchUser.phone': { $regex: term, $options: 'i' } },
+              { 'searchUser.fullName': { $regex: term, $options: 'i' } },
+              { 'searchUser.email': { $regex: term, $options: 'i' } },
+            ],
+          },
+        },
+        { $project: { searchUser: 0, userRef: 0 } },
+      ];
+      pipeline.push(...userStages);
+      countPipeline = [{ $match: match }, ...userStages, { $count: 'total' }];
+    }
+
+    const sortField = STAKE_SORT_FIELDS[query.sortField || 'createdAt'] || 'createdAt';
+    const sortOrder = query.sortOrder === 'asc' ? 1 : -1;
+    pipeline.push(
+      {
+        $lookup: { from: 'users', localField: 'userId', foreignField: '_id', as: 'user' },
+      },
+      {
+        $project: {
+          userId: 1,
+          marketId: 1,
+          amount: 1,
+          status: 1,
+          payoutAmount: 1,
+          createdAt: 1,
+          settledAt: 1,
+          user: { $arrayElemAt: ['$user', 0] },
+        },
+      },
+      {
+        $project: {
+          userId: 1,
+          marketId: 1,
+          amount: 1,
+          status: 1,
+          payoutAmount: 1,
+          createdAt: 1,
+          settledAt: 1,
+          'user.phone': 1,
+          'user.fullName': 1,
+          'user.email': 1,
+          'user._id': 1,
+        },
+      },
+      { $sort: { [sortField]: sortOrder } },
+      { $skip: (page - 1) * limit },
+      { $limit: limit }
+    );
+
+    const [items, total] = await Promise.all([
+      PoolStakeModel.aggregate(pipeline),
+      countPipeline
+        ? PoolStakeModel.aggregate(countPipeline).then(r => r[0]?.total || 0)
+        : PoolStakeModel.countDocuments(match),
+    ]);
+
+    return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   async getReports(query: { from?: string; to?: string } = {}): Promise<any> {
