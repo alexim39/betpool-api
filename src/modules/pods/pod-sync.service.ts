@@ -192,7 +192,7 @@ fixturesProcessed++;
             result.details.push(`Skipped ${sel.selection} (${sel.marketType}): adj. odds ${adjustedMult}x too low`);
             continue;
           }
-          const rawRefundPct = adjustedMult >= 1.9 ? 5 : adjustedMult >= 1.7 ? 20 : adjustedMult >= 1.5 ? 35 : 0;
+          const rawRefundPct = adjustedMult >= 1.9 ? 5 : adjustedMult >= 1.7 ? 20 : 35;
           const maxSafeRefund = Math.max(0, Math.floor((1 - 1 / adjustedMult) * 100));
           const refundPct = Math.min(rawRefundPct, maxSafeRefund);
 

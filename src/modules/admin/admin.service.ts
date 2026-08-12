@@ -189,7 +189,7 @@ export class AdminService {
     // Auto-calculate refundPercent if not provided
     if (data.refundPercent === undefined || data.refundPercent === null) {
       const mult = data.gainsMultiplier || 1;
-      data.refundPercent = mult >= 1.9 ? 5 : mult >= 1.7 ? 20 : mult >= 1.5 ? 35 : 0;
+      data.refundPercent = mult >= 1.9 ? 5 : mult >= 1.7 ? 20 : 35;
     }
 
     // Safety cap: prevent dangerously high refunds relative to odds
