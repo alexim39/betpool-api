@@ -412,11 +412,12 @@ export class UserService {
 
   async getReferralStats(userId: string): Promise<{
     referralCode: string;
+    isAffiliate: boolean;
     totalReferrals: number;
     referralBonus: number;
     referrals: Array<{ fullName: string; joinedAt: Date }>;
   }> {
-    const user = await UserModel.findById(userId).select('referralCode');
+    const user = await UserModel.findById(userId).select('referralCode isAffiliate');
     if (!user) throw new Error('User not found');
 
     const referredUsers = await UserModel.find({ referredBy: userId })
@@ -441,6 +442,7 @@ export class UserService {
 
     return {
       referralCode: user.referralCode,
+      isAffiliate: !!user.isAffiliate,
       totalReferrals: referredUsers.length,
       referralBonus,
       referrals: referredUsers.map(u => ({
