@@ -5,6 +5,7 @@ import { WalletModel } from '../../models/wallet.model';
 import { TransactionModel } from '../../models/transaction.model';
 import { UserModel } from '../../models/user.model';
 import { logger } from '../../services/logger.service';
+import { userService } from '../../services/user.service';
 
 const PLATFORM_FEE_RATE = 0.15;
 
@@ -194,6 +195,8 @@ export class MatchPoolService {
       }], { session });
 
       await session.commitTransaction();
+
+      userService.payReferralBonusOnStake(data.userId).catch(e => logger.error('Referral bonus error', e));
       return stake[0];
     } catch (error) {
       await session.abortTransaction();

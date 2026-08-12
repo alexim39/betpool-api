@@ -112,8 +112,10 @@ export class UserService {
 
     let referredBy: mongoose.Types.ObjectId | undefined;
     if (data.referralCode) {
-      const referrer = await UserModel.findOne({ referralCode: data.referralCode });
-      if (referrer) referredBy = referrer._id;
+      const referrer = await UserModel.findOne({ referralCode: data.referralCode }).select('_id email isAffiliate');
+      const selfReferralByEmail = !!(data.email && referrer?.email && referrer.email === String(data.email).trim().toLowerCase());
+      // Block: paid promoters' codes never generate bonuses, and self-referral via a matching email is ignored
+      if (referrer && !referrer.isAffiliate && !selfReferralByEmail) referredBy = referrer._id;
     }
 
     const pinHash = await bcrypt.hash(data.pin, this.PIN_SALT_ROUNDS);
@@ -342,20 +344,45 @@ export class UserService {
     const user = await UserModel.findById(userId).select('referredBy referralBonusPaid');
     if (!user || !user.referredBy || user.referralBonusPaid) return;
 
+    // Skip paid promoters (affiliates) — prevents double-earning from promo jobs + referral bonuses.
+    // The flag is NOT claimed in this case, so un-flagging later still pays on the next bet.
+    const referrer = await UserModel.findById(user.referredBy).select('isAffiliate');
+    if (!referrer || referrer.isAffiliate) return;
+
     const BONUS_AMOUNT = 500;
 
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
-      const referrerWallet = await WalletModel.findOneAndUpdate(
-        { user: user.referredBy },
-        { $inc: { balance: BONUS_AMOUNT }, $set: { lastTransactionAt: new Date() } },
+      // Atomically claim the one-time bonus — prevents double pay on concurrent first bets
+      const claimed = await UserModel.findOneAndUpdate(
+        { _id: userId, referralBonusPaid: false },
+        { $set: { referralBonusPaid: true } },
         { session, new: true }
       );
-      if (!referrerWallet) {
+      if (!claimed) {
         await session.abortTransaction();
         return;
       }
+
+      // Upsert credits legacy referrers who never got a wallet (previously aborted silently)
+      const referrerWallet = await WalletModel.findOneAndUpdate(
+        { user: user.referredBy },
+        {
+          $inc: { balance: BONUS_AMOUNT },
+          $set: { lastTransactionAt: new Date() },
+          $setOnInsert: {
+            lockedBalance: 0,
+            totalDeposited: 0,
+            totalWithdrawn: 0,
+            totalStaked: 0,
+            totalWon: 0,
+            currency: 'NGN',
+            isActive: true
+          }
+        },
+        { session, new: true, upsert: true }
+      );
 
       await TransactionModel.create([{
         user: user.referredBy,
@@ -369,9 +396,6 @@ export class UserService {
         balanceAfter: referrerWallet.balance,
         metadata: { referralBonus: true }
       }], { session });
-
-      user.referralBonusPaid = true;
-      await user.save({ session });
 
       await session.commitTransaction();
 

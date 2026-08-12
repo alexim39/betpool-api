@@ -57,6 +57,7 @@ export interface UpdateUserInput {
   email?: string;
   role?: 'user' | 'admin';
   isSuspended?: boolean;
+  isAffiliate?: boolean;
 }
 
 const USER_SORTABLE_FIELDS = new Set(['createdAt', 'fullName', 'phone', 'lastLoginAt', 'walletBalance']);
@@ -941,6 +942,11 @@ export class AdminService {
       if (data.isSuspended && id === actorId) throw new AppError('You cannot suspend your own account', 400);
       set.isSuspended = data.isSuspended;
       identityChanged.push('status');
+    }
+
+    if (data.isAffiliate !== undefined && data.isAffiliate !== user.isAffiliate) {
+      set.isAffiliate = data.isAffiliate;
+      identityChanged.push('affiliate');
     }
 
     if (Object.keys(set).length === 0) return user;

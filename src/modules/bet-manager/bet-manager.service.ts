@@ -10,6 +10,7 @@ import { TransactionModel } from '../../models/transaction.model';
 import { PodModel } from '../../models/pod.model';
 import { logger } from '../../services/logger.service';
 import { runTransaction } from '../../utils/transaction';
+import { userService } from '../../services/user.service';
 
 const TIER_CONFIG = {
   academy: { minDeposit: 10_000, maxAllocPct: 0.6, minMultiplier: 1.0, maxMultiplier: 1.3, platformFee: 300 },
@@ -236,7 +237,7 @@ export class BetManagerService {
     await this.getOrCreatePoolWallet(tier);
     const poolWalletId = POOL_WALLET_IDS[tier];
 
-    return runTransaction(async (session) => {
+    const result = await runTransaction(async (session) => {
       const userWallet = await WalletModel.findOne({ user: userId }).session(session);
       if (!userWallet) return { success: false, message: 'Wallet not found' };
       const available = userWallet.balance - userWallet.lockedBalance;
@@ -307,6 +308,11 @@ export class BetManagerService {
       logger.info('BetManager deposit', { userId, tier, amount, units, nav });
       return { success: true, message: `₦${amount.toLocaleString()} deposited into ${tier} Bet Manager`, account };
     });
+
+    if (result.success) {
+      userService.payReferralBonusOnStake(userId).catch(e => logger.error('Referral bonus error', e));
+    }
+    return result;
   }
 
   async getDepositHistory(

@@ -27,6 +27,7 @@ export interface IUser extends mongoose.Document {
   referralCode: string;
   referredBy?: mongoose.Types.ObjectId;
   referralBonusPaid: boolean;
+  isAffiliate: boolean;
   isActive: boolean;
   isSuspended: boolean;
   lastLoginAt?: Date;
@@ -104,6 +105,10 @@ export const UserSchema = new Schema({
     ref: 'User'
   },
   referralBonusPaid: {
+    type: Boolean,
+    default: false
+  },
+  isAffiliate: {
     type: Boolean,
     default: false
   },

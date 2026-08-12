@@ -104,7 +104,7 @@ describe('UserService', () => {
     it('should link referral code if valid referrer found', async () => {
       MockUserModel.findOne
         .mockResolvedValueOnce(null) // no existing user
-        .mockResolvedValueOnce({ _id: 'referrer-id-1', referralCode: 'REF123' }); // referrer found
+        .mockReturnValueOnce({ select: jest.fn().mockResolvedValue({ _id: 'referrer-id-1', referralCode: 'REF123' }) }); // referrer found
       mockBcryptHash.mockResolvedValue('hashed-pin');
       const mockUser = {
         _id: 'user-id-2',
@@ -119,6 +119,50 @@ describe('UserService', () => {
       const result = await service.signup({ ...signupData, referralCode: 'REF123' });
 
       expect(result.user.referredBy).toBe('referrer-id-1');
+    });
+
+    it('should NOT link a referral code belonging to an affiliate (paid promoter)', async () => {
+      MockUserModel.findOne
+        .mockResolvedValueOnce(null) // no existing user
+        .mockReturnValueOnce({ select: jest.fn().mockResolvedValue({ _id: 'promoter-id-1', referralCode: 'PROMO1', isAffiliate: true }) });
+      mockBcryptHash.mockResolvedValue('hashed-pin');
+      const mockUser = {
+        _id: 'user-id-3',
+        phone: '2348031234567',
+        referralCode: 'XYZ789',
+        referredBy: undefined,
+        save: jest.fn().mockResolvedValue(undefined)
+      };
+      MockUserModel.create.mockResolvedValue([mockUser]);
+      MockWalletModel.create.mockResolvedValue([{ _id: 'wallet-id-3' }]);
+
+      const result = await service.signup({ ...signupData, referralCode: 'PROMO1' });
+
+      expect(result.user.referredBy).toBeUndefined();
+    });
+
+    it('should NOT link a self-referral via matching email', async () => {
+      MockUserModel.findOne
+        .mockResolvedValueOnce(null) // no existing user
+        .mockReturnValueOnce({ select: jest.fn().mockResolvedValue({ _id: 'me-id-1', referralCode: 'MYCODE', email: 'same@example.com' }) });
+      mockBcryptHash.mockResolvedValue('hashed-pin');
+      const mockUser = {
+        _id: 'user-id-4',
+        phone: '2348031234567',
+        referralCode: 'XYZ789',
+        referredBy: undefined,
+        save: jest.fn().mockResolvedValue(undefined)
+      };
+      MockUserModel.create.mockResolvedValue([mockUser]);
+      MockWalletModel.create.mockResolvedValue([{ _id: 'wallet-id-4' }]);
+
+      const result = await service.signup({
+        ...signupData,
+        referralCode: 'MYCODE',
+        email: 'Same@Example.com'
+      });
+
+      expect(result.user.referredBy).toBeUndefined();
     });
   });
 
@@ -293,27 +337,66 @@ describe('UserService', () => {
   });
 
   describe('payReferralBonusOnStake', () => {
+    const REFERRED_ID = '5f7c8a9b0c1d2e3f4a5b6c7e';
+    const REFERRER_ID = '5f7c8a9b0c1d2e3f4a5b6c7d';
+
+    function mockUserLookups(user: any, referrer: any) {
+      MockUserModel.findById
+        .mockReturnValueOnce({ select: jest.fn().mockResolvedValue(user) })
+        .mockReturnValueOnce({ select: jest.fn().mockResolvedValue(referrer) });
+    }
+
     it('should tag the bonus transaction for referral tracking', async () => {
-      MockUserModel.findById.mockReturnValue({
-        select: jest.fn().mockResolvedValue({
-          referredBy: '5f7c8a9b0c1d2e3f4a5b6c7d',
-          referralBonusPaid: false,
-          fullName: 'Referee',
-          save: jest.fn().mockResolvedValue(undefined)
-        })
-      });
+      mockUserLookups(
+        { _id: REFERRED_ID, referredBy: REFERRER_ID, referralBonusPaid: false, fullName: 'Referee' },
+        { _id: REFERRER_ID, isAffiliate: false }
+      );
+      MockUserModel.findOneAndUpdate.mockResolvedValue({ _id: REFERRED_ID, referralBonusPaid: true });
       MockWalletModel.findOneAndUpdate.mockResolvedValue({ balance: 1000 });
       MockTransactionModel.create.mockResolvedValue(undefined);
 
-      await service.payReferralBonusOnStake('5f7c8a9b0c1d2e3f4a5b6c7e');
+      await service.payReferralBonusOnStake(REFERRED_ID);
 
-      expect(MockUserModel.findById).toHaveBeenCalledWith('5f7c8a9b0c1d2e3f4a5b6c7e');
+      expect(MockUserModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: REFERRED_ID, referralBonusPaid: false },
+        { $set: { referralBonusPaid: true } },
+        expect.objectContaining({ new: true })
+      );
       expect(MockWalletModel.findOneAndUpdate).toHaveBeenCalled();
-      expect(MockTransactionModel.create).toHaveBeenCalled();
+      const walletOpts = MockWalletModel.findOneAndUpdate.mock.calls[0][2];
+      expect(walletOpts.upsert).toBe(true);
       const tx = MockTransactionModel.create.mock.calls[0][0][0];
       expect(tx.type).toBe('bonus');
       expect(tx.amount).toBe(500);
       expect(tx.metadata).toEqual({ referralBonus: true });
+    });
+
+    it('should NOT pay when the referrer is an affiliate (paid promoter)', async () => {
+      mockUserLookups(
+        { _id: REFERRED_ID, referredBy: REFERRER_ID, referralBonusPaid: false, fullName: 'Referee' },
+        { _id: REFERRER_ID, isAffiliate: true }
+      );
+
+      await service.payReferralBonusOnStake(REFERRED_ID);
+
+      expect(MockUserModel.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(MockWalletModel.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(MockTransactionModel.create).not.toHaveBeenCalled();
+    });
+
+    it('should NOT pay when the bonus was already claimed concurrently', async () => {
+      mockUserLookups(
+        { _id: REFERRED_ID, referredBy: REFERRER_ID, referralBonusPaid: false, fullName: 'Referee' },
+        { _id: REFERRER_ID, isAffiliate: false }
+      );
+      MockUserModel.findOneAndUpdate.mockResolvedValue(null); // claim lost the race
+      MockWalletModel.findOneAndUpdate.mockResolvedValue({ balance: 500 });
+      MockTransactionModel.create.mockResolvedValue(undefined);
+
+      await service.payReferralBonusOnStake(REFERRED_ID);
+
+      expect(MockWalletModel.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(MockTransactionModel.create).not.toHaveBeenCalled();
     });
   });
 });

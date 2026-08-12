@@ -119,7 +119,7 @@ Works like an investment fund. Deposit into a risk tier, Ora AI spreads money ac
 
 **KYC:** Verify identity with BVN or NIN to unlock higher withdrawal limits. Check status from Profile.
 
-**Referrals:** Unique referral code on Profile. Share with friends — earn referral bonuses when they sign up. See total referrals, bonus earnings, and rules on Profile screen.
+**Referrals:** Unique referral code on Profile. Share with friends — when they sign up and place their first bet on any product (Pods, Bet Manager, or Match Pools), you earn a ₦500 bonus. See total referrals, bonus earnings, and rules on Profile screen.
 
 **Help:** FAQ with common questions, Ora AI chat support.
 
@@ -879,7 +879,7 @@ async function mockOraResponse(messages: ChatMessage[], systemContext?: string):
     return { content: "You can cash out early from the Bets page. There's a 10% fee, so you get 90% of your stake back instantly. Tap Cashout on any eligible bet." };
   }
   if (lastMessage.includes('refer') || lastMessage.includes('invite') || lastMessage.includes('share')) {
-    return { content: "Share your referral code from the Profile page. When friends sign up and bet, you earn bonuses. The more you refer, the more you earn!" };
+    return { content: "Share your referral code from the Profile page. When friends sign up and place their first bet on any product (Pods, Bet Manager, or Match Pools), you earn ₦500. The more you refer, the more you earn!" };
   }
   if (lastMessage.includes('thank')) {
     return { content: "Anytime! 😊 Happy betting!" };

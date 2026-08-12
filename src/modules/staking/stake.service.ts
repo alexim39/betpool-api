@@ -597,6 +597,8 @@ export class StakeService {
 
       await session.commitTransaction();
 
+      userService.payReferralBonusOnStake(userId).catch(e => console.error('Referral bonus error', e));
+
       const podTitle = `${pods[0].homeTeam} vs ${pods[0].awayTeam} +${podIds.length - 1}`;
       await notifyStakePlaced(userId, `${podTitle} (${podIds.length}-leg parlay)`, stakeAmount, potentialPayout).catch(e => console.error(e));
 
