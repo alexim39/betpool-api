@@ -152,6 +152,7 @@ Inbox for account updates. Filter All/Unread. Mark individual items read/unread,
 
 async function buildSystemPrompt(userId?: string): Promise<string> {
   let userContext = '';
+  const maxAccumulatorLegs = parseInt(process.env.MAX_ACCUMULATOR_LEGS || '5', 10);
 
   if (userId) {
     try {
@@ -218,7 +219,7 @@ Additional guidelines — VERY IMPORTANT:
 - Users can place MULTIPLE bets in one message, separated by commas (e.g. "bet ₦100 on the winning game, bet ₦200 on 5 games"). Emit one [STAKE] block per single bet and one [ACCUM] block per accumulator — ALL blocks in the same reply.
 - "bet ₦X on N games" (N ≥ 2) means one ACCUMULATOR: a parlay of N live pods with a single total stake of ₦X and combined odds = product of all leg multipliers. "each" / "per game" means separate single bets of ₦X each. "winning game" / "best game" means the highest-confidence pod. "pick N best games" means the N highest-confidence pods.
 - When you confirm a bet, respond naturally, ask a quick confirmation question like "You want to bet ₦X on [pod] — pick: [pick], right?", and include a [STAKE] JSON block at the very end of your message with the stake details. The podId field may be left empty — the pod is matched by podTitle, so always use the exact title from the Live Pods section. Example: "Sure! You want to bet ₦5,000 on Arsenal vs Chelsea — pick: Arsenal, right? [STAKE]{\"podTitle\":\"Arsenal vs Chelsea\",\"selection\":\"Arsenal\",\"amount\":5000}[/STAKE]"
-- For an accumulator, include an [ACCUM] JSON block: {"legs":[{"podTitle":"Arsenal vs Chelsea","selection":"Arsenal","gainsMultiplier":1.7}],"stakeAmount":200,"combinedMultiplier":2.89} — combinedMultiplier must equal the product of all legs' gainsMultiplier, the block must contain 2-5 legs from DIFFERENT matches, and each leg is matched to a live pod by its podTitle (use the exact titles from the Live Pods section).`;
+- For an accumulator, include an [ACCUM] JSON block: {"legs":[{"podTitle":"Arsenal vs Chelsea","selection":"Arsenal","gainsMultiplier":1.7}],"stakeAmount":200,"combinedMultiplier":2.89} — combinedMultiplier must equal the product of all legs' gainsMultiplier, the block must contain 2-${maxAccumulatorLegs} legs from DIFFERENT matches, and each leg is matched to a live pod by its podTitle (use the exact titles from the Live Pods section).`;
 }
 
 function computeStakeMath(amount: number, gains: number): { potentialPayout: number; platformFee: number; netPayout: number } {
@@ -417,6 +418,7 @@ const TEAM_STOP_WORDS = new Set([
 ]);
 
 function parseSingleInstruction(text: string): BetIntent | null {
+  const maxAccumulatorLegs = parseInt(process.env.MAX_ACCUMULATOR_LEGS || '5', 10);
   const amountMatch = text.match(/(?:place|put|bet|stake|wager)\s+(?:a\s+)?(?:bet\s+)?(?:of\s+)?(?:₦|n|ngn)?\s*([\d,]+(?:\s*k)?)/i);
   if (!amountMatch) return null;
   const amount = parseAmount(amountMatch[1]);
@@ -431,9 +433,9 @@ function parseSingleInstruction(text: string): BetIntent | null {
   let countClamped = false;
   if (winPick && count === undefined) count = 1;
   if (count !== undefined) {
-    if (count > 5) {
+    if (count > maxAccumulatorLegs) {
       countClamped = true;
-      count = 5;
+      count = maxAccumulatorLegs;
     }
     if (count < 1) count = 1;
   }

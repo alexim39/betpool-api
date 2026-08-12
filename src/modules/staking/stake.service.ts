@@ -435,8 +435,9 @@ export class StakeService {
   async placeAccumulator(data: PlaceMultiStakeData): Promise<StakeResult> {
     const { userId, podIds, stakeAmount, idempotencyKey } = data;
 
-    if (podIds.length < 2 || podIds.length > 5) {
-      throw new Error('Accumulator requires 2 to 5 selections');
+    const maxAccumulatorLegs = parseInt(process.env.MAX_ACCUMULATOR_LEGS || '5', 10);
+    if (podIds.length < 2 || podIds.length > maxAccumulatorLegs) {
+      throw new Error(`Accumulator requires 2 to ${maxAccumulatorLegs} selections`);
     }
 
     if (data.idempotencyKey) {
