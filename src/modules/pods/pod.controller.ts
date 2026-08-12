@@ -22,7 +22,8 @@ export class PodController {
         data: {
           items: pods,
           total,
-          hasMore: offsetNum + limitNum < total
+          hasMore: offsetNum + limitNum < total,
+          maxAccumulatorLegs: parseInt(process.env.MAX_ACCUMULATOR_LEGS || '5', 10)
         }
       });
     } catch (error) {
