@@ -123,7 +123,7 @@ export class PodService {
     }
 
     const pods = await baseQuery
-      .sort({ isLive: -1, displayOrder: 1, opensAt: 1 })
+      .sort({ stakingClosesAt: 1, isLive: -1, displayOrder: 1, opensAt: 1 })
       .skip(offset)
       .limit(options.limit || 20) as unknown as IPod[];
 

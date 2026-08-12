@@ -51,7 +51,7 @@ interface ChatMessage {
 
 const BETPOOL_KNOWLEDGE = `# BetPool User Guide
 
-BetPool is an AI-powered betting platform. It lets you bet on Pods (AI-curated matche odds with a built-in stake-back guarantee), join Match Pools for shared prize pools, or let Ora AI manage your bets for you. Works on phone, tablet, and computer — the layout adjusts automatically.
+BetPool is an AI-powered betting platform. It lets you bet on Pods (AI-curated matches with built-in cashback on losses), join Match Pools for shared prize pools, or let Ora AI manage your bets for you. Works on phone, tablet, and computer — the layout adjusts automatically.
 ## Account & Login
 
 **Sign up:** Enter your full legal name, Nigerian phone number, and optionally email. Agree to Terms of Service. You'll get a 6-digit code by SMS (and email if provided). Enter it to confirm. Choose a 6-digit PIN — you use this to log in and withdraw.
@@ -62,7 +62,7 @@ BetPool is an AI-powered betting platform. It lets you bet on Pods (AI-curated m
 
 ## Home Feed & Betting
 
-Your home screen shows a live feed of **Pods** — ready-made betting opportunities picked by BetPool's experts or Ora AI, with a stake-back guarantee.
+Your home screen shows a live feed of **Pods** — ready-made betting opportunities picked by BetPool's experts or Ora AI, each carrying a cashback rate on losses (a percentage of your stake is returned if the pod doesn't win; the rate depends on the odds and is shown on the pod card).
 
 **Pod Card shows:** League (e.g., Premier League), odds/gains multiplier, exposure bar (how much of the pool is already staked), refund % (percentage of stake back if the bet loses).
 
@@ -128,7 +128,7 @@ Works like an investment fund. Deposit into a risk tier, Ora AI spreads money ac
 Inbox for account updates. Filter All/Unread. Mark individual items read/unread, delete, or mark all read. Types: Withdrawal processed, Payout credited, KYC verified, Platform updates.
 
 **Key Terms:**
-- **Pod** — Ready-made betting market with fixed odds and stake-back guarantee
+- **Pod** — Ready-made betting market with fixed odds and cashback on losses
 - **Stake** — Amount you wager
 - **Accumulator (Parlay)** — Multiple selections combined; all must win
 - **Cashout** — End active bet early for guaranteed amount (10% fee)
@@ -147,7 +147,7 @@ Inbox for account updates. Filter All/Unread. Mark individual items read/unread,
 - **Withdrawal time:** Bank transfers complete within 24 hours on business days.
 - **Bet Manager 30-day lock:** Gives Ora AI time to spread money across betting cycles. Once 30 days pass, that portion unlocks for withdrawal.
 - **Partial withdrawal from Bet Manager:** Not available — withdrawing takes ALL unlocked value. You can deposit again immediately.
-- **Is my money safe?** All Pods have a stake-back guarantee. Platform protected by Terms of Service.
+- **Is my money safe?** All Pods carry cashback on losses — a percentage of your stake is returned if the pod doesn't win, with the rate shown on the pod card. Platform protected by Terms of Service.
 - **Disputes:** Contact support via Ora AI chat or support@betpool.tech. Disputed results are personally reviewed by the team.`;
 
 async function buildSystemPrompt(userId?: string): Promise<string> {
