@@ -68,7 +68,7 @@ Your home screen shows a live feed of **Pods** — ready-made betting opportunit
 
 **Single bet:** Tap "Place Stake" on a Pod, enter amount (or tap quick-select buttons), review potential payout and platform fee, tap "Confirm Stake".
 
-**Accumulator (combine up to 5):** Tap "+" on each Pod, bet slip combines odds into one multiplier, enter one stake amount, tap "Place Accumulator". All selections must win.
+**Accumulator (combine up to 5):** Tap "+" on each Pod, bet slip combines odds into one multiplier, enter one stake amount, tap "Place Accumulator". All selections must win. **One-leg insurance:** accumulators with 4+ selections are covered by lucky-loser insurance — if exactly one selection fails, the slip is still paid as a reduced accumulator on the winning selections (voided selections are excluded and don't count).
 
 **Top up while browsing:** Tap "Top Up" in the menu, choose amount, Paystack processes payment, you're brought back to BetPool.
 
@@ -131,6 +131,7 @@ Inbox for account updates. Filter All/Unread. Mark individual items read/unread,
 - **Pod** — Ready-made betting market with fixed odds and cashback on losses
 - **Stake** — Amount you wager
 - **Accumulator (Parlay)** — Multiple selections combined; all must win
+- **One-Leg Insurance** — With 4+ selections, if exactly one leg fails the slip still pays as a reduced accumulator on the winners (voids excluded)
 - **Cashout** — End active bet early for guaranteed amount (10% fee)
 - **Stake-Back Guarantee** — Get back a percentage of stake if Pod loses
 - **Match Pool** — Shared pool; winners split proportionally, no refund on loss
@@ -869,7 +870,7 @@ async function mockOraResponse(messages: ChatMessage[], systemContext?: string):
     return { content: "KYC helps unlock higher withdrawal limits. Submit your BVN or NIN from Profile → Security & PIN. Once verified, you'll get access to bigger withdrawals." };
   }
   if (lastMessage.includes('bet') || lastMessage.includes('stake') || lastMessage.includes('pod') || lastMessage.includes('how')) {
-    return { content: "Simple! Browse pods on the Home page, pick one, and place a stake. If the pod wins, you get your stake + gains. If it loses, you get your stake back — no loss. Head to the Home page to see what's available!" };
+    return { content: "Simple! Browse pods on the Home page and pick one (or add several to an accumulator via the + buttons). If the pod wins, you get your stake + gains. If a single pod loses, you get its cashback percentage back, shown on the card. Accumulators with 4+ selections are insured: if exactly one selection fails, the slip still pays as a reduced accumulator on the winners. Head to the Home page to see what's available!" };
   }
   if (lastMessage.includes('deposit') || lastMessage.includes('fund') || lastMessage.includes('add money')) {
     return { content: "Go to Wallet → Top Up. Pick an amount (₦500 to ₦500k) and pay via Paystack. Instant, zero fees. Easy!" };

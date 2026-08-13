@@ -13,6 +13,7 @@ import { walletService } from '../../services/wallet.service';
 import { stakeService } from '../staking/stake.service';
 import { pickOutcomeService } from '../../services/pick-outcome.service';
 import { runTransaction } from '../../utils/transaction';
+import { evaluateAccumulatorInsurance } from '../../utils/parlay-insurance';
 import { logger } from '../../services/logger.service';
 
 interface PaginationQuery {
@@ -350,6 +351,7 @@ export class AdminService {
         let txType = 'refund';
         let newStatus: IStake['status'] = 'lost';
         let parlayFee = 0;
+        let insuranceApplied = false;
 
         if (allWon) {
           payoutAmount = stake.netPayout;
@@ -364,9 +366,29 @@ export class AdminService {
           newStatus = 'void';
           txType = 'refund';
         } else if (hasLoss) {
-          payoutAmount = 0;
-          newStatus = 'lost';
-          txType = 'refund';
+          // Lucky-loser insurance: exactly one failed leg on a sufficiently
+          // large slip still pays the winning legs as a reduced accumulator
+          const activeItems = stake.items.filter(i => i.status === 'won');
+          const insurance = evaluateAccumulatorInsurance(stake.items);
+          if (insurance.applies && activeItems.length > 0) {
+            const recalculatedMultiplier = activeItems.reduce((acc, i) => acc * i.gainsMultiplier, 1);
+            const recalculatedPayout = Math.floor(stake.stakeAmount * recalculatedMultiplier);
+            const recalculatedFee = Math.floor(recalculatedPayout * (this.PLATFORM_FEE_PERCENT / 100));
+            const recalculatedNet = recalculatedPayout - recalculatedFee;
+
+            payoutAmount = recalculatedNet;
+            wallet.balance += payoutAmount;
+            wallet.totalWon += payoutAmount;
+            newStatus = 'won';
+            txType = 'payout';
+            parlayFee = recalculatedFee;
+            insuranceApplied = true;
+          } else {
+            // One or more legs failed without coverage — nothing paid
+            payoutAmount = 0;
+            newStatus = 'lost';
+            txType = 'refund';
+          }
         } else {
           const activeItems = stake.items.filter(i => i.status === 'won');
           const recalculatedMultiplier = activeItems.reduce((acc, i) => acc * i.gainsMultiplier, 1);
@@ -402,9 +424,12 @@ export class AdminService {
             metadata: {
               podId: id,
               stakeId: stake._id,
-              description: newStatus === 'won' ? 'Parlay won' : newStatus === 'void' ? 'Parlay voided' : 'Parlay lost - no refund',
+              description: newStatus === 'won'
+                ? insuranceApplied ? 'Parlay won - 1 leg lost, insurance payout paid' : 'Parlay won'
+                : newStatus === 'void' ? 'Parlay voided' : 'Parlay lost - no refund',
               isParlay: true,
-              legCount: stake.items.length
+              legCount: stake.items.length,
+              insuranceApplied
             }
           }], { session });
         }
@@ -412,8 +437,9 @@ export class AdminService {
         stake.status = newStatus;
         stake.settledAt = new Date();
         stake.settledBy = new mongoose.Types.ObjectId(settledBy);
-        stake.settlementNotes = notes || `Parlay ${result}`;
+        stake.settlementNotes = notes || (insuranceApplied ? `Parlay ${result} (insurance: 1 leg lost, reduced payout)` : `Parlay ${result}`);
         stake.settledOdds = stake.combinedMultiplier;
+        if (insuranceApplied) stake.insuranceApplied = true;
         await stake.save({ session });
 
         // Decrement exposure for each pod in the fully-settled parlay
