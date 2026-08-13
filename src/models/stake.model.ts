@@ -27,6 +27,7 @@ export interface IStake extends mongoose.Document {
   feePercent: number;
   refundPercent: number;
   refundAmount: number;
+  insuranceApplied?: boolean;
   status: StakeStatus;
   settledAt?: Date;
   settledBy?: mongoose.Types.ObjectId;
@@ -108,6 +109,10 @@ const StakeSchema = new Schema({
     type: Number,
     default: 0,
     min: 0
+  },
+  insuranceApplied: {
+    type: Boolean,
+    default: false
   },
   status: {
     type: String,

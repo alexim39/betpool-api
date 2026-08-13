@@ -23,7 +23,8 @@ export class PodController {
           items: pods,
           total,
           hasMore: offsetNum + limitNum < total,
-          maxAccumulatorLegs: parseInt(process.env.MAX_ACCUMULATOR_LEGS || '5', 10)
+          maxAccumulatorLegs: parseInt(process.env.MAX_ACCUMULATOR_LEGS || '5', 10),
+          insuranceMinLegs: parseInt(process.env.ACCUMULATOR_INSURANCE_MIN_LEGS || '4', 10)
         }
       });
     } catch (error) {
