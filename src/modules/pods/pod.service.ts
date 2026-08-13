@@ -156,7 +156,7 @@ export class PodService {
     if (options.sport) query.sport = new RegExp(`^${options.sport.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
 
     const pods = await PodModel.find(query)
-      .sort({ opensAt: 1 })
+      .sort({ stakingClosesAt: 1, opensAt: 1 })
       .limit(options.limit || 20)
       .select('-legs -marketOdds')
       .lean() as unknown as Promise<IPod[]>;
