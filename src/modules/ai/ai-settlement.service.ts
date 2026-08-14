@@ -155,6 +155,7 @@ const sel = pod.selection?.trim().toLowerCase() || '';
       const hasBothTeams = hasHomeTeam && hasAwayTeam;
 
       const isDrawNoBet = /draw no bet/.test(sel);
+      const isBtts = /btts|both team/.test(sel);
       const homeCovered = /home/.test(sel) || /\b1\b/.test(sel) || /\b1x\b/.test(sel) || /\b12\b/.test(sel) || (hasHomeTeam && !hasBothTeams);
       const awayCovered = /away/.test(sel) || /\b2\b/.test(sel) || /\bx2\b/.test(sel) || /\b12\b/.test(sel) || (hasAwayTeam && !hasBothTeams);
       const drawCovered = /draw/.test(sel) || /\bx\b/.test(sel) || /\b1x\b/.test(sel) || /\bx2\b/.test(sel);
@@ -162,7 +163,9 @@ const sel = pod.selection?.trim().toLowerCase() || '';
 
       if (base.actualResult !== 'unknown') {
         let matched = false;
-        if (!(isDrawNoBet && base.actualResult === 'draw')) {
+        if (isBtts && primaryHomeScore != null && primaryAwayScore != null) {
+          matched = Number(primaryHomeScore) > 0 && Number(primaryAwayScore) > 0;
+        } else if (!(isDrawNoBet && base.actualResult === 'draw')) {
           matched =
             (homeCovered && base.actualResult === 'home_win') ||
             (awayCovered && base.actualResult === 'away_win') ||
@@ -172,7 +175,7 @@ const sel = pod.selection?.trim().toLowerCase() || '';
           base.recommendedResult = 'win';
           base.confidence = Math.max(base.confidence, 95);
           base.reasoning = `${pod.homeTeam} ${primaryHomeScore} - ${primaryAwayScore} ${pod.awayTeam}. Pod selected "${pod.selection}" — covered the actual result.`;
-        } else if (hasCoverage) {
+        } else if (hasCoverage || isBtts) {
           base.recommendedResult = 'loss';
           base.confidence = Math.max(base.confidence, 95);
           base.reasoning = `${pod.homeTeam} ${primaryHomeScore} - ${primaryAwayScore} ${pod.awayTeam}. Pod selected "${pod.selection}" — does not match actual result (${base.actualResult.replace('_', ' ')}).`;

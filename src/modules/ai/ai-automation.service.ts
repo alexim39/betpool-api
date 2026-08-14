@@ -153,7 +153,7 @@ export class AIAutomationService {
                   title: `${fixture.homeTeam} vs ${fixture.awayTeam}`,
                   sport: 'football', league: fixture.league,
                   homeTeam: fixture.homeTeam, awayTeam: fixture.awayTeam, matchDate,
-                  marketType: /or/i.test(bestPick.selection) ? 'Double Chance' : 'Over/Under', selection: bestPick.selection,
+                  marketType: /or/i.test(bestPick.selection) ? 'Double Chance' : /btts/i.test(bestPick.selection) ? 'BTTS' : /no bet/i.test(bestPick.selection) ? 'Draw No Bet' : /^(over|under)/i.test(bestPick.selection) ? 'Over/Under' : '1X2', selection: bestPick.selection,
                   gainsMultiplier: bestPick.recommendedMultiplier,
                   minStake: 100, maxStake: 100000, maxTotalExposure: 500000,
                   opensAt: new Date(), stakingClosesAt, settlementEstimateAt,

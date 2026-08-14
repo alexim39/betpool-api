@@ -467,6 +467,21 @@ describe('AIGamesService.oddsBasedPick (double-chance survival rules)', () => {
     expect(res.pick).toBe('Over 1.5');
   });
 
+  it('prefers the safest under line (Under 4.5 over Under 2.5) when it has higher win probability', () => {
+    const res = pick([
+      { code: 'over_under_25', outcomes: [
+        { code: 'over', name: 'Over 2.5', best_odds: 2.1 },
+        { code: 'under', name: 'Under 2.5', best_odds: 1.72 },
+      ] },
+      { code: 'over_under_45', outcomes: [
+        { code: 'over', name: 'Over 4.5', best_odds: 3.5 },
+        { code: 'under', name: 'Under 4.5', best_odds: 1.25 },
+      ] },
+    ]);
+    expect(res).not.toBeNull();
+    expect(res.pick).toBe('Under 4.5');
+  });
+
   it('picks Under 2.5 as the safe side of the over/under 2.5 market', () => {
     const res = pick([
       { code: 'over_under_25', outcomes: [
@@ -476,6 +491,61 @@ describe('AIGamesService.oddsBasedPick (double-chance survival rules)', () => {
     ]);
     expect(res).not.toBeNull();
     expect(res.pick).toBe('Under 2.5');
+  });
+
+  it('picks a very sure direct favourite when it beats every double chance', () => {
+    const res = pick([
+      { code: '1x2', outcomes: [
+        { code: 'HOME', name: 'Home', best_odds: 1.20 },
+        { code: 'AWAY', name: 'Away', best_odds: 5.0 },
+      ] },
+      { code: 'double_chance', outcomes: [
+        { code: '1X', name: 'Home or Draw', best_odds: 1.30 },
+        { code: '12', name: 'Home or Away', best_odds: 1.25 },
+        { code: 'X2', name: 'Draw or Away', best_odds: 3.1 },
+      ] },
+    ]);
+    expect(res).not.toBeNull();
+    expect(res.pick).toBe('Home Win');
+  });
+
+  it('breaks implied ties in favour of double chance', () => {
+    const res = pick([
+      { code: '1x2', outcomes: [
+        { code: 'HOME', name: 'Home', best_odds: 1.25 },
+      ] },
+      { code: 'double_chance', outcomes: [
+        { code: '1X', name: 'Home or Draw', best_odds: 1.25 },
+      ] },
+    ]);
+    expect(res).not.toBeNull();
+    expect(res.pick).toBe('Home or Draw');
+  });
+
+  it('allows BTTS only when very sure (implied >= 80%)', () => {
+    const sure = pick([
+      { code: 'btts', outcomes: [
+        { code: 'yes', name: 'BTTS Yes', best_odds: 1.25 },
+      ] },
+    ]);
+    expect(sure).not.toBeNull();
+    expect(sure.pick).toBe('BTTS Yes');
+
+    const notSure = pick([
+      { code: 'btts', outcomes: [
+        { code: 'yes', name: 'BTTS Yes', best_odds: 1.30 },
+      ] },
+    ]);
+    expect(notSure).toBeNull();
+  });
+
+  it('gates Draw No Bet behind the very-sure bar', () => {
+    const res = pick([
+      { code: 'draw_no_bet', outcomes: [
+        { code: 'home', name: 'Home (DNB)', best_odds: 1.30 },
+      ] },
+    ]);
+    expect(res).toBeNull();
   });
 
   it('maps numeric double-chance codes to readable picks', () => {
@@ -497,18 +567,6 @@ describe('AIGamesService.oddsBasedPick (double-chance survival rules)', () => {
       { code: '1x2', outcomes: [
         { code: 'HOME', name: 'Home', best_odds: 1.10 },
         { code: 'AWAY', name: 'Away', best_odds: 4.0 },
-      ] },
-    ]);
-    expect(res).toBeNull();
-  });
-
-  it('never picks BTTS or Draw No Bet even at high implied probability', () => {
-    const res = pick([
-      { code: 'btts', outcomes: [
-        { code: 'yes', name: 'BTTS Yes', best_odds: 1.25 },
-      ] },
-      { code: 'draw_no_bet', outcomes: [
-        { code: 'home', name: 'Home (DNB)', best_odds: 1.30 },
       ] },
     ]);
     expect(res).toBeNull();

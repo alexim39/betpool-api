@@ -253,4 +253,36 @@ describe('AICurationService.basicFallbackCurate (double-chance odds fallback)', 
     expect(res.skipped).toBe(1);
     expect(res.fixtures[0].overallReasoning).toContain('floor');
   });
+
+  it('picks a very sure direct favourite when no safe market exists', async () => {
+    axiosGetMock
+      .mockResolvedValueOnce({ data: { results: [fixture], next: null } })
+      .mockResolvedValue({ data: { markets: {
+        '1x2': {
+          'HOME': { outcome_name: 'Home', best_odds: 1.20 },
+          'DRAW': { outcome_name: 'Draw', best_odds: 4.5 },
+          'AWAY': { outcome_name: 'Away', best_odds: 5.0 },
+        },
+      } } });
+
+    const res = await aiCurationService.basicFallbackCurate();
+
+    expect(res.recommended).toBe(1);
+    expect(res.fixtures[0].selection).toBe('Home Win');
+  });
+
+  it('gates BTTS behind the very-sure implied bar', async () => {
+    axiosGetMock
+      .mockResolvedValueOnce({ data: { results: [fixture], next: null } })
+      .mockResolvedValue({ data: { markets: {
+        btts: {
+          yes: { outcome_name: 'BTTS Yes', best_odds: 1.30 },
+        },
+      } } });
+
+    const res = await aiCurationService.basicFallbackCurate();
+
+    expect(res.recommended).toBe(0);
+    expect(res.skipped).toBe(1);
+  });
 });
