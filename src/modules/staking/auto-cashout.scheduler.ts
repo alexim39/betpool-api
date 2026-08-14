@@ -49,7 +49,7 @@ export class AutoCashoutScheduler {
 
       for (const stake of stakes) {
         try {
-          const quote = stakeService.computeAutoCashoutQuote(stake as any);
+          const quote = await stakeService.resolveAutoCashoutQuote(stake as any);
           if (quote <= 0) continue;
           if (quote < (stake.autoCashout?.targetAmount || Infinity)) continue;
 

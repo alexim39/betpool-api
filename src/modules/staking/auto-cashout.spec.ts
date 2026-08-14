@@ -3,11 +3,12 @@ import { StakeModel } from '../../models/stake.model';
 import { WalletModel } from '../../models/wallet.model';
 import { TransactionModel } from '../../models/transaction.model';
 import { PodModel } from '../../models/pod.model';
+import { GameAnalysisModel } from '../../models/game-analysis.model';
 import { notifyStakeCashedOut } from '../../services/notification.service';
 import { stakeService } from './stake.service';
 
 jest.mock('../../models/stake.model', () => ({
-  StakeModel: { findOne: jest.fn(), findOneAndUpdate: jest.fn() },
+  StakeModel: { findOne: jest.fn(), findOneAndUpdate: jest.fn(), countDocuments: jest.fn() },
 }));
 
 jest.mock('../../models/wallet.model', () => ({
@@ -19,7 +20,11 @@ jest.mock('../../models/transaction.model', () => ({
 }));
 
 jest.mock('../../models/pod.model', () => ({
-  PodModel: { findByIdAndUpdate: jest.fn(), findById: jest.fn() },
+  PodModel: { findByIdAndUpdate: jest.fn(), findById: jest.fn(), find: jest.fn() },
+}));
+
+jest.mock('../../models/game-analysis.model', () => ({
+  GameAnalysisModel: { find: jest.fn() },
 }));
 
 jest.mock('../../services/notification.service', () => ({
@@ -36,10 +41,13 @@ jest.mock('mongoose', () => {
 
 const stakeFindOne = StakeModel.findOne as jest.Mock;
 const stakeFindOneAndUpdate = StakeModel.findOneAndUpdate as jest.Mock;
+const stakeCountDocuments = StakeModel.countDocuments as jest.Mock;
 const walletFindOneAndUpdate = WalletModel.findOneAndUpdate as jest.Mock;
 const txCreate = TransactionModel.create as jest.Mock;
 const podFindByIdAndUpdate = PodModel.findByIdAndUpdate as jest.Mock;
 const podFindById = PodModel.findById as jest.Mock;
+const podFind = PodModel.find as jest.Mock;
+const gameFind = GameAnalysisModel.find as jest.Mock;
 const notify = notifyStakeCashedOut as jest.Mock;
 const startSession = mongoose.startSession as jest.Mock;
 
@@ -83,6 +91,12 @@ beforeEach(() => {
   jest.clearAllMocks();
   delete process.env.AUTO_CASHOUT_TICK_MS;
   delete process.env.AUTO_CASHOUT_MAX_PER_TICK;
+  delete process.env.AUTO_CASHOUT_LIVE_FACTOR;
+  delete process.env.AUTO_CASHOUT_MAX_PER_USER;
+  delete process.env.AUTO_CASHOUT_MAX_GLOBAL;
+  stakeCountDocuments.mockResolvedValue(0);
+  podFind.mockResolvedValue([]);
+  gameFind.mockResolvedValue([]);
 });
 
 describe('stakeService.computeAutoCashoutQuote', () => {
@@ -167,6 +181,65 @@ describe('stakeService.armAutoCashout', () => {
     stakeFindOne.mockResolvedValue(null);
     const result = await stakeService.armAutoCashout('s1', 'u1', 500);
     expect(result).toBeNull();
+  });
+
+  it('rejects when the per-user armed cap is reached', async () => {
+    process.env.AUTO_CASHOUT_MAX_PER_USER = '2';
+    stakeFindOne.mockResolvedValue(stakeStub({ items: itemsFor('pending', 'pending') }));
+    stakeCountDocuments.mockResolvedValue(2);
+
+    await expect(stakeService.armAutoCashout('s1', 'u1', 500)).rejects.toThrow('Maximum of 2');
+  });
+
+  it('rejects when the global armed cap is reached', async () => {
+    process.env.AUTO_CASHOUT_MAX_GLOBAL = '1';
+    stakeFindOne.mockResolvedValue(stakeStub({ items: itemsFor('pending', 'pending') }));
+    stakeCountDocuments.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+
+    await expect(stakeService.armAutoCashout('s1', 'u1', 500)).rejects.toThrow('Platform auto-cashout limit');
+  });
+});
+
+describe('stakeService.resolveAutoCashoutQuote', () => {
+  function podQuery(pods: any[]) {
+    return jest.fn().mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(pods) }) });
+  }
+
+  function gameQuery(analyses: any[]) {
+    return jest.fn().mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(analyses) }) });
+  }
+
+  it('scales the quote down while a leg match is live', async () => {
+    process.env.AUTO_CASHOUT_LIVE_FACTOR = '0.75';
+    const podId = new mongoose.Types.ObjectId();
+    const stake = stakeStub({ pod: podId, items: [{ ...itemsFor('pending')[0], pod: podId }] });
+    podFind.mockImplementation(podQuery([{ _id: podId, metadata: { fixtureId: 205861 } }]));
+    gameFind.mockImplementation(gameQuery([{ fixtureId: 205861, matchStatus: '2nd_half' }]));
+
+    const quote = await stakeService.resolveAutoCashoutQuote(stake as any);
+    expect(quote).toBe(Math.floor(1000 * 0.9 * 0.75));
+  });
+
+  it('keeps Stage-1 pricing when no live status is stored (graceful fallback)', async () => {
+    const podId = new mongoose.Types.ObjectId();
+    const stake = stakeStub({ pod: podId, items: [{ ...itemsFor('pending')[0], pod: podId }] });
+    podFind.mockImplementation(podQuery([{ _id: podId, metadata: { fixtureId: 205862 } }]));
+    gameFind.mockImplementation(gameQuery([]));
+
+    expect(await stakeService.resolveAutoCashoutQuote(stake as any)).toBe(900);
+  });
+
+  it('keeps Stage-1 pricing when the status lookup fails', async () => {
+    const podId = new mongoose.Types.ObjectId();
+    const stake = stakeStub({ pod: podId, items: [{ ...itemsFor('pending')[0], pod: podId }] });
+    podFind.mockImplementation(() => ({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockRejectedValue(new Error('db down')) }) }));
+
+    expect(await stakeService.resolveAutoCashoutQuote(stake as any)).toBe(900);
+  });
+
+  it('returns 0 for already-failed stakes', async () => {
+    const stake = stakeStub({ items: itemsFor('lost', 'lost', 'won') });
+    expect(await stakeService.resolveAutoCashoutQuote(stake as any)).toBe(0);
   });
 });
 

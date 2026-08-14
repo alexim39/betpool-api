@@ -10,6 +10,8 @@ import { abtestService } from '../abtest/abtest.service';
 import { loyaltyService } from '../loyalty/loyalty.service';
 import { coachingService } from '../coaching/coaching.service';
 import { evaluateAccumulatorInsurance } from '../../utils/parlay-insurance';
+import { GameAnalysisModel } from '../../models/game-analysis.model';
+import { GAME_LIVE_STATUSES } from '../ai/ai-games.service';
 
 // Type helper to cast Mongoose lean queries
 function toLeanArray<T>(): (query: any) => Promise<T[]> {
@@ -958,6 +960,90 @@ export class StakeService {
     return Math.max(0, quote);
   }
 
+  private statusCache = new Map<number, { status: string; at: number }>();
+
+  private get statusCacheTtlMs(): number {
+    const v = parseInt(process.env.AUTO_CASHOUT_STATUS_TTL_MS || '60000', 10);
+    return Number.isFinite(v) && v > 0 ? v : 60000;
+  }
+
+  private get liveFactor(): number {
+    const v = parseFloat(process.env.AUTO_CASHOUT_LIVE_FACTOR || '0.75');
+    return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.75;
+  }
+
+  private get nearStartHours(): number {
+    const v = parseInt(process.env.AUTO_CASHOUT_NEAR_START_HOURS || '3', 10);
+    return Number.isFinite(v) && v > 0 ? v : 3;
+  }
+
+  /**
+   * Stage-2 liveliness-adjusted quote. The pure Stage-1 quote is scaled down
+   * while any leg's match is live (in-play), since the locked-in price no
+   * longer reflects real-time odds. Graceful: any lookup failure, missing
+   * status, or terminal status falls back to a factor of 1 (Stage-1 pricing).
+   */
+  async resolveAutoCashoutQuote(stake: IStake): Promise<number> {
+    const base = this.computeAutoCashoutQuote(stake);
+    if (base <= 0) return 0;
+    return Math.floor(base * await this.livelinessFactor(stake));
+  }
+
+  private async livelinessFactor(stake: IStake): Promise<number> {
+    try {
+      const items = stake.items || [];
+      if (items.length === 0) return 1;
+
+      const podIds = items.map(i => i.pod).filter(Boolean);
+      const pods = await PodModel.find({ _id: { $in: podIds } })
+        .select('metadata.fixtureId matchDate')
+        .lean() as any[];
+      const fixtureById = new Map<string, number>();
+      for (const pod of pods) {
+        const fixtureId = pod?.metadata?.fixtureId;
+        if (Number.isFinite(fixtureId)) fixtureById.set(pod._id.toString(), fixtureId);
+      }
+
+      const now = Date.now();
+      const missing: number[] = [];
+      const statusByFixture = new Map<number, string>();
+      for (const fixtureId of fixtureById.values()) {
+        const cached = this.statusCache.get(fixtureId);
+        if (cached && now - cached.at < this.statusCacheTtlMs) {
+          statusByFixture.set(fixtureId, cached.status);
+        } else {
+          missing.push(fixtureId);
+        }
+      }
+      if (missing.length > 0) {
+        const analyses = await GameAnalysisModel.find({ fixtureId: { $in: missing } })
+          .select('fixtureId matchStatus')
+          .lean() as any[];
+        const byFixture = new Map<number, string>();
+        for (const a of analyses) byFixture.set(a.fixtureId, a.matchStatus || 'notstarted');
+        for (const fixtureId of missing) {
+          const status = byFixture.get(fixtureId) || 'notstarted';
+          this.statusCache.set(fixtureId, { status, at: now });
+          statusByFixture.set(fixtureId, status);
+        }
+      }
+
+      let factor = 1;
+      for (const item of items) {
+        const fixtureId = fixtureById.get(item.pod?.toString() || '');
+        const status = fixtureId !== undefined ? statusByFixture.get(fixtureId) || '' : '';
+        if (GAME_LIVE_STATUSES.includes(status)) {
+          factor = Math.min(factor, this.liveFactor);
+        } else {
+          factor = Math.min(factor, 1);
+        }
+      }
+      return factor;
+    } catch {
+      return 1;
+    }
+  }
+
   async getAutoCashoutStatus(stakeId: string, userId: string): Promise<{
     enabled: boolean;
     targetAmount: number | null;
@@ -969,7 +1055,7 @@ export class StakeService {
     const stake = await StakeModel.findOne({ _id: stakeId, user: userId });
     if (!stake) return null;
 
-    const quote = this.computeAutoCashoutQuote(stake as IStake);
+    const quote = await this.resolveAutoCashoutQuote(stake as IStake);
     const maxTarget = Math.max(Math.floor(stake.stakeAmount * 0.9), quote);
 
     return {
@@ -982,6 +1068,18 @@ export class StakeService {
     };
   }
 
+  private static readonly SETTLED_STATUSES = ['won', 'lost', 'void', 'refunded', 'cashed_out'];
+
+  private get maxArmedPerUser(): number {
+    const v = parseInt(process.env.AUTO_CASHOUT_MAX_PER_USER || '5', 10);
+    return Number.isFinite(v) && v > 0 ? v : 5;
+  }
+
+  private get maxArmedGlobal(): number {
+    const v = parseInt(process.env.AUTO_CASHOUT_MAX_GLOBAL || '200', 10);
+    return Number.isFinite(v) && v > 0 ? v : 200;
+  }
+
   async armAutoCashout(stakeId: string, userId: string, targetAmount: number): Promise<IStake | null> {
     const stake = await StakeModel.findOne({ _id: stakeId, user: userId });
     if (!stake) return null;
@@ -991,9 +1089,25 @@ export class StakeService {
     const target = Math.floor(targetAmount);
     if (!Number.isFinite(target) || target < 100) throw new Error('Target must be at least ₦100');
 
-    const quote = this.computeAutoCashoutQuote(stake as IStake);
+    const quote = await this.resolveAutoCashoutQuote(stake as IStake);
     const maxTarget = Math.max(Math.floor(stake.stakeAmount * 0.9), quote);
     if (target > maxTarget) throw new Error(`Target exceeds maximum cashout of ₦${maxTarget.toLocaleString()}`);
+
+    const userArmed = await StakeModel.countDocuments({
+      user: userId,
+      status: { $nin: StakeService.SETTLED_STATUSES },
+      'autoCashout.enabled': true
+    });
+    if (userArmed >= this.maxArmedPerUser) {
+      throw new Error(`Maximum of ${this.maxArmedPerUser} active auto-cashouts reached`);
+    }
+    const globalArmed = await StakeModel.countDocuments({
+      status: { $nin: StakeService.SETTLED_STATUSES },
+      'autoCashout.enabled': true
+    });
+    if (globalArmed >= this.maxArmedGlobal) {
+      throw new Error('Platform auto-cashout limit reached, please try again later');
+    }
 
     const now = new Date();
     stake.autoCashout = {
