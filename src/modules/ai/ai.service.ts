@@ -133,6 +133,7 @@ Inbox for account updates. Filter All/Unread. Mark individual items read/unread,
 - **Accumulator (Parlay)** — Multiple selections combined; all must win
 - **One-Leg Insurance** — With 4+ selections, if exactly one leg fails the slip still pays as a reduced accumulator on the winners (voids excluded)
 - **Cashout** — End active bet early for guaranteed amount (10% fee)
+- **Auto-Cashout** — Arm a target amount on an active accumulator; the platform cashes you out automatically when the live quote reaches it
 - **Stake-Back Guarantee** — Get back a percentage of stake if Pod loses
 - **Match Pool** — Shared pool; winners split proportionally, no refund on loss
 - **Bet Manager** — AI-managed investment with 30-day lock and 20% performance fee on profit

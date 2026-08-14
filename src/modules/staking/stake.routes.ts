@@ -17,5 +17,8 @@ router.get('/calculate', authMiddleware, stakeController.calculatePayout);
 router.get('/:id', authMiddleware, stakeController.getStakeById);
 router.get('/:id/cashout/quote', authMiddleware, stakeController.getCashoutQuote);
 router.post('/:id/cashout/confirm', authMiddleware, stakeController.confirmCashout);
+router.get('/:id/auto-cashout', authMiddleware, stakeController.getAutoCashout);
+router.post('/:id/auto-cashout', authMiddleware, stakeLimiter, stakeController.armAutoCashout);
+router.delete('/:id/auto-cashout', authMiddleware, stakeController.disableAutoCashout);
 
 export default router;

@@ -8,6 +8,7 @@ import { walletService } from './services/wallet.service';
 import { aiDigestService } from './modules/digest/ai-digest.service';
 import { oraPickService } from './modules/ora-pick/ora-pick.service';
 import { betManagerScheduler, ensureSystemWallets } from './modules/bet-manager/bet-manager.scheduler';
+import { autoCashoutScheduler } from './modules/staking/auto-cashout.scheduler';
 import { logger } from './services/logger.service';
 
 // set environment configs
@@ -66,6 +67,11 @@ app.listen(port, () => {
             betManagerScheduler.start();
             logger.info('[Bet Manager] Lifecycle scheduler started — every 2 hours');
         }).catch(e => logger.error('[Bet Manager] Pool wallet bootstrap failed', e));
+    }
+    // Start auto-cashout scheduler (evaluates armed stakes every 30s)
+    if (process.env.AUTO_CASHOUT_SCHEDULER !== 'disabled') {
+        autoCashoutScheduler.start();
+        logger.info('[Auto-cashout] Scheduler started');
     }
     // Start withdrawal reconciliation (every 5 minutes)
     if (process.env.WITHDRAWAL_RECONCILIATION !== 'disabled') {
