@@ -59,6 +59,11 @@ export class PodSyncService {
   private get defaultMaxStake(): number { return parseInt(process.env.POD_DEFAULT_MAX_STAKE || '100000', 10); }
   private get defaultMaxExposure(): number { return parseInt(process.env.POD_DEFAULT_EXPOSURE || '1000000', 10); }
 
+  private get minPodOdds(): number {
+    const v = parseFloat(process.env.POD_MIN_ODDS || '1.20');
+    return Number.isFinite(v) && v >= 1.01 ? v : 1.20;
+  }
+
   private get headers(): Record<string, string> {
     const h: Record<string, string> = { 'Authorization': `Token ${this.apiKey}` };
     return h;
@@ -187,9 +192,9 @@ fixturesProcessed++;
 
           const spreadFactor = 0.85;
           const adjustedMult = Math.round(sel.multiplier * spreadFactor * 100) / 100;
-          // Skip selections where adjusted odds would be too low or invalid
-          if (adjustedMult < 1.01) {
-            result.details.push(`Skipped ${sel.selection} (${sel.marketType}): adj. odds ${adjustedMult}x too low`);
+          // Skip selections where adjusted odds are below the minimum floor (a win wouldn't cover the platform fee)
+          if (adjustedMult < this.minPodOdds) {
+            result.details.push(`Skipped ${sel.selection} (${sel.marketType}): adj. odds ${adjustedMult}x below minimum floor ${this.minPodOdds}x`);
             continue;
           }
           const rawRefundPct = adjustedMult >= 1.9 ? 5 : adjustedMult >= 1.7 ? 20 : 35;

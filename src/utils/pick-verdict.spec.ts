@@ -64,6 +64,39 @@ describe('pickOutcomeVerdict — mirrors client pickOutcome()', () => {
       expect(pickOutcomeVerdict({ ...finished, pick: 'Home or Draw', result: 'away_win', homeScore: 0, awayScore: 1 })).toBe('lost');
     });
 
+    it('Away or Draw wins on a draw and on an away win', () => {
+      expect(pickOutcomeVerdict({ ...finished, pick: 'Away or Draw', result: 'draw' })).toBe('won');
+      expect(pickOutcomeVerdict({ ...finished, pick: 'Away or Draw', result: 'away_win', homeScore: 1, awayScore: 2 })).toBe('won');
+    });
+
+    it('Away or Draw loses on a home win', () => {
+      expect(pickOutcomeVerdict({ ...finished, pick: 'Away or Draw', result: 'home_win', homeScore: 2, awayScore: 0 })).toBe('lost');
+    });
+
+    it('Home or Away wins on either side winning', () => {
+      expect(pickOutcomeVerdict({ ...finished, pick: 'Home or Away', result: 'home_win', homeScore: 1, awayScore: 0 })).toBe('won');
+      expect(pickOutcomeVerdict({ ...finished, pick: 'Home or Away', result: 'away_win', homeScore: 0, awayScore: 1 })).toBe('won');
+    });
+
+    it('Home or Away loses on a draw', () => {
+      expect(pickOutcomeVerdict({ ...finished, pick: 'Home or Away', result: 'draw', homeScore: 1, awayScore: 1 })).toBe('lost');
+    });
+
+    it('numeric 12 double chance covers both sides', () => {
+      expect(pickOutcomeVerdict({ ...finished, pick: '12', result: 'home_win', homeScore: 2, awayScore: 0 })).toBe('won');
+      expect(pickOutcomeVerdict({ ...finished, pick: '12', result: 'draw', homeScore: 1, awayScore: 1 })).toBe('lost');
+    });
+
+    it('numeric 1X double chance covers home or draw', () => {
+      expect(pickOutcomeVerdict({ ...finished, pick: '1X', result: 'draw' })).toBe('won');
+      expect(pickOutcomeVerdict({ ...finished, pick: '1X', result: 'away_win', homeScore: 0, awayScore: 1 })).toBe('lost');
+    });
+
+    it('numeric X2 double chance covers away or draw', () => {
+      expect(pickOutcomeVerdict({ ...finished, pick: 'X2', result: 'draw' })).toBe('won');
+      expect(pickOutcomeVerdict({ ...finished, pick: 'X2', result: 'home_win', homeScore: 1, awayScore: 0 })).toBe('lost');
+    });
+
     it('Draw No Bet skips on a draw', () => {
       expect(pickOutcomeVerdict({ ...finished, pick: 'Home Draw No Bet', result: 'draw' })).toBe('skip');
     });

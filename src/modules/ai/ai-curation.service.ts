@@ -173,6 +173,16 @@ export class AICurationService {
     return (process.env.SPORTSAPI_LEAGUES || '1,3,4,5,6,7,8,2').split(',').map(s => s.trim());
   }
   private get deepseekKey(): string { return process.env.DEEPSEEK_API_KEY || ''; }
+
+  private get minPickOdds(): number {
+    const v = parseFloat(process.env.ORA_MIN_PICK_ODDS || '1.20');
+    return Number.isFinite(v) && v >= 1.01 ? v : 1.20;
+  }
+
+  private get verySureImplied(): number {
+    const v = parseFloat(process.env.ORA_VERY_SURE_IMPLIED || '0.80');
+    return Number.isFinite(v) && v > 0 && v < 1 ? v : 0.80;
+  }
   private oddsLeagueNames = new Map<number, string>();
 
   private get headers(): Record<string, string> {
@@ -564,21 +574,22 @@ ${curationAccuracyService.promptBlock(leagueName, accuracy)}
 CRITICAL RULES (SURVIVAL DEPENDS ON FOLLOWING THESE):
 - BetPool's profit model: we earn commission ONLY when pods WIN. Every losing pod earns zero revenue. This is a survival requirement.
 - We need HIGH WINNING CONSISTENCY above all else. Recommend ONLY outcomes that have a very high probability of winning.
-- Prefer 10 excellent pods over 30 mediocre ones. Quality over quantity is the only path to survival.
-- VALUE SCORING: Score each outcome as confidence × (multiplier - 1). Always pick the outcome with the highest value score, NOT just the highest confidence alone.
-- NEVER recommend an outcome with a multiplier below 1.3x — the risk-adjusted return is too low regardless of confidence.
+- PREFER double chance: "Home or Draw", "Away or Draw" or "Home or Away" — these win when either covered side hits, so they should be the default choice to double our chance of winning.
+- Direct outcomes ("Home Win", "Away Win", "Draw" alone), BTTS and Draw No Bet are ALLOWED ONLY when you are very sure — a clear favourite with overwhelming form/H2H evidence, or overwhelming goal-scoring evidence — and must have confidence >= 80. Otherwise double chance wins.
+- Goals: if the game should be high scoring, recommend "Over 1.5" (never Over 2.5 or higher — the lower line is safer). If low scoring is expected, prefer the safest under: "Under 4.5" or "Under 3.5" (these win more often); "Under 2.5" only when you are very sure.
+- ODDS DO NOT MATTER — winning probability is everything. The most likely outcome wins, no matter how low its multiplier. Never trade win probability for higher odds.
+- NEVER recommend a multiplier below 1.20x (minimum floor).
 - NEVER recommend an outcome with confidence below ${Math.min(70, effectiveThreshold)}% — the risk of losing is unacceptable.
-- If the best single outcome has a multiplier below 1.5x, consider combining 2 high-confidence outcomes from this SAME fixture as a parlay to get reasonable odds (1.8x - 5.0x target).
-- Never combine outcomes from different fixtures. Both legs must be from this same match.
+- Prefer 10 excellent pods over 30 mediocre ones. Quality over quantity is the only path to survival.
+- Never combine outcomes into parlays — set combinedRecommendation.enabled = false always. A double chance single is safer than any parlay.
 
 Return valid JSON matching this structure:
 {
   "recommendations": [
     {
-      "selection": "Home Win" | "Draw" | "Away Win" | "Over X.5" | "Under X.5" | "BTTS Yes" | "BTTS No",
+      "selection": "Home or Draw" | "Away or Draw" | "Home or Away" | "Over 1.5" | "Under 3.5" | "Under 4.5" | "Home Win" | "Away Win" | "Draw" | "BTTS Yes" | "BTTS No" | "Draw No Bet",
       "confidence": number (0-100),
-      "recommendedMultiplier": number (1.0-10.0),
-      "valueScore": number (confidence * (multiplier - 1)),
+      "recommendedMultiplier": number (1.20-10.0),
       "reasoning": "Brief justification"
     }
   ],
@@ -601,9 +612,9 @@ Return valid JSON matching this structure:
 Rules:
 - RECOMMEND only if at least one outcome has confidence >= ${effectiveThreshold}
 - If no outcome reaches ${effectiveThreshold}%, return SKIP
-- If the best outcome's multiplier is < 1.5x, set combinedRecommendation.enabled = true suggesting a parlay
-- The combined confidence should be both outcomes' average confidence * 0.9 (penalty for two events)
-- The combined multiplier = leg1Multiplier * leg2Multiplier
+- The best recommendation is the one with the HIGHEST confidence (win probability) — never the one with the best odds.
+- Direct 1X2, BTTS and Draw No Bet recommendations require confidence >= 80 — otherwise default to the double chance.
+- combinedRecommendation.enabled must always be false.
 - SKIP if reserve ratio is below 0.20 (critical)
 - Return ONLY the JSON object, no markdown or other text`;
 
@@ -620,7 +631,7 @@ Rules:
           body: JSON.stringify({
             model: process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash',
             messages: [
-              { role: 'system', content: 'You are Ora, BetPool\'s senior odds analyst. Our survival depends on winning consistency. You are cautious and analytical. You prioritize high-confidence picks over high-odds gambles. You combine markets from the same fixture only when the single outcome odds are too low. Return ONLY valid JSON with no markdown.' },
+              { role: 'system', content: 'You are Ora, BetPool\'s senior odds analyst. Our survival depends on winning consistency. You are cautious and analytical. You PREFER double-chance picks (e.g. "Home or Draw", "Over 1.5", safe unders like "Under 3.5"/"Under 4.5") — you only consider direct picks, BTTS or Draw No Bet when you are very sure. Winning probability beats odds size every time. Return ONLY valid JSON with no markdown.' },
               { role: 'user', content: prompt },
             ],
             temperature: 0.2,
@@ -752,37 +763,74 @@ Rules:
 
     for (const fixture of fixtures) {
       const odds = oddsCache.get(fixture.id) || [];
-      const _1x2 = odds.find(m => m.code === '1x2' || m.code === '1X2');
-      if (!_1x2?.outcomes?.length) {
+
+      const OUTCOME_MAP: Record<string, string> = { HOME: 'Home Win', DRAW: 'Draw', AWAY: 'Away Win' };
+      const DOUBLE_CHANCE_MAP: Record<string, string> = {
+        '1X': 'Home or Draw', HOMEDRAW: 'Home or Draw', HOMEDRAWorDRAW: 'Home or Draw',
+        'X2': 'Draw or Away', DRAW_AWAY: 'Draw or Away', DRAWorAWAY: 'Draw or Away',
+        '12': 'Home or Away', HOME_AWAY: 'Home or Away', HOMEorAWAY: 'Home or Away',
+      };
+      const MARKET_PRIORITY: Record<string, number> = {
+        double_chance: 0, over_under_15: 1, over_under_45: 1, over_under_35: 1, over_under_25: 1,
+        '1x2': 2, btts: 3, draw_no_bet: 4,
+      };
+      const minOdds = this.minPickOdds;
+      const verySure = this.verySureImplied;
+
+      type Cand = { selection: string; code: string; rawOdds: number };
+      const marketCandidates = (code: string, gate?: number): Cand[] => {
+        const market = odds.find(m => (m.code || '').toLowerCase() === code);
+        const out: Cand[] = [];
+        for (const o of market?.outcomes || []) {
+          const rawOdds = o.best_odds || o.max_odds || o.odds || 0;
+          if (!rawOdds || rawOdds < minOdds) continue;
+          const rawName = o.name || o.code || '';
+          if (code === 'over_under_15' && !/over/i.test(rawName)) continue;
+          if ((code === 'over_under_25' || code === 'over_under_35' || code === 'over_under_45') && /over/i.test(rawName)) continue;
+          let selection = rawName;
+          if (code === 'double_chance') {
+            const key = String(o.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+            selection = DOUBLE_CHANCE_MAP[key] || DOUBLE_CHANCE_MAP[rawName.toUpperCase().replace(/[^A-Z0-9]/g, '')] || rawName;
+          } else if (code === '1x2' && OUTCOME_MAP[String(o.code || '').toUpperCase()]) {
+            selection = OUTCOME_MAP[String(o.code || '').toUpperCase()];
+          }
+          if (gate && 1 / rawOdds < gate) continue;
+          if (!selection) continue;
+          out.push({ selection, code, rawOdds });
+        }
+        return out;
+      };
+
+      const all: Cand[] = [
+        ...marketCandidates('double_chance'),
+        ...marketCandidates('over_under_15'),
+        ...marketCandidates('over_under_45'),
+        ...marketCandidates('over_under_35'),
+        ...marketCandidates('over_under_25'),
+        ...marketCandidates('1x2', verySure),
+        ...marketCandidates('btts', verySure),
+        ...marketCandidates('draw_no_bet', verySure),
+      ];
+
+      if (all.length === 0) {
         result.skipped++;
         result.fixtures.push({
           fixtureId: fixture.id, homeTeam: fixture.home_team, awayTeam: fixture.away_team,
           league: this.leagueName(fixture.league_id, fixture.id, fixture.league?.name || fixture.league_name), matchDate: fixture.event_date,
-          verdict: 'SKIP', overallReasoning: 'No 1X2 odds data', recommendations: [],
-        });
-        continue;
-      }
-
-      const filtered = _1x2.outcomes
-        .map(o => ({
-          selection: o.name || o.code || '',
-          rawOdds: o.best_odds || o.max_odds || o.odds || 0,
-        }))
-        .filter(o => o.selection && o.rawOdds >= 1.3 && (1 / o.rawOdds) >= (this.leagueAdjGuard(fixture, result) > 0 ? 0.6 : 0.55))
-        .sort((a, b) => (1 / b.rawOdds) - (1 / a.rawOdds));
-
-      if (filtered.length === 0) {
-        result.skipped++;
-        result.fixtures.push({
-          fixtureId: fixture.id, homeTeam: fixture.home_team, awayTeam: fixture.away_team,
-          league: this.leagueName(fixture.league_id, fixture.id, fixture.league?.name || fixture.league_name), matchDate: fixture.event_date,
-          verdict: 'SKIP', overallReasoning: 'No outcome met implied probability threshold',
+          verdict: 'SKIP', overallReasoning: 'No outcome met the minimum odds floor',
           recommendations: [],
         });
         continue;
       }
 
-      const best = filtered[0];
+      // Highest win probability wins; ties favour double chance and safe lines.
+      const best = all.reduce((a, b) => {
+        const aImplied = 1 / a.rawOdds;
+        const bImplied = 1 / b.rawOdds;
+        if (bImplied - aImplied > 0.005) return b;
+        if (aImplied - bImplied > 0.005) return a;
+        return MARKET_PRIORITY[b.code] < MARKET_PRIORITY[a.code] ? b : a;
+      });
       const impliedPct = Math.round((1 / best.rawOdds) * 100);
       result.recommended++;
       result.fixtures.push({
@@ -794,7 +842,7 @@ Rules:
           selection: best.selection,
           confidence: Math.min(impliedPct, 75),
           recommendedMultiplier: Math.round(best.rawOdds * 100) / 100,
-          reasoning: `Odds-based fallback — implied probability ${impliedPct}%`,
+          reasoning: `Odds-based fallback — highest win probability (${impliedPct}% implied)`,
         }],
         multiplier: best.rawOdds,
         selection: best.selection,

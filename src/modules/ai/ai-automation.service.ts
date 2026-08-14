@@ -153,12 +153,12 @@ export class AIAutomationService {
                   title: `${fixture.homeTeam} vs ${fixture.awayTeam}`,
                   sport: 'football', league: fixture.league,
                   homeTeam: fixture.homeTeam, awayTeam: fixture.awayTeam, matchDate,
-                  marketType: '1X2', selection: bestPick.selection,
+                  marketType: /or/i.test(bestPick.selection) ? 'Double Chance' : /btts/i.test(bestPick.selection) ? 'BTTS' : /no bet/i.test(bestPick.selection) ? 'Draw No Bet' : /^(over|under)/i.test(bestPick.selection) ? 'Over/Under' : '1X2', selection: bestPick.selection,
                   gainsMultiplier: bestPick.recommendedMultiplier,
                   minStake: 100, maxStake: 100000, maxTotalExposure: 500000,
                   opensAt: new Date(), stakingClosesAt, settlementEstimateAt,
                   settlementEstimateLabel: settlementEstimateAt.toLocaleDateString('en-NG', { month: 'short', day: 'numeric', year: 'numeric' }),
-                  status: 'active', legs: [], metadata: { oraCurated: true, fallback: 'odds-based', source: 'bsd', oraReasoning: fixture.overallReasoning || 'Odds-based curation: selected the highest-probability outcome from available market odds.', fixtureId: fixture.fixtureId },
+                  status: 'active', legs: [], metadata: { oraCurated: true, fallback: 'odds-based', source: 'bsd', oraReasoning: fixture.overallReasoning || 'Odds-based curation: selected the safest double-chance outcome from available market odds.', fixtureId: fixture.fixtureId },
                 }, adminUser);
                 result.curation.created++;
               } catch (err: any) {

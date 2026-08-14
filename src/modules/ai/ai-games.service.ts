@@ -284,17 +284,19 @@ ${h2hStr}
 CURRENT MARKET ODDS:
 ${oddsStr}
 
-Rules:
-- Pick ONE outcome from the available markets (1X2, Over/Under X.5, BTTS, Double Chance, Draw No Bet).
-- Prefer outcomes with implied probability >= 55% and odds >= 1.2x. Never pick odds below 1.10x.
-- If the match looks too close to call, prefer the most likely 1X2 outcome or an over/under based on scoring form.
+Rules (SURVIVAL — winning consistency is everything):
+- PREFER double chance: "Home or Draw", "Away or Draw" or "Home or Away" — these win when either covered side hits, so they should be the default choice to double our chance of winning.
+- Direct outcomes ("Home Win", "Away Win", "Draw" alone), BTTS and Draw No Bet are ALLOWED ONLY when you are very sure — a clear favourite with overwhelming form/H2H evidence, or overwhelming goal-scoring evidence. Otherwise double chance wins.
+- Goals: if the game should be high scoring, pick "Over 1.5" (never Over 2.5 or higher — the lower line is safer). If low scoring is expected, prefer the safest under: "Under 4.5" or "Under 3.5" (these win more often); "Under 2.5" only when you are very sure.
+- ODDS DO NOT MATTER. Win probability is everything — a winning pick at 1.20x beats a risky pick at 3.00x. Pick the most likely outcome no matter how low its odds.
+- Never pick a multiplier below 1.20x (minimum floor).
 - You must pick SOMETHING — always return one best pick with honest confidence.
 
 Return ONLY valid JSON with no markdown:
 {
-  "selection": "e.g. Home Win | Draw | Away Win | Over 2.5 | Under 2.5 | BTTS Yes | BTTS No",
-  "marketType": "e.g. 1X2 | Over/Under 2.5 | BTTS | Double Chance | Draw No Bet",
-  "multiplier": number (1.10-10.0, must be an odds value present in the market odds or a fair estimate),
+  "selection": "e.g. Home or Draw | Away or Draw | Home or Away | Over 1.5 | Under 3.5 | Under 4.5 | Home Win | BTTS Yes",
+  "marketType": "e.g. Double Chance | Over/Under 1.5 | Over/Under 3.5 | 1X2 | BTTS",
+  "multiplier": number (1.20-10.0, must be an odds value present in the market odds or a fair estimate),
   "confidence": number (0-100),
   "reasoning": "One sentence justification"
 }`;
@@ -355,14 +357,36 @@ Return ONLY valid JSON with no markdown:
     return sel.toLowerCase().replace(/[^a-z0-9]/g, '');
   }
 
+  private get minPickOdds(): number {
+    const v = parseFloat(process.env.ORA_MIN_PICK_ODDS || '1.20');
+    return Number.isFinite(v) && v >= 1.01 ? v : 1.20;
+  }
+
+  private get verySureImplied(): number {
+    const v = parseFloat(process.env.ORA_VERY_SURE_IMPLIED || '0.80');
+    return Number.isFinite(v) && v > 0 && v < 1 ? v : 0.80;
+  }
+
   private oddsBasedPick(fixture: BSDEvent, odds: OddsMarket[]): { pick: string; marketType: string; multiplier: number; confidence: number; reasoning: string } | null {
     const OUTCOME_MAP: Record<string, string> = { HOME: 'Home Win', DRAW: 'Draw', AWAY: 'Away Win' };
+    const DOUBLE_CHANCE_MAP: Record<string, string> = {
+      '1X': 'Home or Draw', HOMEDRAW: 'Home or Draw', HOMEDRAWorDRAW: 'Home or Draw',
+      'X2': 'Draw or Away', DRAW_AWAY: 'Draw or Away', DRAWorAWAY: 'Draw or Away',
+      '12': 'Home or Away', HOME_AWAY: 'Home or Away', HOMEorAWAY: 'Home or Away',
+    };
     const MARKET_NAME: Record<string, string> = {
-      '1x2': '1X2', double_chance: 'Double Chance', draw_no_bet: 'Draw No Bet',
-      over_under_15: 'Over/Under 1.5', over_under_25: 'Over/Under 2.5', over_under_35: 'Over/Under 3.5',
-      btts: 'BTTS',
+      double_chance: 'Double Chance',
+      over_under_15: 'Over/Under 1.5', over_under_25: 'Over/Under 2.5',
+      over_under_35: 'Over/Under 3.5', over_under_45: 'Over/Under 4.5',
+      '1x2': '1X2', btts: 'BTTS', draw_no_bet: 'Draw No Bet',
+    };
+    const MARKET_PRIORITY: Record<string, number> = {
+      double_chance: 0, over_under_15: 1, over_under_45: 1, over_under_35: 1, over_under_25: 1,
+      '1x2': 2, btts: 3, draw_no_bet: 4,
     };
     const WHITELIST = new Set(Object.keys(MARKET_NAME));
+    const minOdds = this.minPickOdds;
+    const verySure = this.verySureImplied;
 
     const marketMap = new Map<string, OddsMarket[]>();
     for (const market of odds) {
@@ -372,44 +396,57 @@ Return ONLY valid JSON with no markdown:
       marketMap.get(code)!.push(market);
     }
 
-    type Cand = { selection: string; marketType: string; odds: number; implied: number };
-    const candidates = (code: string): Cand[] => {
+    type Cand = { selection: string; marketType: string; code: string; odds: number; implied: number };
+    const candidates = (code: string, gate?: number): Cand[] => {
       const out: Cand[] = [];
       for (const market of marketMap.get(code) || []) {
         for (const o of market.outcomes || []) {
           const oddsVal = o.best_odds || o.max_odds || o.odds || 0;
-          if (!oddsVal || oddsVal < 1.2) continue;
-          const rawName = (code === '1x2' && OUTCOME_MAP[o.code || ''])
-            ? OUTCOME_MAP[o.code || ''] : (o.name || o.code || '');
-          if (!rawName) continue;
-          out.push({ selection: rawName, marketType: MARKET_NAME[code], odds: oddsVal, implied: 1 / oddsVal });
+          if (!oddsVal || oddsVal < minOdds) continue;
+          const rawName = o.name || o.code || '';
+          if (code === 'over_under_15' && !/over/i.test(rawName)) continue;
+          if ((code === 'over_under_25' || code === 'over_under_35' || code === 'over_under_45') && /over/i.test(rawName)) continue;
+          let selection = rawName;
+          if (code === 'double_chance') {
+            const key = String(o.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+            selection = DOUBLE_CHANCE_MAP[key] || DOUBLE_CHANCE_MAP[rawName.toUpperCase().replace(/[^A-Z0-9]/g, '')] || rawName;
+          } else if (code === '1x2' && OUTCOME_MAP[String(o.code || '').toUpperCase()]) {
+            selection = OUTCOME_MAP[String(o.code || '').toUpperCase()];
+          }
+          const implied = 1 / oddsVal;
+          if (gate && implied < gate) continue;
+          if (!selection) continue;
+          out.push({ selection, marketType: MARKET_NAME[code], code, odds: oddsVal, implied });
         }
       }
       return out;
     };
-    const bestOf = (list: Cand[], minImplied: number): Cand | null => {
-      const pass = list.filter(c => c.implied >= minImplied);
-      if (!pass.length) return null;
-      return pass.reduce((a, b) => (b.implied > a.implied ? b : a));
-    };
 
-    let best: Cand | null = bestOf(candidates('1x2'), 0.55)
-      ?? bestOf(candidates('over_under_25'), 0.55)
-      ?? bestOf(candidates('over_under_15'), 0.55)
-      ?? bestOf(candidates('over_under_35'), 0.55)
-      ?? bestOf(candidates('btts'), 0.55)
-      ?? bestOf(candidates('double_chance'), 0.70)
-      ?? bestOf(candidates('draw_no_bet'), 0.70)
-      ?? bestOf(candidates('1x2'), 0);
+    const all: Cand[] = [
+      ...candidates('double_chance'),
+      ...candidates('over_under_15'),
+      ...candidates('over_under_45'),
+      ...candidates('over_under_35'),
+      ...candidates('over_under_25'),
+      ...candidates('1x2', verySure),
+      ...candidates('btts', verySure),
+      ...candidates('draw_no_bet', verySure),
+    ];
+    if (!all.length) return null;
 
-    if (!best) return null;
+    // Highest win probability wins; ties favour double chance and safe lines.
+    const best = all.reduce((a, b) => {
+      if (b.implied - a.implied > 0.005) return b;
+      if (a.implied - b.implied > 0.005) return a;
+      return MARKET_PRIORITY[b.code] < MARKET_PRIORITY[a.code] ? b : a;
+    });
     const impliedPct = Math.round(best.implied * 100);
     return {
       pick: best.selection,
       marketType: best.marketType,
       multiplier: Math.round(best.odds * 100) / 100,
       confidence: Math.min(impliedPct, 90),
-      reasoning: `Odds-based pick — ${best.selection} has the highest implied probability (${impliedPct}%) of the available markets.`,
+      reasoning: `Odds-based pick — ${best.selection} has the highest win probability (${impliedPct}% implied).`,
     };
   }
 
