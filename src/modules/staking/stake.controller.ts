@@ -265,6 +265,73 @@ export class StakeController {
       res.status(400).json({ success: false, message: error.message || 'Failed to process cashout' });
     }
   }
+
+  async getAutoCashout(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) {
+        res.status(401).json({ success: false, message: 'Unauthorized' });
+        return;
+      }
+
+      const { id } = req.params;
+      const status = await stakeService.getAutoCashoutStatus(id, userId);
+      if (!status) {
+        res.status(404).json({ success: false, message: 'Stake not found' });
+        return;
+      }
+
+      res.json({ success: true, data: status });
+    } catch (error: any) {
+      console.error('Get auto-cashout error:', error);
+      res.status(400).json({ success: false, message: error.message || 'Failed to get auto-cashout status' });
+    }
+  }
+
+  async armAutoCashout(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) {
+        res.status(401).json({ success: false, message: 'Unauthorized' });
+        return;
+      }
+
+      const { id } = req.params;
+      const targetAmount = req.body?.targetAmount;
+      const stake = await stakeService.armAutoCashout(id, userId, Number(targetAmount));
+      if (!stake) {
+        res.status(404).json({ success: false, message: 'Stake not found' });
+        return;
+      }
+
+      res.json({ success: true, message: 'Auto-cashout armed', data: stake });
+    } catch (error: any) {
+      console.error('Arm auto-cashout error:', error);
+      res.status(400).json({ success: false, message: error.message || 'Failed to arm auto-cashout' });
+    }
+  }
+
+  async disableAutoCashout(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) {
+        res.status(401).json({ success: false, message: 'Unauthorized' });
+        return;
+      }
+
+      const { id } = req.params;
+      const stake = await stakeService.disableAutoCashout(id, userId);
+      if (!stake) {
+        res.status(404).json({ success: false, message: 'Stake not found' });
+        return;
+      }
+
+      res.json({ success: true, message: 'Auto-cashout disabled', data: stake });
+    } catch (error: any) {
+      console.error('Disable auto-cashout error:', error);
+      res.status(400).json({ success: false, message: error.message || 'Failed to disable auto-cashout' });
+    }
+  }
 }
 
 export const stakeController = new StakeController();

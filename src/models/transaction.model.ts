@@ -141,7 +141,12 @@ const TransactionSchema = new Schema({
     bankName: { type: String },
     accountNumber: { type: String },
     accountName: { type: String },
-    narration: { type: String }
+    narration: { type: String },
+    originalStake: { type: Number },
+    cashoutAmount: { type: Number },
+    fee: { type: Number },
+    autoTriggered: { type: Boolean },
+    targetAmount: { type: Number }
   },
   completedAt: { type: Date },
   failedAt: { type: Date },

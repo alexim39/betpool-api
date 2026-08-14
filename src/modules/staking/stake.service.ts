@@ -9,6 +9,7 @@ import { userService } from '../../services/user.service';
 import { abtestService } from '../abtest/abtest.service';
 import { loyaltyService } from '../loyalty/loyalty.service';
 import { coachingService } from '../coaching/coaching.service';
+import { evaluateAccumulatorInsurance } from '../../utils/parlay-insurance';
 
 // Type helper to cast Mongoose lean queries
 function toLeanArray<T>(): (query: any) => Promise<T[]> {
@@ -913,60 +914,181 @@ export class StakeService {
   }
 
   async confirmCashout(stakeId: string, userId: string): Promise<IStake | null> {
+    const stake = await StakeModel.findOne({ _id: stakeId, user: userId });
+    if (!stake) return null;
+    if (stake.isSettled) throw new Error('Stake already settled');
+    if (stake.cashoutRequested) throw new Error('Cashout already requested');
+
+    const CASHOUT_FEE_PERCENT = 10;
+    const cashoutAmount = Math.floor(stake.stakeAmount * (1 - CASHOUT_FEE_PERCENT / 100));
+    const fee = stake.stakeAmount - cashoutAmount;
+
+    return this.executeCashout(stake as IStake, cashoutAmount, fee, false, null);
+  }
+
+  /**
+   * Progressive Stage-1 auto-cashout quote.
+   * Baseline: 90% of stake. Each won leg locks in its multiplier:
+   * quote = 90% * stake * (product of won legs' multipliers).
+   * 2+ lost legs -> 0. Exactly 1 lost leg -> never below the one-leg insurance floor.
+   */
+  computeAutoCashoutQuote(stake: IStake): number {
+    const items = stake.items || [];
+    const active = items.filter(i => i.status !== 'void');
+    if (active.length === 0) return 0;
+
+    const lost = items.filter(i => i.status === 'lost');
+    if (lost.length >= 2) return 0;
+
+    let locked = 1;
+    for (const item of items) {
+      if (item.status === 'won') locked *= item.gainsMultiplier;
+    }
+
+    const quote = Math.floor(stake.stakeAmount * 0.9 * locked);
+
+    if (lost.length === 1) {
+      const insurance = evaluateAccumulatorInsurance(items);
+      if (insurance.applies) {
+        const floor = Math.floor(stake.stakeAmount * locked * 0.9);
+        return Math.max(quote, floor);
+      }
+    }
+
+    return Math.max(0, quote);
+  }
+
+  async getAutoCashoutStatus(stakeId: string, userId: string): Promise<{
+    enabled: boolean;
+    targetAmount: number | null;
+    triggeredAt: Date | null;
+    triggerQuote: number | null;
+    quote: number;
+    maxTarget: number;
+  } | null> {
+    const stake = await StakeModel.findOne({ _id: stakeId, user: userId });
+    if (!stake) return null;
+
+    const quote = this.computeAutoCashoutQuote(stake as IStake);
+    const maxTarget = Math.max(Math.floor(stake.stakeAmount * 0.9), quote);
+
+    return {
+      enabled: !!stake.autoCashout?.enabled,
+      targetAmount: stake.autoCashout?.enabled ? stake.autoCashout.targetAmount : null,
+      triggeredAt: stake.autoCashout?.triggeredAt || null,
+      triggerQuote: stake.autoCashout?.triggerQuote || null,
+      quote,
+      maxTarget
+    };
+  }
+
+  async armAutoCashout(stakeId: string, userId: string, targetAmount: number): Promise<IStake | null> {
+    const stake = await StakeModel.findOne({ _id: stakeId, user: userId });
+    if (!stake) return null;
+    if (stake.isSettled) throw new Error('Stake already settled');
+    if (stake.cashoutRequested) throw new Error('Cashout already requested');
+
+    const target = Math.floor(targetAmount);
+    if (!Number.isFinite(target) || target < 100) throw new Error('Target must be at least ₦100');
+
+    const quote = this.computeAutoCashoutQuote(stake as IStake);
+    const maxTarget = Math.max(Math.floor(stake.stakeAmount * 0.9), quote);
+    if (target > maxTarget) throw new Error(`Target exceeds maximum cashout of ₦${maxTarget.toLocaleString()}`);
+
+    const now = new Date();
+    stake.autoCashout = {
+      enabled: true,
+      targetAmount: target,
+      createdAt: stake.autoCashout?.createdAt || now,
+      updatedAt: now,
+      triggeredAt: stake.autoCashout?.triggeredAt,
+      triggerQuote: stake.autoCashout?.triggerQuote
+    };
+    await stake.save();
+
+    return stake;
+  }
+
+  async disableAutoCashout(stakeId: string, userId: string): Promise<IStake | null> {
+    const stake = await StakeModel.findOne({ _id: stakeId, user: userId });
+    if (!stake) return null;
+    if (stake.cashoutRequested || ['won', 'lost', 'void', 'refunded', 'cashed_out'].includes(stake.status)) {
+      throw new Error('Stake already settled or cashed out');
+    }
+
+    if (stake.autoCashout) {
+      stake.autoCashout.enabled = false;
+      stake.autoCashout.updatedAt = new Date();
+      await stake.save();
+    }
+
+    return stake;
+  }
+
+  async executeCashout(stake: IStake, cashoutAmount: number, fee: number, autoTriggered: boolean, targetAmount: number | null): Promise<IStake | null> {
     const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
-      const stake = await StakeModel.findOne({ _id: stakeId, user: userId }).session(session);
-      if (!stake) throw new Error('Stake not found');
-      if (stake.isSettled) throw new Error('Stake already settled');
-      if (stake.cashoutRequested) throw new Error('Cashout already requested');
-
-      const CASHOUT_FEE_PERCENT = 10;
-      const cashoutAmount = Math.floor(stake.stakeAmount * (1 - CASHOUT_FEE_PERCENT / 100));
-      const fee = stake.stakeAmount - cashoutAmount;
+      const amount = Math.floor(cashoutAmount);
+      const claimed = await StakeModel.findOneAndUpdate(
+        {
+          _id: stake._id,
+          status: { $nin: ['won', 'lost', 'void', 'refunded', 'cashed_out'] },
+          cashoutRequested: false
+        },
+        {
+          $set: {
+            status: 'cashed_out',
+            cashoutRequested: true,
+            cashoutAmount: amount,
+            cashoutAt: new Date(),
+            settledAt: new Date(),
+            settlementNotes: autoTriggered
+              ? `Auto-cashout: ₦${amount.toLocaleString()} (target: ₦${(targetAmount || 0).toLocaleString()})`
+              : `Cashout: ₦${amount.toLocaleString()} (fee: ₦${fee.toLocaleString()})`,
+            ...(autoTriggered ? { 'autoCashout.triggeredAt': new Date(), 'autoCashout.triggerQuote': amount } : {})
+          }
+        },
+        { session, new: true }
+      );
+      if (!claimed) {
+        await session.abortTransaction();
+        return null;
+      }
 
       const wallet = await WalletModel.findOneAndUpdate(
-        { user: userId },
-        { $inc: { balance: cashoutAmount }, $set: { lastTransactionAt: new Date() } },
+        { user: stake.user },
+        { $inc: { balance: amount }, $set: { lastTransactionAt: new Date() } },
         { session, new: true }
       );
       if (!wallet) throw new Error('Wallet not found');
 
-      stake.status = 'cashed_out';
-      stake.cashoutRequested = true;
-      stake.cashoutAmount = cashoutAmount;
-      stake.cashoutAt = new Date();
-      stake.settledAt = new Date();
-      stake.settlementNotes = `Cashout: ₦${cashoutAmount.toLocaleString()} (fee: ₦${fee.toLocaleString()})`;
-      await stake.save({ session });
-
       await TransactionModel.create([{
-        user: userId,
+        user: stake.user,
         wallet: wallet._id,
         type: 'refund',
         status: 'completed',
-        amount: cashoutAmount,
+        amount,
         fee,
-        netAmount: cashoutAmount,
-        balanceBefore: wallet.balance - cashoutAmount,
+        netAmount: amount,
+        balanceBefore: wallet.balance - amount,
         balanceAfter: wallet.balance,
         currency: 'NGN',
-        reference: `CASHOUT_${stake._id}`,
+        reference: autoTriggered ? `AUTO_CASHOUT_${stake._id}` : `CASHOUT_${stake._id}`,
         provider: 'internal',
         completedAt: new Date(),
-        metadata: { originalStake: stake.stakeAmount, cashoutAmount, fee, stakeId: stake._id }
+        metadata: { originalStake: stake.stakeAmount, cashoutAmount: amount, fee, stakeId: stake._id, ...(autoTriggered ? { autoTriggered: true, targetAmount } : {}) }
       }], { session });
 
-      // Decrement pod exposure inside the transaction
       await PodModel.findByIdAndUpdate(stake.pod, { $inc: { currentExposure: -stake.stakeAmount, currentParticipants: -1 } }).session(session);
 
       await session.commitTransaction();
 
       const cashoutPod = await PodModel.findById(stake.pod).select('title');
-      await notifyStakeCashedOut(userId, cashoutPod?.title || 'Pod', cashoutAmount).catch(e => console.error(e));
+      await notifyStakeCashedOut(String(stake.user), cashoutPod?.title || 'Pod', amount).catch(e => console.error(e));
 
-      return stake as any;
+      return claimed;
     } catch (error) {
       await session.abortTransaction();
       throw error;

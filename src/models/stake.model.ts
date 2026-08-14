@@ -36,6 +36,14 @@ export interface IStake extends mongoose.Document {
   cashoutRequested: boolean;
   cashoutAmount?: number;
   cashoutAt?: Date;
+  autoCashout?: {
+    enabled: boolean;
+    targetAmount: number;
+    createdAt?: Date;
+    updatedAt?: Date;
+    triggeredAt?: Date;
+    triggerQuote?: number;
+  };
   metadata?: Record<string, any>;
   createdAt: Date;
   updatedAt: Date;
@@ -128,6 +136,17 @@ const StakeSchema = new Schema({
   cashoutRequested: { type: Boolean, default: false },
   cashoutAmount: { type: Number, min: 0 },
   cashoutAt: { type: Date },
+  autoCashout: {
+    type: new Schema({
+      enabled: { type: Boolean, required: true, default: true },
+      targetAmount: { type: Number, required: true, min: 100 },
+      createdAt: { type: Date },
+      updatedAt: { type: Date },
+      triggeredAt: { type: Date },
+      triggerQuote: { type: Number, min: 0 }
+    }, { _id: false }),
+    default: undefined
+  },
   metadata: { type: Schema.Types.Mixed }
 }, {
   timestamps: true
@@ -139,6 +158,7 @@ StakeSchema.index({ status: 1, createdAt: -1 });
 StakeSchema.index({ user: 1, pod: 1 });
 StakeSchema.index({ 'items.pod': 1 });
 StakeSchema.index({ status: 1, settledAt: -1 });
+StakeSchema.index({ status: 1, 'autoCashout.enabled': 1 });
 
 StakeSchema.virtual('isActive').get(function(this: IStake) {
   return ['pending', 'confirmed'].includes(this.status);
