@@ -60,10 +60,10 @@ function judgePick(g: PickVerdictInput): PickOutcome {
     return Number(g.homeScore) > 0 && Number(g.awayScore) > 0 ? 'won' : 'lost';
   }
 
-  if (/double chance|draw no bet|\b1x\b|\bx2\b|\bor draw\b|\bor away\b|\bor home\b/.test(p)) {
-    const homeCovered = /home|\b1\b|\b1x\b/.test(p);
-    const awayCovered = /away|\b2\b|\bx2\b/.test(p);
-    const drawCovered = /draw/.test(p);
+  if (/double chance|draw no bet|\b1x\b|\bx2\b|\b12\b|\bor draw\b|\bor away\b|\bor home\b/.test(p)) {
+    const homeCovered = /home|\b1\b|\b1x\b|\b12\b/.test(p);
+    const awayCovered = /away|\b2\b|\bx2\b|\b12\b/.test(p);
+    const drawCovered = /draw|\b1x\b|\bx2\b/.test(p);
     if (/draw no bet/.test(p)) {
       const homeSide = homeCovered && !awayCovered;
       const awaySide = awayCovered && !homeCovered;

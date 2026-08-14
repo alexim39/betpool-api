@@ -169,3 +169,88 @@ describe('AICurationService.analyzeFixtureEnhanced (ledger tuning)', () => {
     expect(risky.isCombined).toBeFalsy();
   });
 });
+
+jest.mock('axios');
+import axios from 'axios';
+
+describe('AICurationService.basicFallbackCurate (double-chance odds fallback)', () => {
+  const axiosGetMock = axios.get as unknown as jest.Mock;
+
+  beforeEach(() => {
+    process.env.SPORTSAPI_KEY = 'test-key';
+    jest.spyOn(curationAccuracyService, 'getStats').mockResolvedValue(ledger(50));
+  });
+
+  afterEach(() => {
+    axiosGetMock.mockReset();
+    jest.restoreAllMocks();
+    delete process.env.SPORTSAPI_KEY;
+  });
+
+  it('picks the safest double-chance outcome above the 1.20 floor', async () => {
+    axiosGetMock
+      .mockResolvedValueOnce({ data: { results: [fixture], next: null } })
+      .mockResolvedValue({ data: { markets: {
+        '1x2': {
+          '1': { outcome_name: 'Home', best_odds: 2.0 },
+          'X': { outcome_name: 'Draw', best_odds: 3.4 },
+          '2': { outcome_name: 'Away', best_odds: 3.2 },
+        },
+        double_chance: {
+          '1X': { outcome_name: 'Home or Draw', best_odds: 1.28 },
+          '12': { outcome_name: 'Home or Away', best_odds: 1.18 },
+          'X2': { outcome_name: 'Draw or Away', best_odds: 1.62 },
+        },
+        over_under_15: {
+          over: { outcome_name: 'Over 1.5', best_odds: 1.35 },
+          under: { outcome_name: 'Under 1.5', best_odds: 2.9 },
+        },
+      } } });
+
+    const res = await aiCurationService.basicFallbackCurate();
+
+    expect(res.recommended).toBe(1);
+    expect(res.fixtures[0].selection).toBe('Home or Draw');
+    expect(res.fixtures[0].recommendations[0].recommendedMultiplier).toBe(1.28);
+  });
+
+  it('prefers Over 1.5 when no double chance meets the floor', async () => {
+    axiosGetMock
+      .mockResolvedValueOnce({ data: { results: [fixture], next: null } })
+      .mockResolvedValue({ data: { markets: {
+        double_chance: {
+          '1X': { outcome_name: 'Home or Draw', best_odds: 1.12 },
+          'X2': { outcome_name: 'Draw or Away', best_odds: 1.15 },
+        },
+        over_under_15: {
+          over: { outcome_name: 'Over 1.5', best_odds: 1.30 },
+          under: { outcome_name: 'Under 1.5', best_odds: 2.9 },
+        },
+        over_under_25: {
+          over: { outcome_name: 'Over 2.5', best_odds: 2.1 },
+          under: { outcome_name: 'Under 2.5', best_odds: 1.72 },
+        },
+      } } });
+
+    const res = await aiCurationService.basicFallbackCurate();
+
+    expect(res.recommended).toBe(1);
+    expect(res.fixtures[0].selection).toBe('Over 1.5');
+  });
+
+  it('skips fixtures with no outcome above the odds floor', async () => {
+    axiosGetMock
+      .mockResolvedValueOnce({ data: { results: [fixture], next: null } })
+      .mockResolvedValue({ data: { markets: {
+        double_chance: {
+          '1X': { outcome_name: 'Home or Draw', best_odds: 1.15 },
+        },
+      } } });
+
+    const res = await aiCurationService.basicFallbackCurate();
+
+    expect(res.recommended).toBe(0);
+    expect(res.skipped).toBe(1);
+    expect(res.fixtures[0].overallReasoning).toContain('floor');
+  });
+});

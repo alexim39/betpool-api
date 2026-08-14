@@ -429,3 +429,88 @@ describe('AIGamesService.syncMatchStatuses', () => {
     expect(updateOneMock).not.toHaveBeenCalled();
   });
 });
+
+describe('AIGamesService.oddsBasedPick (double-chance survival rules)', () => {
+  const pick = (odds: any[]) => (aiGamesService as any).oddsBasedPick({ id: 1, home_team: 'A', away_team: 'B' }, odds);
+
+  it('prefers double chance over any direct 1X2 outcome', () => {
+    const res = pick([
+      { code: '1x2', outcomes: [
+        { code: 'HOME', name: 'Home', best_odds: 2.0 },
+        { code: 'DRAW', name: 'Draw', best_odds: 3.4 },
+        { code: 'AWAY', name: 'Away', best_odds: 3.2 },
+      ] },
+      { code: 'double_chance', outcomes: [
+        { code: '1X', name: 'Home or Draw', best_odds: 1.28 },
+        { code: 'X2', name: 'Draw or Away', best_odds: 1.62 },
+        { code: '12', name: 'Home or Away', best_odds: 1.18 },
+      ] },
+    ]);
+    expect(res).not.toBeNull();
+    expect(res.pick).toBe('Home or Draw');
+    expect(res.marketType).toBe('Double Chance');
+    expect(res.multiplier).toBe(1.28);
+  });
+
+  it('picks Over 1.5 over Over 2.5 when double chance is absent', () => {
+    const res = pick([
+      { code: 'over_under_15', outcomes: [
+        { code: 'over', name: 'Over 1.5', best_odds: 1.30 },
+        { code: 'under', name: 'Under 1.5', best_odds: 2.9 },
+      ] },
+      { code: 'over_under_25', outcomes: [
+        { code: 'over', name: 'Over 2.5', best_odds: 2.1 },
+        { code: 'under', name: 'Under 2.5', best_odds: 1.72 },
+      ] },
+    ]);
+    expect(res).not.toBeNull();
+    expect(res.pick).toBe('Over 1.5');
+  });
+
+  it('picks Under 2.5 as the safe side of the over/under 2.5 market', () => {
+    const res = pick([
+      { code: 'over_under_25', outcomes: [
+        { code: 'over', name: 'Over 2.5', best_odds: 1.75 },
+        { code: 'under', name: 'Under 2.5', best_odds: 1.90 },
+      ] },
+    ]);
+    expect(res).not.toBeNull();
+    expect(res.pick).toBe('Under 2.5');
+  });
+
+  it('maps numeric double-chance codes to readable picks', () => {
+    const res = pick([
+      { code: 'double_chance', outcomes: [
+        { code: 'HOME_DRAW', name: '', best_odds: 1.40 },
+      ] },
+    ]);
+    expect(res).not.toBeNull();
+    expect(res.pick).toBe('Home or Draw');
+  });
+
+  it('returns null when every available outcome is below the 1.20 floor', () => {
+    const res = pick([
+      { code: 'double_chance', outcomes: [
+        { code: '1X', name: 'Home or Draw', best_odds: 1.12 },
+        { code: 'X2', name: 'Draw or Away', best_odds: 1.15 },
+      ] },
+      { code: '1x2', outcomes: [
+        { code: 'HOME', name: 'Home', best_odds: 1.10 },
+        { code: 'AWAY', name: 'Away', best_odds: 4.0 },
+      ] },
+    ]);
+    expect(res).toBeNull();
+  });
+
+  it('never picks BTTS or Draw No Bet even at high implied probability', () => {
+    const res = pick([
+      { code: 'btts', outcomes: [
+        { code: 'yes', name: 'BTTS Yes', best_odds: 1.25 },
+      ] },
+      { code: 'draw_no_bet', outcomes: [
+        { code: 'home', name: 'Home (DNB)', best_odds: 1.30 },
+      ] },
+    ]);
+    expect(res).toBeNull();
+  });
+});
