@@ -184,6 +184,16 @@ export class AdminService {
   async createPod(data: Partial<IPod>, userId: string): Promise<IPod> {
     const impliedProbability = data.gainsMultiplier ? 1 / data.gainsMultiplier : 0;
 
+    const fixtureId = (data.metadata as any)?.fixtureId;
+    if (fixtureId) {
+      const existing = await PodModel.findOne({
+        'metadata.fixtureId': fixtureId,
+        selection: data.selection,
+        status: { $in: ['active', 'published', 'draft'] },
+      });
+      if (existing) return existing;
+    }
+
     const now = new Date();
     data.opensAt = data.opensAt || now;
 

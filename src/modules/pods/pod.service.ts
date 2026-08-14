@@ -112,27 +112,46 @@ export class PodService {
     if (options.cursor) query.opensAt = { $lt: options.cursor };
 
     const baseQuery = PodModel.find(query).select('-legs -marketOdds').lean();
-    const total = await PodModel.countDocuments(query);
 
     if (options.personalized) {
-      const pods = await baseQuery as unknown as IPod[];
-      const result = await aiPersonalizationService.personalize(pods, options.personalized);
-      const ranked = result.items as IPod[];
-      const paginated = ranked.slice(offset, offset + (options.limit || 20));
-      return { pods: paginated, total };
+      const rankedCacheKey = `feed:${sportKey}:ranked:${options.personalized}`;
+      let unique = cacheService.get<IPod[]>(rankedCacheKey);
+      if (!unique) {
+        const pods = await baseQuery as unknown as IPod[];
+        const result = await aiPersonalizationService.personalize(pods, options.personalized);
+        unique = this.dedupePicks(result.items as IPod[]);
+        cacheService.set(rankedCacheKey, unique, 30_000);
+      }
+      const paginated = unique.slice(offset, offset + (options.limit || 20));
+      return { pods: paginated, total: unique.length };
     }
 
-    const pods = await baseQuery
-      .sort({ stakingClosesAt: 1, isLive: -1, displayOrder: 1, opensAt: 1 })
-      .skip(offset)
-      .limit(options.limit || 20) as unknown as IPod[];
+    const all = await baseQuery
+      .sort({ stakingClosesAt: 1, isLive: -1, displayOrder: 1, opensAt: 1, _id: 1 }) as unknown as IPod[];
+    const unique = this.dedupePicks(all);
+    const paginated = unique.slice(offset, offset + (options.limit || 20));
 
     if (!options.cursor && offset === 0) {
       logger.debug('getActiveFeed setting cache', { cacheKey });
-      cacheService.set(cacheKey, { items: pods, total }, 60_000);
+      cacheService.set(cacheKey, { items: paginated, total: unique.length }, 60_000);
     }
 
-    return { pods, total };
+    return { pods: paginated, total: unique.length };
+  }
+
+  private dedupePicks(pods: IPod[]): IPod[] {
+    const seen = new Set<string>();
+    const out: IPod[] = [];
+    for (const p of pods) {
+      const meta = (p as any).metadata || {};
+      const key = meta.fixtureId
+        ? `f:${meta.fixtureId}|${p.selection}`
+        : `t:${p.title}|${p.selection}|${p.gainsMultiplier}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(p);
+    }
+    return out;
   }
 
   async getUpcoming(options: {
