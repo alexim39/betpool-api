@@ -896,20 +896,31 @@ export class AdminService {
     user: IUser | null;
     wallet: any;
     stakes: { items: IStake[]; total: number };
+    referrals: { items: any[]; total: number };
   }> {
     const user = await UserModel.findById(id).select('-pinHash') as unknown as IUser | null;
-    if (!user) return { user: null, wallet: null, stakes: { items: [], total: 0 } };
+    if (!user) return { user: null, wallet: null, stakes: { items: [], total: 0 }, referrals: { items: [], total: 0 } };
 
-    const [wallet, stakes, stakeCount] = await Promise.all([
+    const [wallet, stakes, stakeCount, referrals, referralCount] = await Promise.all([
       WalletModel.findOne({ user: id }),
       StakeModel.find({ user: id })
         .sort({ createdAt: -1 })
         .limit(20)
         .populate('pod', 'title status'),
-      StakeModel.countDocuments({ user: id })
+      StakeModel.countDocuments({ user: id }),
+      UserModel.find({ referredBy: id })
+        .sort({ createdAt: -1 })
+        .limit(20)
+        .select('fullName phone email isSuspended kycVerified referralBonusPaid createdAt lastLoginAt'),
+      UserModel.countDocuments({ referredBy: id })
     ]);
 
-    return { user, wallet, stakes: { items: stakes as unknown as IStake[], total: stakeCount } };
+    return {
+      user,
+      wallet,
+      stakes: { items: stakes as unknown as IStake[], total: stakeCount },
+      referrals: { items: referrals, total: referralCount }
+    };
   }
 
   async toggleUserStatus(id: string): Promise<IUser | null> {
@@ -1009,6 +1020,44 @@ export class AdminService {
     }
 
     return user;
+  }
+
+  async bulkUserAction(
+    ids: string[],
+    action: 'suspend' | 'activate' | 'verify_kyc' | 'unverify_kyc' | 'mark_affiliate' | 'unmark_affiliate',
+    actorId?: string,
+  ): Promise<{ action: string; matched: number; modified: number; excluded: string[] }> {
+    const seen = new Set<string>();
+    const cleanIds = ids
+      .filter(id => typeof id === 'string' && mongoose.Types.ObjectId.isValid(id) && !seen.has(id))
+      .map(id => { seen.add(id); return id; })
+      .slice(0, 500);
+
+    if (cleanIds.length === 0) throw new AppError('No valid user ids provided', 400);
+
+    const set: Record<string, any> = {};
+    switch (action) {
+      case 'suspend': set.isSuspended = true; break;
+      case 'activate': set.isSuspended = false; break;
+      case 'verify_kyc': set.kycVerified = true; break;
+      case 'unverify_kyc': set.kycVerified = false; break;
+      case 'mark_affiliate': set.isAffiliate = true; break;
+      case 'unmark_affiliate': set.isAffiliate = false; break;
+      default: throw new AppError('Unknown bulk action', 400);
+    }
+
+    const excluded: string[] = [];
+    if (action === 'suspend' && actorId && cleanIds.includes(actorId)) {
+      cleanIds.splice(cleanIds.indexOf(actorId), 1);
+      excluded.push(actorId);
+    }
+    if (cleanIds.length === 0) throw new AppError('You cannot suspend your own account', 400);
+
+    const update: Record<string, any> = { $set: set };
+    if (action === 'suspend' || action === 'activate') update.$inc = { tokenVersion: 1 };
+
+    const result = await UserModel.updateMany({ _id: { $in: cleanIds } }, update);
+    return { action, matched: result.matchedCount, modified: result.modifiedCount, excluded };
   }
 
   async rejectUserKYC(id: string, notes: string): Promise<IUser | null> {
