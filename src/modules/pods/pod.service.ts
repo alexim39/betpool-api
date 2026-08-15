@@ -111,13 +111,14 @@ export class PodService {
     if (options.isLive !== undefined) query.isLive = options.isLive;
     if (options.cursor) query.opensAt = { $lt: options.cursor };
 
-    const baseQuery = PodModel.find(query).select('-legs -marketOdds').lean();
+    const baseQuery = PodModel.find(query).select('-legs -marketOdds').populate('createdBy', 'fullName').lean();
 
     if (options.personalized) {
       const rankedCacheKey = `feed:${sportKey}:ranked:${options.personalized}`;
       let unique = cacheService.get<IPod[]>(rankedCacheKey);
       if (!unique) {
-        const pods = await baseQuery as unknown as IPod[];
+        const raw = await baseQuery as any[];
+        const pods = this.attachCreatorNames(raw) as unknown as IPod[];
         const result = await aiPersonalizationService.personalize(pods, options.personalized);
         unique = this.dedupePicks(result.items as IPod[]);
         cacheService.set(rankedCacheKey, unique, 30_000);
@@ -126,8 +127,15 @@ export class PodService {
       return { pods: paginated, total: unique.length };
     }
 
-    const all = await baseQuery
-      .sort({ stakingClosesAt: 1, isLive: -1, displayOrder: 1, opensAt: 1, _id: 1 }) as unknown as IPod[];
+    const raw = await baseQuery as any[];
+    const all = this.attachCreatorNames(raw)
+      .sort((a: any, b: any) =>
+        a.stakingClosesAt - b.stakingClosesAt ||
+        (b.isLive ? 1 : 0) - (a.isLive ? 1 : 0) ||
+        a.displayOrder - b.displayOrder ||
+        a.opensAt - b.opensAt ||
+        String(a._id).localeCompare(String(b._id))
+      ) as unknown as IPod[];
     const unique = this.dedupePicks(all);
     const paginated = unique.slice(offset, offset + (options.limit || 20));
 
@@ -137,6 +145,16 @@ export class PodService {
     }
 
     return { pods: paginated, total: unique.length };
+  }
+
+  private attachCreatorNames(pods: any[]): any[] {
+    return pods.map(p => {
+      const c = p?.createdBy;
+      if (c && typeof c === 'object' && c._id) {
+        return { ...p, createdBy: String(c._id), creatorName: c.fullName || null };
+      }
+      return { ...p, creatorName: null };
+    });
   }
 
   private dedupePicks(pods: IPod[]): IPod[] {

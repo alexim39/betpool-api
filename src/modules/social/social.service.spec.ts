@@ -3,10 +3,10 @@ import { SocialService } from './social.service';
 import { cacheService } from '../../services/cache.service';
 
 jest.mock('../../models/pod.model', () => ({
-  PodModel: { findById: jest.fn(), find: jest.fn(), countDocuments: jest.fn() }
+  PodModel: { findById: jest.fn(), find: jest.fn(), countDocuments: jest.fn(), aggregate: jest.fn() }
 }));
 jest.mock('../../models/user.model', () => ({
-  UserModel: { findById: jest.fn(), findOne: jest.fn() }
+  UserModel: { findById: jest.fn(), findOne: jest.fn(), find: jest.fn() }
 }));
 jest.mock('./social.model', () => ({
   SocialLikeModel: { findOne: jest.fn(), create: jest.fn(), deleteOne: jest.fn(), countDocuments: jest.fn(), aggregate: jest.fn(), distinct: jest.fn() },
@@ -231,12 +231,14 @@ describe('SocialService', () => {
     it('queries active pods by followed creators (Ora always included)', async () => {
       oraChain(null);
       MockSocialFollowModel.find.mockReturnValue(findChain([{ followee: OID }]));
-      const pods = [{ _id: POD, title: 'Pick' }];
+      const pods = [{ _id: POD, title: 'Pick', createdBy: { _id: OID, fullName: 'Ada Lovelace' } }];
       MockPodModel.find.mockReturnValue({
         sort: jest.fn().mockReturnValue({
           skip: jest.fn().mockReturnValue({
             limit: jest.fn().mockReturnValue({
-              select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(pods) })
+              select: jest.fn().mockReturnValue({
+                populate: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(pods) })
+              })
             })
           })
         })
@@ -248,7 +250,9 @@ describe('SocialService', () => {
       const filter = MockPodModel.find.mock.calls[0][0];
       expect(filter.status).toBe('active');
       expect(filter.createdBy.$in[0].toString()).toBe(OID.toString());
-      expect(result.items).toEqual(pods);
+      expect(result.items[0].title).toBe('Pick');
+      expect(result.items[0].createdBy).toBe(OID.toString());
+      expect(result.items[0].creatorName).toBe('Ada Lovelace');
     });
 
     it('includes Ora in the followed set even with no follow rows', async () => {
@@ -259,7 +263,9 @@ describe('SocialService', () => {
         sort: jest.fn().mockReturnValue({
           skip: jest.fn().mockReturnValue({
             limit: jest.fn().mockReturnValue({
-              select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(pods) })
+              select: jest.fn().mockReturnValue({
+                populate: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(pods) })
+              })
             })
           })
         })
@@ -269,7 +275,8 @@ describe('SocialService', () => {
       const result = await service.getFollowingFeed('u1', 1, 12);
 
       expect(MockPodModel.find.mock.calls[0][0].createdBy.$in[0].toString()).toBe(OID.toString());
-      expect(result.items).toEqual(pods);
+      expect(result.items[0].title).toBe('Ora pick');
+      expect(result.items[0].creatorName).toBeNull();
     });
   });
 
@@ -317,6 +324,74 @@ describe('SocialService', () => {
         pod: POD.toString(),
         payload: { x: 1 }
       });
+    });
+  });
+
+  describe('listFollowing', () => {
+    it('returns followed ids with Ora always included', async () => {
+      oraChain(OID.toString());
+      MockSocialFollowModel.find.mockReturnValue(findChain([{ followee: OID }]));
+
+      const result = await service.listFollowing('u1');
+
+      expect(result.ids).toEqual([OID.toString()]);
+      expect(result.oraId).toBe(OID.toString());
+    });
+
+    it('adds Ora even when nothing is followed', async () => {
+      oraChain(OID.toString());
+      MockSocialFollowModel.find.mockReturnValue(findChain([]));
+
+      const result = await service.listFollowing('u1');
+
+      expect(result.ids).toEqual([OID.toString()]);
+    });
+  });
+
+  describe('listCreators', () => {
+    it('returns creators with counts, ora flag and following state, excluding the caller', async () => {
+      const other = new mongoose.Types.ObjectId('507f1f77bcf86cd799439013');
+      oraChain(OID.toString());
+      MockPodModel.aggregate.mockResolvedValue([
+        { _id: OID, podCount: 12 },
+        { _id: other, podCount: 4 }
+      ]);
+      MockUserModel.find.mockReturnValue({
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([
+          { _id: OID, fullName: 'Ora' },
+          { _id: other, fullName: 'Grace Hopper' }
+        ]) })
+      });
+      MockSocialFollowModel.find.mockReturnValue(findChain([{ followee: other }]));
+
+      const result = await service.listCreators('me', 20);
+
+      expect(result).toHaveLength(2);
+      expect(result[0]).toMatchObject({ id: OID.toString(), fullName: 'Ora', podCount: 12, isOra: true, isFollowing: true });
+      expect(result[1]).toMatchObject({ id: other.toString(), fullName: 'Grace Hopper', podCount: 4, isOra: false, isFollowing: true });
+    });
+
+    it('excludes the requesting user and non-creators', async () => {
+      oraChain(null);
+      MockPodModel.aggregate.mockResolvedValue([{ _id: OID, podCount: 7 }]);
+      MockUserModel.find.mockReturnValue({
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([
+          { _id: OID, fullName: 'Ora' }
+        ]) })
+      });
+      MockSocialFollowModel.find.mockReturnValue(findChain([]));
+
+      const result = await service.listCreators(OID.toString(), 20);
+
+      expect(result).toHaveLength(0);
+    });
+
+    it('returns empty when no pods exist', async () => {
+      MockPodModel.aggregate.mockResolvedValue([]);
+
+      const result = await service.listCreators('me', 20);
+
+      expect(result).toEqual([]);
     });
   });
 });

@@ -94,6 +94,43 @@ export class SocialService {
     return ids;
   }
 
+  async listFollowing(userId: string): Promise<{ ids: string[]; oraId: string }> {
+    const ids = await this.listFollowedIds(userId);
+    return { ids, oraId: await this.getOraCreatorId() };
+  }
+
+  async listCreators(userId: string, limit: number): Promise<Record<string, any>[]> {
+    const safeLimit = Math.min(50, Math.max(1, limit || 20));
+    const rows = await PodModel.aggregate<{ _id: mongoose.Types.ObjectId; podCount: number }>([
+      { $match: { createdBy: { $exists: true, $ne: null } } },
+      { $group: { _id: '$createdBy', podCount: { $sum: 1 } } },
+      { $sort: { podCount: -1 } }
+    ]);
+    if (rows.length === 0) return [];
+    const ids = rows.map(r => r._id);
+    const users = await UserModel.find({ _id: { $in: ids }, isActive: true }).select('_id fullName').lean();
+    if (users.length === 0) return [];
+    const oraId = await this.getOraCreatorId();
+    const follows = await SocialFollowModel.find({ follower: userId }).select('followee').lean();
+    const followed = new Set(follows.map(f => f.followee.toString()));
+    const counts = new Map(rows.map(r => [r._id.toString(), r.podCount]));
+    return users
+      .map(u => {
+        const id = String(u._id);
+        const isOra = id === oraId;
+        return {
+          id,
+          fullName: (u as any).fullName || 'BetPool user',
+          podCount: counts.get(id) || 0,
+          isOra,
+          isFollowing: isOra || followed.has(id)
+        };
+      })
+      .filter(c => c.id !== userId)
+      .sort((a, b) => b.podCount - a.podCount)
+      .slice(0, safeLimit);
+  }
+
   async addComment(userId: string, podId: string, text: string): Promise<Record<string, any>> {
     await this.ensurePodExists(podId);
     const comment = await SocialCommentModel.create({ pod: podId, user: userId, text });
@@ -164,15 +201,21 @@ export class SocialService {
       createdBy: { $in: followedIds.map(id => new mongoose.Types.ObjectId(id)) },
       $expr: { $lt: ['$currentExposure', '$maxTotalExposure'] }
     };
-    const [items, total] = await Promise.all([
-      PodModel.find(filter)
-        .sort({ stakingClosesAt: 1, isLive: -1, displayOrder: 1, opensAt: 1, _id: 1 })
-        .skip((safePage - 1) * safeLimit)
-        .limit(safeLimit)
-        .select('-legs -marketOdds')
-        .lean() as Promise<Record<string, any>[]>,
-      PodModel.countDocuments(filter)
-    ]);
+    const raw = (await PodModel.find(filter)
+      .sort({ stakingClosesAt: 1, isLive: -1, displayOrder: 1, opensAt: 1, _id: 1 })
+      .skip((safePage - 1) * safeLimit)
+      .limit(safeLimit)
+      .select('-legs -marketOdds')
+      .populate('createdBy', 'fullName')
+      .lean()) as any[];
+    const items = raw.map(p => {
+      const c = p?.createdBy;
+      if (c && typeof c === 'object' && c._id) {
+        return { ...p, createdBy: String(c._id), creatorName: c.fullName || null };
+      }
+      return { ...p, creatorName: null };
+    });
+    const total = await PodModel.countDocuments(filter);
     return { items, total, page: safePage, limit: safeLimit, pages: Math.ceil(total / safeLimit) };
   }
 

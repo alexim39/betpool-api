@@ -18,5 +18,7 @@ router.get('/comments', authMiddleware, socialController.listComments);
 router.get('/stats', authMiddleware, socialController.getStats);
 router.get('/feed', authMiddleware, socialController.getFollowingFeed);
 router.get('/activity', authMiddleware, socialController.getActivity);
+router.get('/following', authMiddleware, socialController.listFollowing);
+router.get('/creators', authMiddleware, socialController.listCreators);
 
 export default router;

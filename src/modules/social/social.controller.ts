@@ -104,6 +104,30 @@ export class SocialController {
     }
   }
 
+  async listFollowing(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const userId = getUserId(req);
+      if (!userId) { res.status(401).json({ success: false, message: 'Unauthorized' }); return; }
+      const data = await socialService.listFollowing(userId);
+      res.json({ success: true, data });
+    } catch (error: any) {
+      logger.error('Social listFollowing error', error);
+      res.status(500).json({ success: false, message: error?.message || 'Failed to fetch following list' });
+    }
+  }
+
+  async listCreators(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const userId = getUserId(req);
+      if (!userId) { res.status(401).json({ success: false, message: 'Unauthorized' }); return; }
+      const data = await socialService.listCreators(userId, parseLimit(req, 12));
+      res.json({ success: true, data });
+    } catch (error: any) {
+      logger.error('Social listCreators error', error);
+      res.status(500).json({ success: false, message: error?.message || 'Failed to fetch creators' });
+    }
+  }
+
   async getActivity(req: AuthRequest, res: Response): Promise<void> {
     try {
       const userId = getUserId(req);
