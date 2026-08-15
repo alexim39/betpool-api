@@ -21,6 +21,7 @@ import loyaltyRoutes from '../modules/loyalty/loyalty.routes';
 import leaderboardRoutes from '../modules/leaderboard/leaderboard.routes';
 import coachingRoutes from '../modules/coaching/coaching.routes';
 import virtualGamesRoutes from '../modules/virtual-games/virtual-games.routes';
+import { socialRoutes } from '../modules/social';
 
 import { authMiddleware } from '../middleware/auth.middleware';
 import { adminMiddleware } from '../middleware/admin.middleware';
@@ -59,6 +60,7 @@ router.use('/loyalty', authMiddleware, loyaltyRoutes);
 router.use('/leaderboard', authMiddleware, leaderboardRoutes);
 router.use('/coaching', authMiddleware, coachingRoutes);
 router.use('/virtual-games', virtualGamesRoutes);
+router.use('/social', authMiddleware, socialRoutes);
 
 // Admin routes (auth + admin middleware applied at this level)
 router.use('/admin', authMiddleware, adminMiddleware, adminLimiter, abtestAdminRoutes, adminRoutes);

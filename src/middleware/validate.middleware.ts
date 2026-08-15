@@ -131,3 +131,19 @@ export const validateOraChat = [
   body('messages.*.content').isString().notEmpty().withMessage('Message content is required'),
   validate
 ];
+
+export const validateSocialToggle = [
+  body('podId').isMongoId().withMessage('Invalid pod ID'),
+  validate
+];
+
+export const validateSocialFollowToggle = [
+  body('creatorId').isMongoId().withMessage('Invalid creator ID'),
+  validate
+];
+
+export const validateAddComment = [
+  body('podId').isMongoId().withMessage('Invalid pod ID'),
+  body('text').trim().isLength({ min: 1, max: 500 }).withMessage('Comment must be 1-500 characters'),
+  validate
+];
