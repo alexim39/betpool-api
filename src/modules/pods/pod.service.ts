@@ -31,6 +31,20 @@ export interface CreatePodData {
   createdBy: mongoose.Types.ObjectId;
 }
 
+export interface CreateUserPickData {
+  sport: string;
+  league?: string;
+  homeTeam: string;
+  awayTeam: string;
+  matchDate: Date;
+  selection: string;
+  gainsMultiplier: number;
+  minStake?: number;
+  maxStake?: number;
+  maxTotalExposure?: number;
+  stakingClosesAt: Date;
+}
+
 export interface UpdatePodData {
   title?: string;
   description?: string;
@@ -71,9 +85,48 @@ export class PodService {
       ...data,
       impliedProbability,
       currentExposure: 0,
+      visibility: 'public',
       settlementEstimateLabel: data.settlementEstimateLabel || 'Pending'
     });
 
+    return pod;
+  }
+
+  async createUserPick(userId: string, data: CreateUserPickData): Promise<IPod> {
+    const now = new Date();
+    const maxStake = data.maxStake ?? 50000;
+    const gainsMultiplier = data.gainsMultiplier;
+
+    const pod = await PodModel.create({
+      title: `${data.homeTeam} vs ${data.awayTeam} — ${data.selection}`,
+      sport: data.sport,
+      league: data.league,
+      homeTeam: data.homeTeam,
+      awayTeam: data.awayTeam,
+      matchDate: data.matchDate,
+      marketType: 'Match Result',
+      selection: data.selection,
+      gainsMultiplier,
+      impliedProbability: 1 / gainsMultiplier,
+      minStake: data.minStake ?? 100,
+      maxStake,
+      maxPayout: Math.floor(maxStake * gainsMultiplier),
+      maxTotalExposure: data.maxTotalExposure ?? 5000000,
+      currentExposure: 0,
+      currentParticipants: 0,
+      status: 'active',
+      opensAt: now,
+      stakingClosesAt: data.stakingClosesAt,
+      settlementEstimateLabel: 'Pending',
+      settlementEstimateAt: data.matchDate,
+      isLive: false,
+      displayOrder: 0,
+      legs: [],
+      visibility: 'followers',
+      createdBy: userId
+    });
+
+    cacheService.clear('feed:');
     return pod;
   }
 
@@ -104,6 +157,7 @@ export class PodService {
     const query: Record<string, any> = {
       status: 'active',
       stakingClosesAt: { $gte: now },
+      visibility: { $ne: 'followers' },
       $expr: { $lt: ['$currentExposure', '$maxTotalExposure'] }
     };
 
@@ -111,13 +165,14 @@ export class PodService {
     if (options.isLive !== undefined) query.isLive = options.isLive;
     if (options.cursor) query.opensAt = { $lt: options.cursor };
 
-    const baseQuery = PodModel.find(query).select('-legs -marketOdds').lean();
+    const baseQuery = PodModel.find(query).select('-legs -marketOdds').populate('createdBy', 'fullName').lean();
 
     if (options.personalized) {
       const rankedCacheKey = `feed:${sportKey}:ranked:${options.personalized}`;
       let unique = cacheService.get<IPod[]>(rankedCacheKey);
       if (!unique) {
-        const pods = await baseQuery as unknown as IPod[];
+        const raw = await baseQuery as any[];
+        const pods = this.attachCreatorNames(raw) as unknown as IPod[];
         const result = await aiPersonalizationService.personalize(pods, options.personalized);
         unique = this.dedupePicks(result.items as IPod[]);
         cacheService.set(rankedCacheKey, unique, 30_000);
@@ -126,8 +181,15 @@ export class PodService {
       return { pods: paginated, total: unique.length };
     }
 
-    const all = await baseQuery
-      .sort({ stakingClosesAt: 1, isLive: -1, displayOrder: 1, opensAt: 1, _id: 1 }) as unknown as IPod[];
+    const raw = await baseQuery as any[];
+    const all = this.attachCreatorNames(raw)
+      .sort((a: any, b: any) =>
+        a.stakingClosesAt - b.stakingClosesAt ||
+        (b.isLive ? 1 : 0) - (a.isLive ? 1 : 0) ||
+        a.displayOrder - b.displayOrder ||
+        a.opensAt - b.opensAt ||
+        String(a._id).localeCompare(String(b._id))
+      ) as unknown as IPod[];
     const unique = this.dedupePicks(all);
     const paginated = unique.slice(offset, offset + (options.limit || 20));
 
@@ -137,6 +199,16 @@ export class PodService {
     }
 
     return { pods: paginated, total: unique.length };
+  }
+
+  private attachCreatorNames(pods: any[]): any[] {
+    return pods.map(p => {
+      const c = p?.createdBy;
+      if (c && typeof c === 'object' && c._id) {
+        return { ...p, createdBy: String(c._id), creatorName: c.fullName || null };
+      }
+      return { ...p, creatorName: null };
+    });
   }
 
   private dedupePicks(pods: IPod[]): IPod[] {
@@ -169,7 +241,8 @@ export class PodService {
 
     const query: Record<string, any> = {
       status: { $in: ['published', 'active'] },
-      opensAt: { $gt: now, $lte: endTime }
+      opensAt: { $gt: now, $lte: endTime },
+      visibility: { $ne: 'followers' }
     };
 
     if (options.sport) query.sport = new RegExp(`^${options.sport.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');

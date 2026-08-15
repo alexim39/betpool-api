@@ -2,6 +2,17 @@ import { Request, Response } from 'express';
 import { AuthRequest } from '../../middleware/auth.middleware';
 import { podService } from './pod.service';
 import { PodModel } from '../../models/pod.model';
+import { UserModel } from '../../models/user.model';
+import { cacheService } from '../../services/cache.service';
+
+async function getOraId(): Promise<string> {
+  const cached = cacheService.get<string>('feed:oraId');
+  if (cached) return cached;
+  const ora = await UserModel.findOne({ role: 'admin' }).sort({ createdAt: 1 }).select('_id').lean();
+  const id = ora?._id?.toString() || '';
+  if (id) cacheService.set('feed:oraId', id, 60000);
+  return id;
+}
 
 export class PodController {
   async getActiveFeed(req: AuthRequest, res: Response): Promise<void> {
@@ -24,7 +35,8 @@ export class PodController {
           total,
           hasMore: offsetNum + limitNum < total,
           maxAccumulatorLegs: parseInt(process.env.MAX_ACCUMULATOR_LEGS || '5', 10),
-          insuranceMinLegs: parseInt(process.env.ACCUMULATOR_INSURANCE_MIN_LEGS || '4', 10)
+          insuranceMinLegs: parseInt(process.env.ACCUMULATOR_INSURANCE_MIN_LEGS || '4', 10),
+          oraId: await getOraId()
         }
       });
     } catch (error) {

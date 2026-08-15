@@ -62,6 +62,7 @@ export interface IPod extends mongoose.Document {
   tags?: string[];
   metadata?: Record<string, any>;
   legs: PodLeg[];
+  visibility?: 'public' | 'followers';
   createdBy: mongoose.Types.ObjectId;
   updatedBy?: mongoose.Types.ObjectId;
   settledBy?: mongoose.Types.ObjectId;
@@ -244,6 +245,12 @@ const PodSchema = new Schema({
   tags: [{ type: String, trim: true }],
   metadata: { type: Schema.Types.Mixed },
   legs: [PodLegSchema],
+  visibility: {
+    type: String,
+    enum: ['public', 'followers'],
+    default: 'public',
+    index: true
+  },
   createdBy: {
     type: Schema.Types.ObjectId,
     ref: 'User',
