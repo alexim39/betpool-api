@@ -250,6 +250,34 @@ export class AdminController {
     }
   }
 
+  async bulkUserAction(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const { ids, action } = req.body || {};
+      const allowed = ['suspend', 'activate', 'verify_kyc', 'unverify_kyc', 'mark_affiliate', 'unmark_affiliate'];
+      if (!Array.isArray(ids)) {
+        res.status(400).json({ success: false, message: 'ids must be an array' });
+        return;
+      }
+      if (ids.length > 500) {
+        res.status(400).json({ success: false, message: 'Maximum 500 ids per request' });
+        return;
+      }
+      if (typeof action !== 'string' || !allowed.includes(action)) {
+        res.status(400).json({ success: false, message: 'Invalid action' });
+        return;
+      }
+      const result = await adminService.bulkUserAction(ids, action as never, req.user?.userId);
+      res.json({ success: true, data: result, message: `Bulk action "${action}" applied to ${result.modified} user(s)` });
+    } catch (error) {
+      const err = error as any;
+      logger.error('Admin bulk user action error', error);
+      res.status(err?.statusCode || 500).json({
+        success: false,
+        message: err?.message || 'Failed to apply bulk action',
+      });
+    }
+  }
+
   async listStakes(req: AuthRequest, res: Response): Promise<void> {
     try {
       const { page, limit, status, userId, podId } = req.query;
