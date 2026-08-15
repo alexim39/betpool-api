@@ -31,6 +31,20 @@ export interface CreatePodData {
   createdBy: mongoose.Types.ObjectId;
 }
 
+export interface CreateUserPickData {
+  sport: string;
+  league?: string;
+  homeTeam: string;
+  awayTeam: string;
+  matchDate: Date;
+  selection: string;
+  gainsMultiplier: number;
+  minStake?: number;
+  maxStake?: number;
+  maxTotalExposure?: number;
+  stakingClosesAt: Date;
+}
+
 export interface UpdatePodData {
   title?: string;
   description?: string;
@@ -71,9 +85,48 @@ export class PodService {
       ...data,
       impliedProbability,
       currentExposure: 0,
+      visibility: 'public',
       settlementEstimateLabel: data.settlementEstimateLabel || 'Pending'
     });
 
+    return pod;
+  }
+
+  async createUserPick(userId: string, data: CreateUserPickData): Promise<IPod> {
+    const now = new Date();
+    const maxStake = data.maxStake ?? 50000;
+    const gainsMultiplier = data.gainsMultiplier;
+
+    const pod = await PodModel.create({
+      title: `${data.homeTeam} vs ${data.awayTeam} — ${data.selection}`,
+      sport: data.sport,
+      league: data.league,
+      homeTeam: data.homeTeam,
+      awayTeam: data.awayTeam,
+      matchDate: data.matchDate,
+      marketType: 'Match Result',
+      selection: data.selection,
+      gainsMultiplier,
+      impliedProbability: 1 / gainsMultiplier,
+      minStake: data.minStake ?? 100,
+      maxStake,
+      maxPayout: Math.floor(maxStake * gainsMultiplier),
+      maxTotalExposure: data.maxTotalExposure ?? 5000000,
+      currentExposure: 0,
+      currentParticipants: 0,
+      status: 'active',
+      opensAt: now,
+      stakingClosesAt: data.stakingClosesAt,
+      settlementEstimateLabel: 'Pending',
+      settlementEstimateAt: data.matchDate,
+      isLive: false,
+      displayOrder: 0,
+      legs: [],
+      visibility: 'followers',
+      createdBy: userId
+    });
+
+    cacheService.clear('feed:');
     return pod;
   }
 
@@ -104,6 +157,7 @@ export class PodService {
     const query: Record<string, any> = {
       status: 'active',
       stakingClosesAt: { $gte: now },
+      visibility: { $ne: 'followers' },
       $expr: { $lt: ['$currentExposure', '$maxTotalExposure'] }
     };
 
@@ -187,7 +241,8 @@ export class PodService {
 
     const query: Record<string, any> = {
       status: { $in: ['published', 'active'] },
-      opensAt: { $gt: now, $lte: endTime }
+      opensAt: { $gt: now, $lte: endTime },
+      visibility: { $ne: 'followers' }
     };
 
     if (options.sport) query.sport = new RegExp(`^${options.sport.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
