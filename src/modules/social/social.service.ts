@@ -195,10 +195,11 @@ export class SocialService {
       return { items: [], total: 0, page: safePage, limit: safeLimit, pages: 0 };
     }
     const now = new Date();
+    const includedIds = [...followedIds, userId].filter(id => mongoose.isValidObjectId(id));
     const filter = {
       status: 'active',
       stakingClosesAt: { $gte: now },
-      createdBy: { $in: followedIds.map(id => new mongoose.Types.ObjectId(id)) },
+      createdBy: { $in: includedIds.map(id => new mongoose.Types.ObjectId(id)) },
       $expr: { $lt: ['$currentExposure', '$maxTotalExposure'] }
     };
     const raw = (await PodModel.find(filter)

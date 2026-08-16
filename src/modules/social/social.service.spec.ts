@@ -219,11 +219,13 @@ describe('SocialService', () => {
   });
 
   describe('getFollowingFeed', () => {
+    const USER = new mongoose.Types.ObjectId('507f1f77bcf86cd799439013');
+
     it('returns empty when the user follows nobody and no Ora creator exists', async () => {
       oraChain(null);
       MockSocialFollowModel.find.mockReturnValue(findChain([]));
 
-      const result = await service.getFollowingFeed('u1', 1, 12);
+      const result = await service.getFollowingFeed(USER.toString(), 1, 12);
 
       expect(result).toEqual({ items: [], total: 0, page: 1, limit: 12, pages: 0 });
     });
@@ -245,11 +247,12 @@ describe('SocialService', () => {
       });
       MockPodModel.countDocuments.mockResolvedValue(1);
 
-      const result = await service.getFollowingFeed('u1', 1, 12);
+      const result = await service.getFollowingFeed(USER.toString(), 1, 12);
 
       const filter = MockPodModel.find.mock.calls[0][0];
       expect(filter.status).toBe('active');
       expect(filter.createdBy.$in[0].toString()).toBe(OID.toString());
+      expect(filter.createdBy.$in.map((x: { toString: () => string }) => x.toString())).toContain(USER.toString());
       expect(result.items[0].title).toBe('Pick');
       expect(result.items[0].createdBy).toBe(OID.toString());
       expect(result.items[0].creatorName).toBe('Ada Lovelace');
@@ -272,7 +275,7 @@ describe('SocialService', () => {
       });
       MockPodModel.countDocuments.mockResolvedValue(1);
 
-      const result = await service.getFollowingFeed('u1', 1, 12);
+      const result = await service.getFollowingFeed(USER.toString(), 1, 12);
 
       expect(MockPodModel.find.mock.calls[0][0].createdBy.$in[0].toString()).toBe(OID.toString());
       expect(result.items[0].title).toBe('Ora pick');

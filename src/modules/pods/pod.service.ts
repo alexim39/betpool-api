@@ -259,7 +259,7 @@ export class PodService {
   }
 
   async getBySport(sport: string, options: { status?: string; limit?: number } = {}): Promise<IPod[]> {
-    const query: Record<string, any> = { sport: new RegExp(`^${sport.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') };
+    const query: Record<string, any> = { sport: new RegExp(`^${sport.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'), visibility: { $ne: 'followers' } };
     if (options.status) query.status = options.status;
 
     return PodModel.find(query)
@@ -415,7 +415,8 @@ export class PodService {
         { sport: regex }
       ],
       status: 'active',
-      stakingClosesAt: { $gte: new Date() }
+      stakingClosesAt: { $gte: new Date() },
+      visibility: { $ne: 'followers' }
     })
       .limit(options.limit || 10)
       .select('-legs -marketOdds')
