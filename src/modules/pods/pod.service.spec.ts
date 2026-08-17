@@ -98,4 +98,22 @@ describe('PodService', () => {
       expect((result.pods[0] as any).creatorName).toBe('Ora');
     });
   });
+
+  describe('extendOwnPick', () => {
+    it('updates the closing time and clears the feed cache', async () => {
+      const newClose = new Date(Date.now() + 7200000);
+      MockPodModel.findByIdAndUpdate.mockResolvedValue({ _id: OID, stakingClosesAt: newClose });
+      cacheService.set('feed:all:all', { items: [], total: 0 }, 60000);
+
+      const result = await service.extendOwnPick(OID.toString(), newClose);
+
+      expect(MockPodModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        OID.toString(),
+        { stakingClosesAt: newClose },
+        { new: true, runValidators: true }
+      );
+      expect(cacheService.get('feed:all:all')).toBeNull();
+      expect(result).toEqual({ _id: OID, stakingClosesAt: newClose });
+    });
+  });
 });

@@ -5,6 +5,7 @@ import { PodModel } from '../../models/pod.model';
 import { UserModel } from '../../models/user.model';
 import { cacheService } from '../../services/cache.service';
 import { socialService } from '../social/social.service';
+import { adminService } from '../admin/admin.service';
 
 async function getOraId(): Promise<string> {
   const cached = cacheService.get<string>('feed:oraId');
@@ -72,6 +73,7 @@ export class PodController {
       await socialService.recordActivity(req.user.userId, 'pick_published', String(pod._id), {
         title: pod.title
       });
+      await socialService.notifyFollowersOfNewPick(req.user.userId, String(pod._id), pod.title);
 
       res.status(201).json({
         success: true,
@@ -88,6 +90,68 @@ export class PodController {
     } catch (error) {
       console.error('Create pick error:', error);
       res.status(500).json({ success: false, message: 'Failed to create pick' });
+    }
+  }
+
+  async managePick(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      if (!req.user) {
+        res.status(401).json({ success: false, message: 'Authentication required' });
+        return;
+      }
+      const { id } = req.params;
+      const body = req.body || {};
+      const action = body.action;
+      if (action !== 'extend' && action !== 'cancel') {
+        res.status(400).json({ success: false, message: 'action must be "extend" or "cancel"' });
+        return;
+      }
+
+      const pod = await PodModel.findById(id).select('createdBy status stakingClosesAt currentParticipants').lean();
+      if (!pod) {
+        res.status(404).json({ success: false, message: 'Pod not found' });
+        return;
+      }
+      const isOwner = String(pod.createdBy) === req.user.userId;
+      const isAdmin = req.user.role === 'admin';
+      if (!isOwner && !isAdmin) {
+        res.status(403).json({ success: false, message: 'Only the creator can manage this pick' });
+        return;
+      }
+
+      if (action === 'extend') {
+        const close = body.stakingClosesAt ? new Date(body.stakingClosesAt) : null;
+        if (!close || isNaN(close.getTime())) {
+          res.status(400).json({ success: false, message: 'stakingClosesAt is required' });
+          return;
+        }
+        if (close.getTime() <= Date.now()) {
+          res.status(400).json({ success: false, message: 'New closing time must be in the future' });
+          return;
+        }
+        if (pod.status !== 'active') {
+          res.status(400).json({ success: false, message: 'Only active picks can be extended' });
+          return;
+        }
+        if (close.getTime() <= new Date(pod.stakingClosesAt).getTime()) {
+          res.status(400).json({ success: false, message: 'New closing time must be later than the current closing time' });
+          return;
+        }
+        const updated = await podService.extendOwnPick(id, close);
+        res.json({ success: true, data: updated });
+        return;
+      }
+
+      if (pod.status !== 'active') {
+        res.status(400).json({ success: false, message: 'Only active picks can be cancelled' });
+        return;
+      }
+      const cancelled = await adminService.cancelPod(id, req.user.userId);
+      cacheService.clear('feed:');
+      res.json({ success: true, data: cancelled });
+    } catch (error) {
+      console.error('Manage pick error:', error);
+      res.status(500).json({ success: false, message: 'Failed to manage pick' });
     }
   }
 

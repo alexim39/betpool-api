@@ -354,6 +354,16 @@ export class PodService {
     );
   }
 
+  async extendOwnPick(id: string, stakingClosesAt: Date): Promise<IPod | null> {
+    const pod = await PodModel.findByIdAndUpdate(
+      id,
+      { stakingClosesAt },
+      { new: true, runValidators: true }
+    );
+    cacheService.clear('feed:');
+    return pod;
+  }
+
   async addExposure(podId: string, stakeAmount: number): Promise<IPod | null> {
     return PodModel.findByIdAndUpdate(
       podId,

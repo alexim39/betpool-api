@@ -12,6 +12,7 @@ router.get('/sports', apiLimiter, podController.getSports);
 router.get('/sport/:sport', apiLimiter, podController.getBySport);
 router.get('/search', apiLimiter, podController.search);
 router.post('/', authMiddleware, apiLimiter, podController.createPick);
+router.post('/:id/manage', authMiddleware, apiLimiter, podController.managePick);
 router.get('/:id', apiLimiter, podController.getById);
 router.get('/:id/gains', apiLimiter, podController.getGains);
 
