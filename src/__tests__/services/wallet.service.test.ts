@@ -3,9 +3,28 @@ import { WalletService } from '../../services/wallet.service';
 jest.mock('../../models/wallet.model');
 jest.mock('../../models/transaction.model');
 jest.mock('../../models/stake.model');
+jest.mock('../../models/transfer.model');
+jest.mock('../../models/user.model');
+jest.mock('../../utils/transaction', () => ({
+  runTransaction: jest.fn((executor) => executor({ session: {} }))
+}));
+jest.mock('../../services/notification.service', () => ({
+  notifyDepositSuccess: jest.fn().mockResolvedValue(undefined),
+  notifyDepositFailed: jest.fn().mockResolvedValue(undefined),
+  notifyWithdrawalSubmitted: jest.fn().mockResolvedValue(undefined),
+  notifyWithdrawalCompleted: jest.fn().mockResolvedValue(undefined),
+  notifyWithdrawalFailed: jest.fn().mockResolvedValue(undefined),
+  notifyTransferSent: jest.fn().mockResolvedValue(undefined),
+  notifyTransferReceived: jest.fn().mockResolvedValue(undefined),
+}));
+jest.mock('../../services/user.service', () => ({
+  userService: { verifyPin: jest.fn().mockResolvedValue(true) }
+}));
 
 const MockWalletModel = require('../../models/wallet.model').WalletModel;
 const MockTransactionModel = require('../../models/transaction.model').TransactionModel;
+const MockTransferModel = require('../../models/transfer.model').TransferModel;
+const MockUserModel = require('../../models/user.model').UserModel;
 
 describe('WalletService', () => {
   let service: WalletService;
@@ -173,6 +192,189 @@ describe('WalletService', () => {
       await service.getTransactionHistory('user-id-1', { limit: 999 });
 
       expect(mockLimit).toHaveBeenCalledWith(100);
+    });
+  });
+
+  describe('initiateTransfer', () => {
+    beforeEach(() => {
+      MockTransferModel.aggregate.mockResolvedValue([]);
+    });
+
+    it('should reject an incorrect PIN', async () => {
+      require('../../services/user.service').userService.verifyPin.mockResolvedValue(false);
+      const result = await service.initiateTransfer('user-id-1', 'recipient-1', 1000, '000000');
+      expect(result.success).toBe(false);
+      expect(result.message).toBe('Incorrect PIN');
+    });
+
+    it('should reject transferring to yourself', async () => {
+      const result = await service.initiateTransfer('user-id-1', 'user-id-1', 1000, '000000');
+      expect(result.success).toBe(false);
+      expect(result.message).toBe('You cannot transfer to yourself');
+    });
+
+    it('should reject amounts below the minimum', async () => {
+      const result = await service.initiateTransfer('user-id-1', 'recipient-1', 100, '000000');
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Minimum transfer');
+    });
+
+    it('should reject transfers to an inactive account', async () => {
+      MockUserModel.findById.mockImplementation(() => ({
+        select: jest.fn().mockResolvedValue({
+          _id: 'recipient-1',
+          fullName: 'Jane Doe',
+          phone: '+2348000000000',
+          isActive: false,
+          isSuspended: true
+        })
+      }));
+      const result = await service.initiateTransfer('user-id-1', 'recipient-1', 1000, '000000');
+      expect(result.success).toBe(false);
+      expect(result.message).toBe('Recipient account is not active');
+    });
+
+    it('should transfer funds, create double-entry ledger and a transfer record', async () => {
+      MockUserModel.findById
+        .mockImplementationOnce(() => ({
+          select: jest.fn().mockResolvedValue({
+            _id: 'recipient-1',
+            fullName: 'Jane Doe',
+            phone: '+2348000000000',
+            isActive: true,
+            isSuspended: false
+          })
+        }))
+        .mockImplementationOnce(() => ({
+          select: jest.fn().mockReturnValue({
+            lean: jest.fn().mockResolvedValue({ _id: 'user-id-1', fullName: 'John Doe', phone: '+2347000000000' })
+          })
+        }));
+
+      // Sender debit (5000 - 1000) with the available-balance guard
+      MockWalletModel.findOneAndUpdate.mockResolvedValueOnce({ _id: 'wallet-sender', balance: 4000 })
+        .mockResolvedValueOnce({ _id: 'wallet-recipient', balance: 1000 });
+      // Recipient wallet does not exist yet — created inside the transaction
+      MockWalletModel.findOne.mockResolvedValueOnce(null);
+      MockWalletModel.create.mockResolvedValue([{ _id: 'wallet-recipient', balance: 0 }]);
+
+      MockTransactionModel.create
+        .mockResolvedValueOnce([{ _id: 'txn-out' }])
+        .mockResolvedValueOnce([{ _id: 'txn-in' }]);
+
+      MockTransferModel.create.mockResolvedValue([{ _id: 'transfer-1', reference: 'TRF_1' }]);
+
+      const result = await service.initiateTransfer('user-id-1', 'recipient-1', 1000, '000000');
+
+      expect(result.success).toBe(true);
+      expect(result.reference).toContain('TRF_');
+      expect(MockTransactionModel.create).toHaveBeenCalledTimes(2);
+      expect(MockTransactionModel.create).toHaveBeenNthCalledWith(1, expect.objectContaining({
+        user: 'user-id-1',
+        type: 'transfer',
+        status: 'completed',
+        amount: 1000,
+        provider: 'internal'
+      }), { session: {} });
+      expect(MockTransactionModel.create).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        user: 'recipient-1',
+        type: 'transfer',
+        status: 'completed',
+        amount: 1000
+      }), { session: {} });
+      expect(MockTransferModel.create).toHaveBeenCalledWith(expect.objectContaining({
+        sender: 'user-id-1',
+        recipient: 'recipient-1',
+        amount: 1000,
+        status: 'completed',
+        senderBalanceBefore: 5000,
+        senderBalanceAfter: 4000,
+        recipientBalanceBefore: 0,
+        recipientBalanceAfter: 1000
+      }), { session: {} });
+    });
+
+    it('should return insufficient balance when the atomic debit guard fails', async () => {
+      MockUserModel.findById.mockImplementation(() => ({
+        select: jest.fn().mockResolvedValue({
+          _id: 'recipient-1',
+          fullName: 'Jane Doe',
+          phone: '+2348000000000',
+          isActive: true,
+          isSuspended: false
+        })
+      }));
+      MockWalletModel.findOneAndUpdate.mockResolvedValue(null);
+
+      const result = await service.initiateTransfer('user-id-1', 'recipient-1', 1000, '000000');
+      expect(result.success).toBe(false);
+      expect(result.message).toBe('Insufficient balance');
+    });
+  });
+
+  describe('getTransfers', () => {
+    const mockTransfer = {
+      _id: { toString: () => 'transfer-1' },
+      sender: 'user-id-1',
+      recipient: 'recipient-1',
+      amount: 1000,
+      fee: 0,
+      netAmount: 1000,
+      status: 'completed',
+      reference: 'TRF_1',
+      recipientName: 'Jane Doe',
+      recipientPhone: '+2348000000000',
+      senderName: 'John Doe',
+      senderPhone: '+2347000000000',
+      narration: 'Lunch money',
+      createdAt: new Date('2026-08-10T12:00:00.000Z'),
+      completedAt: new Date('2026-08-10T12:00:00.000Z')
+    };
+
+    beforeEach(() => {
+      MockTransferModel.find.mockReturnValue({
+        sort: jest.fn().mockReturnValue({
+          skip: jest.fn().mockReturnValue({
+            limit: jest.fn().mockReturnValue({
+              lean: jest.fn().mockResolvedValue([mockTransfer])
+            })
+          })
+        })
+      });
+      MockTransferModel.countDocuments.mockResolvedValue(1);
+    });
+
+    it('should scope history to the viewer and map direction/counterparty', async () => {
+      const result = await service.getTransfers('user-id-1', { page: 1, limit: 10 });
+
+      expect(MockTransferModel.find).toHaveBeenCalledWith(
+        expect.objectContaining({ $or: expect.arrayContaining([{ sender: 'user-id-1' }, { recipient: 'user-id-1' }]) })
+      );
+      expect(result.transfers[0].direction).toBe('sent');
+      expect(result.transfers[0].counterpartyName).toBe('Jane Doe');
+    });
+
+    it('should apply the sent/received direction scope', async () => {
+      await service.getTransfers('user-id-1', { direction: 'received' });
+      expect(MockTransferModel.find).toHaveBeenCalledWith(
+        expect.objectContaining({ recipient: 'user-id-1' })
+      );
+    });
+
+    it('must keep the user scope when a search term is applied', async () => {
+      await service.getTransfers('user-id-1', { search: 'Jane' });
+      const arg = MockTransferModel.find.mock.calls[0][0];
+      expect(arg.$and).toBeDefined();
+      expect(arg.$and[0]).toEqual(expect.objectContaining({ $or: expect.arrayContaining([{ sender: 'user-id-1' }, { recipient: 'user-id-1' }]) }));
+      expect(arg.$and[2].$or).toEqual(expect.arrayContaining([{ recipientName: expect.objectContaining({ $regex: 'Jane' }) }]));
+    });
+
+    it('should export a CSV with header, direction and escaped fields', async () => {
+      const csv = await service.exportTransfersCsv('user-id-1', {});
+      expect(csv).toContain('Reference,Date,Direction,Counterparty,Phone');
+      expect(csv).toContain('TRF_1');
+      expect(csv).toContain('sent');
+      expect(csv).toContain('Lunch money');
     });
   });
 });

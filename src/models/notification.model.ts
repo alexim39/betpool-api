@@ -2,7 +2,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 
 export interface INotification extends Document {
   user: mongoose.Types.ObjectId;
-  type: 'deposit' | 'withdrawal' | 'stake' | 'payout' | 'referral' | 'kyc' | 'auth' | 'system';
+  type: 'deposit' | 'withdrawal' | 'stake' | 'payout' | 'referral' | 'kyc' | 'auth' | 'system' | 'transfer';
   title: string;
   message: string;
   data?: Record<string, any>;
@@ -12,7 +12,7 @@ export interface INotification extends Document {
 
 const NotificationSchema = new Schema<INotification>({
   user: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-  type: { type: String, enum: ['deposit', 'withdrawal', 'stake', 'payout', 'referral', 'kyc', 'auth', 'system'], required: true },
+  type: { type: String, enum: ['deposit', 'withdrawal', 'stake', 'payout', 'referral', 'kyc', 'auth', 'system', 'transfer'], required: true },
   title: { type: String, required: true },
   message: { type: String, required: true },
   data: { type: Schema.Types.Mixed },

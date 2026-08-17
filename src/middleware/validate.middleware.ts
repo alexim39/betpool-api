@@ -91,6 +91,15 @@ export const validateWithdrawal = [
   validate
 ];
 
+export const validateTransfer = [
+  body('amount').isInt({ min: 500 }).withMessage('Minimum transfer is ₦500'),
+  body('amount').isInt({ max: 5000000 }).withMessage('Maximum transfer is ₦5,000,000'),
+  body('recipientId').isMongoId().withMessage('Invalid recipient'),
+  body('pin').matches(/^\d{6}$/).withMessage('PIN must be 6 digits'),
+  body('narration').optional({ values: 'falsy' }).isLength({ max: 140 }).withMessage('Narration must be 140 characters or fewer'),
+  validate
+];
+
 export const validateUpdateProfile = [
   body('fullName').optional().isLength({ min: 2 }).withMessage('Full name must be at least 2 characters'),
   body('email').optional().isEmail().withMessage('Invalid email address'),

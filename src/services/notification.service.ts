@@ -207,6 +207,36 @@ export async function notifyWithdrawalFailed(userId: string, amount: number, rea
 }
 
 // ========================
+// WALLET — TRANSFERS
+// ========================
+
+export async function notifyTransferSent(userId: string, amount: number, recipientName: string) {
+  const user = await getUser(userId);
+  const formatted = formatAmount(amount);
+  const message = `You sent ${formatted} to ${recipientName}.`;
+  await createInAppNotification(userId, 'transfer', 'Transfer Sent', message, { amount, recipientName });
+  if (user?.email) {
+    const html = wrapEmail('Transfer Sent', `<p>Hi ${user.fullName || 'there'},</p><p>You sent <strong>${formatted}</strong> to <strong>${recipientName}</strong>.</p><p>It reflects in your transaction history immediately.</p>`);
+    await sendEmailIfConfigured(user.email, `Transfer Sent — ${formatted}`, html);
+  }
+}
+
+export async function notifyTransferReceived(userId: string, amount: number, senderName: string) {
+  const user = await getUser(userId);
+  const formatted = formatAmount(amount);
+  const message = `You received ${formatted} from ${senderName}.`;
+  await createInAppNotification(userId, 'transfer', 'Transfer Received', message, { amount, senderName });
+  if (user?.email) {
+    const html = wrapEmail('Transfer Received', `<p>Hi ${user.fullName || 'there'},</p><p>You received <strong>${formatted}</strong> from <strong>${senderName}</strong>.</p><p>It is available in your wallet balance now.</p>`);
+    await sendEmailIfConfigured(user.email, `Transfer Received — ${formatted}`, html);
+  }
+  if (user?.phone) {
+    const smsFormatted = formatSmsAmount(amount);
+    await sendSmsIfConfigured(user.phone, `BetPool: ${smsFormatted} received from ${senderName}. Available in your wallet.`);
+  }
+}
+
+// ========================
 // STAKES
 // ========================
 

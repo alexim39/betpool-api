@@ -4,7 +4,8 @@ import { authMiddleware } from '../../middleware/auth.middleware';
 import { apiLimiter } from '../../middleware/rateLimit.middleware';
 import {
   validateDeposit,
-  validateWithdrawal
+  validateWithdrawal,
+  validateTransfer
 } from '../../middleware/validate.middleware';
 
 const router = Router();
@@ -22,5 +23,11 @@ router.post('/save-account', authMiddleware, walletController.saveAccount);
 router.get('/saved-accounts', authMiddleware, walletController.getSavedAccounts);
 router.delete('/saved-accounts/:id', authMiddleware, walletController.deleteSavedAccount);
 router.put('/saved-accounts/:id/default', authMiddleware, walletController.setDefaultAccount);
+
+// Wallet-to-wallet transfers
+router.get('/transfer/resolve', authMiddleware, apiLimiter, walletController.resolveTransferRecipient);
+router.post('/transfer', authMiddleware, apiLimiter, validateTransfer, walletController.initiateTransfer);
+router.get('/transfers', authMiddleware, walletController.getTransfers);
+router.get('/transfers/export', authMiddleware, apiLimiter, walletController.exportTransfersCsv);
 
 export default router;
