@@ -46,6 +46,7 @@ router.post('/pods/:id/activate', adminController.activatePod);
 router.post('/pods/:id/settle', adminController.settlePod);
 router.post('/pods/:id/ai-settle-check', aiSettlementController.checkPod);
 router.post('/pods/:id/ai-settle', aiSettlementController.settlePod);
+router.post('/pods/:id/unsettle', adminController.unsettlePod);
 router.post('/pods/:id/toggle-external-booking', adminController.toggleExternalBooking);
 router.post('/pods/:id/cancel', adminController.cancelPod);
 router.post('/pods/sync', podSyncController.sync);

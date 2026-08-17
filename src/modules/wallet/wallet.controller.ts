@@ -291,6 +291,107 @@ export class WalletController {
       }
     });
   }
+
+  async resolveTransferRecipient(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = (req as any).user?.userId || (req as any).user?._id;
+      if (!userId) {
+        res.status(401).json({ success: false, message: 'Unauthorized' });
+        return;
+      }
+      const q = String(req.query.q || '').slice(0, 60);
+      if (!q.trim()) {
+        res.status(400).json({ success: false, message: 'Search term required' });
+        return;
+      }
+      const recipients = await walletService.resolveRecipient(userId, q);
+      res.json({ success: true, data: recipients });
+    } catch (error) {
+      logger.error('Resolve transfer recipient error', error);
+      res.status(500).json({ success: false, message: 'Failed to search recipients' });
+    }
+  }
+
+  async initiateTransfer(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = (req as any).user?.userId || (req as any).user?._id;
+      if (!userId) {
+        res.status(401).json({ success: false, message: 'Unauthorized' });
+        return;
+      }
+
+      const { recipientId, amount, pin, narration } = req.body;
+      const result = await walletService.initiateTransfer(
+        userId,
+        String(recipientId || ''),
+        Number(amount),
+        String(pin || ''),
+        typeof narration === 'string' ? narration.slice(0, 140) : undefined,
+        { ip: req.ip, userAgent: req.get('user-agent') }
+      );
+
+      res.json(result);
+    } catch (error) {
+      logger.error('Initiate transfer error', error);
+      res.status(500).json({ success: false, message: 'Failed to initiate transfer' });
+    }
+  }
+
+  async getTransfers(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = (req as any).user?.userId || (req as any).user?._id;
+      if (!userId) {
+        res.status(401).json({ success: false, message: 'Unauthorized' });
+        return;
+      }
+
+      const { direction, status, page, limit, from, to, search, sortField, sortOrder } = req.query;
+      const result = await walletService.getTransfers(userId, {
+        direction: direction === 'sent' || direction === 'received' ? direction : undefined,
+        status: typeof status === 'string' ? status.slice(0, 20) : undefined,
+        search: typeof search === 'string' ? search.slice(0, 120) : undefined,
+        page: page ? Number.parseInt(String(page), 10) : undefined,
+        limit: limit ? Number.parseInt(String(limit), 10) : undefined,
+        from: typeof from === 'string' ? from.slice(0, 40) : undefined,
+        to: typeof to === 'string' ? to.slice(0, 40) : undefined,
+        sortField: sortField === 'createdAt' || sortField === 'amount' || sortField === 'status' ? String(sortField) : undefined,
+        sortOrder: sortOrder === 'asc' || sortOrder === 'desc' ? sortOrder : undefined
+      });
+
+      res.json({ success: true, data: result });
+    } catch (error) {
+      logger.error('Get transfers error', error);
+      res.status(500).json({ success: false, message: 'Failed to fetch transfers' });
+    }
+  }
+
+  async exportTransfersCsv(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = (req as any).user?.userId || (req as any).user?._id;
+      if (!userId) {
+        res.status(401).json({ success: false, message: 'Unauthorized' });
+        return;
+      }
+
+      const { direction, status, from, to, search, sortField, sortOrder } = req.query;
+      const csv = await walletService.exportTransfersCsv(userId, {
+        direction: direction === 'sent' || direction === 'received' ? direction : undefined,
+        status: typeof status === 'string' ? status.slice(0, 20) : undefined,
+        search: typeof search === 'string' ? search.slice(0, 120) : undefined,
+        from: typeof from === 'string' ? from.slice(0, 40) : undefined,
+        to: typeof to === 'string' ? to.slice(0, 40) : undefined,
+        sortField: sortField === 'createdAt' || sortField === 'amount' || sortField === 'status' ? String(sortField) : undefined,
+        sortOrder: sortOrder === 'asc' || sortOrder === 'desc' ? sortOrder : undefined
+      });
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="transfers-${new Date().toISOString().slice(0, 10)}.csv"`);
+      res.send(csv);
+    } catch (error) {
+      logger.error('Export transfers CSV error', error);
+      res.status(500).json({ success: false, message: 'Failed to export transfers' });
+    }
+  }
 }
 
 export const walletController = new WalletController();

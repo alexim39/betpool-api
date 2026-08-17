@@ -26,6 +26,30 @@ export interface SettlementCheckResult {
 
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 
+// ---- Team-name helpers -------------------------------------------------------
+// The sports API sometimes lists a fixture with the teams in the opposite order
+// to the pod, and a stale/rotated fixtureId can even point at a different event.
+// Settling must never trust the raw score fields until the teams are verified.
+const pickTeamName = (v: any): string => {
+  if (!v) return '';
+  if (typeof v === 'string') return v;
+  return v?.name ?? v?.name_long ?? v?.title ?? '';
+};
+
+const normalizeTeamName = (name: string): string =>
+  (name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\b(fc|cf|sc|wfc|afc|utd|club|football|soccer|womens|women)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const teamNamesMatch = (a: string, b: string): boolean => {
+  const na = normalizeTeamName(a);
+  const nb = normalizeTeamName(b);
+  return na.length >= 3 && nb.length >= 3 && (na.includes(nb) || nb.includes(na));
+};
+
 export class AISettlementService {
   private get apiKey(): string { return process.env.SPORTSAPI_KEY || ''; }
   private get baseUrl(): string {
@@ -75,8 +99,31 @@ export class AISettlementService {
       base.matchFound = true;
       base.matchStatus = ev.status || 'unknown';
 
-      const primaryHomeScore = ev.home_score ?? ev.scores?.home ?? ev.home_team?.score ?? null;
-      const primaryAwayScore = ev.away_score ?? ev.scores?.away ?? ev.away_team?.score ?? null;
+      const rawHomeScore = ev.home_score ?? ev.scores?.home ?? ev.home_team?.score ?? null;
+      const rawAwayScore = ev.away_score ?? ev.scores?.away ?? ev.away_team?.score ?? null;
+
+      // Verify the API event's teams actually match the pod's fixture before
+      // trusting any score — a stale/rotated fixtureId must never settle against
+      // the wrong match, and an inverted home/away listing must not flip the verdict.
+      const apiHomeName = pickTeamName(ev.home_team_name ?? ev.home_team);
+      const apiAwayName = pickTeamName(ev.away_team_name ?? ev.away_team);
+      let flippedOrientation = false;
+      if (apiHomeName && apiAwayName) {
+        const aligned = teamNamesMatch(apiHomeName, pod.homeTeam) && teamNamesMatch(apiAwayName, pod.awayTeam);
+        flippedOrientation = !aligned && teamNamesMatch(apiHomeName, pod.awayTeam) && teamNamesMatch(apiAwayName, pod.homeTeam);
+        if (!aligned && !flippedOrientation) {
+          base.matchFound = false;
+          base.reasoning = `Fixture ${base.fixtureId} on the sports API does not match the pod teams "${pod.homeTeam}" vs "${pod.awayTeam}". API returned "${apiHomeName}" vs "${apiAwayName}". Manual settlement required.`;
+          return base;
+        }
+      }
+
+      let primaryHomeScore = rawHomeScore;
+      let primaryAwayScore = rawAwayScore;
+      if (flippedOrientation) {
+        [primaryHomeScore, primaryAwayScore] = [primaryAwayScore, primaryHomeScore];
+        base.reasoning = `API lists this fixture with the teams in the opposite order (${apiHomeName} vs ${apiAwayName}); scores were aligned to the pod's orientation. `;
+      }
       base.homeScore = primaryHomeScore;
       base.awayScore = primaryAwayScore;
 
@@ -121,9 +168,9 @@ export class AISettlementService {
             const secondaryAwayScore = matchedEvent.away_score ?? matchedEvent.scores?.away ?? null;
 
             if (secondaryHomeScore !== null && secondaryAwayScore !== null &&
-                (secondaryHomeScore !== primaryHomeScore || secondaryAwayScore !== primaryAwayScore)) {
+                (secondaryHomeScore !== rawHomeScore || secondaryAwayScore !== rawAwayScore)) {
               base.disputed = true;
-              base.disputeReason = `Score mismatch: primary source says ${primaryHomeScore}-${primaryAwayScore}, secondary source says ${secondaryHomeScore}-${secondaryAwayScore}. Manual review required.`;
+              base.disputeReason = `Score mismatch: primary source says ${rawHomeScore}-${rawAwayScore}, secondary source says ${secondaryHomeScore}-${secondaryAwayScore}. Manual review required.`;
               base.confidence = 30;
               base.reasoning = base.disputeReason;
               return base;
@@ -147,7 +194,7 @@ export class AISettlementService {
       // Map actual result to pod selection
       base.recommendedResult = 'cannot_determine';
 
-const sel = pod.selection?.trim().toLowerCase() || '';
+      const sel = pod.selection?.trim().toLowerCase() || '';
       const homeName = pod.homeTeam?.toLowerCase() || '';
       const awayName = pod.awayTeam?.toLowerCase() || '';
       const hasHomeTeam = homeName && sel.includes(homeName);
@@ -155,36 +202,67 @@ const sel = pod.selection?.trim().toLowerCase() || '';
       const hasBothTeams = hasHomeTeam && hasAwayTeam;
 
       const isDrawNoBet = /draw no bet/.test(sel);
+      const isBttsNo = /btts\s*no|both teams? (?:to )?score\s*no/.test(sel);
       const isBtts = /btts|both team/.test(sel);
-      const homeCovered = /home/.test(sel) || /\b1\b/.test(sel) || /\b1x\b/.test(sel) || /\b12\b/.test(sel) || (hasHomeTeam && !hasBothTeams);
-      const awayCovered = /away/.test(sel) || /\b2\b/.test(sel) || /\bx2\b/.test(sel) || /\b12\b/.test(sel) || (hasAwayTeam && !hasBothTeams);
-      const drawCovered = /draw/.test(sel) || /\bx\b/.test(sel) || /\b1x\b/.test(sel) || /\bx2\b/.test(sel);
+
+      // Token helper that never matches digits inside numbers ("1.50", "2.5")
+      const hasToken = (t: string) => new RegExp(`(^|[^0-9.])${t}([^0-9.]|$)`).test(sel);
+      const homeCovered = /home/.test(sel) || hasToken('1') || /\b1x\b/.test(sel) || /\b12\b/.test(sel) || (hasHomeTeam && !hasBothTeams);
+      const awayCovered = /away/.test(sel) || hasToken('2') || /\bx2\b/.test(sel) || /\b12\b/.test(sel) || (hasAwayTeam && !hasBothTeams);
+      const drawCovered = /draw/.test(sel) || hasToken('x') || /\b1x\b/.test(sel) || /\bx2\b/.test(sel);
       const hasCoverage = homeCovered || awayCovered || drawCovered;
 
+      // OVER / UNDER markets — settled on total goals, never via the 1X2 coverage tokens
+      const overUnder = sel.match(/\b(over|under)\s*(\d+(?:\.\d+)?)/);
+      const multipleLines = (sel.match(/\b(?:over|under)\b/g) || []).length > 1;
+
+      let matched = false;
+      let needsManualReview = false;
+
       if (base.actualResult !== 'unknown') {
-        let matched = false;
-        if (isBtts && primaryHomeScore != null && primaryAwayScore != null) {
-          matched = Number(primaryHomeScore) > 0 && Number(primaryAwayScore) > 0;
+        // Composite selections (e.g. "Home & Over 2.5" or "Over 1.5 & Under 2.5") can't be auto-settled reliably — flag for review
+        if (overUnder && ((homeCovered || awayCovered || drawCovered) || multipleLines)) {
+          needsManualReview = true;
+          base.reasoning = `Selection "${pod.selection}" combines over/under with a match result market — manual settlement required.`;
+        } else if (isBtts && primaryHomeScore != null && primaryAwayScore != null) {
+          const bothScored = Number(primaryHomeScore) > 0 && Number(primaryAwayScore) > 0;
+          matched = isBttsNo ? !bothScored : bothScored;
+        } else if (overUnder && primaryHomeScore != null && primaryAwayScore != null) {
+          const line = Number(overUnder[2]);
+          const total = Number(primaryHomeScore) + Number(primaryAwayScore);
+          if (total > line) {
+            matched = overUnder[1] === 'over';
+          } else if (total < line) {
+            matched = overUnder[1] === 'under';
+          } else {
+            // Total equals the line exactly — push/refund
+            base.recommendedResult = 'void';
+            base.confidence = 95;
+            base.reasoning = `${pod.homeTeam} ${primaryHomeScore} - ${primaryAwayScore} ${pod.awayTeam} (total ${total}). Pod selected "${pod.selection}" — total equals the line (${line}). Stake should be refunded (push).`;
+          }
         } else if (!(isDrawNoBet && base.actualResult === 'draw')) {
           matched =
             (homeCovered && base.actualResult === 'home_win') ||
             (awayCovered && base.actualResult === 'away_win') ||
             (drawCovered && !isDrawNoBet && base.actualResult === 'draw');
         }
+      }
+
+      if (base.recommendedResult !== 'void' && !needsManualReview) {
         if (matched) {
           base.recommendedResult = 'win';
           base.confidence = Math.max(base.confidence, 95);
           base.reasoning = `${pod.homeTeam} ${primaryHomeScore} - ${primaryAwayScore} ${pod.awayTeam}. Pod selected "${pod.selection}" — covered the actual result.`;
-        } else if (hasCoverage || isBtts) {
+        } else if (hasCoverage || isBtts || overUnder) {
           base.recommendedResult = 'loss';
           base.confidence = Math.max(base.confidence, 95);
           base.reasoning = `${pod.homeTeam} ${primaryHomeScore} - ${primaryAwayScore} ${pod.awayTeam}. Pod selected "${pod.selection}" — does not match actual result (${base.actualResult.replace('_', ' ')}).`;
         }
       }
 
-      if (base.recommendedResult === 'cannot_determine' && base.matchStatus === 'finished') {
+      if (base.recommendedResult === 'cannot_determine' && base.matchStatus === 'finished' && !base.reasoning) {
         base.reasoning = `Match finished ${primaryHomeScore}-${primaryAwayScore} but pod selection "${pod.selection}" could not be mapped.`;
-      } else if (base.recommendedResult === 'cannot_determine') {
+      } else if (base.recommendedResult === 'cannot_determine' && !base.reasoning) {
         base.reasoning = `Match status is "${base.matchStatus}". Cannot determine result yet.`;
       }
 

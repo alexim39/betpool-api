@@ -10,7 +10,8 @@ export type TransactionType =
   | 'refund'
   | 'bonus'
   | 'fee'
-  | 'adjustment';
+  | 'adjustment'
+  | 'transfer';
 
 export type TransactionStatus = 
   | 'pending'
@@ -47,6 +48,11 @@ export interface ITransaction extends mongoose.Document {
     accountNumber?: string;
     accountName?: string;
     narration?: string;
+    senderUserId?: mongoose.Types.ObjectId;
+    recipientUserId?: mongoose.Types.ObjectId;
+    recipientPhone?: string;
+    recipientName?: string;
+    transferReference?: string;
   };
   completedAt?: Date;
   failedAt?: Date;
@@ -71,7 +77,7 @@ const TransactionSchema = new Schema({
   type: {
     type: String,
     required: true,
-    enum: ['deposit', 'withdrawal', 'stake', 'payout', 'refund', 'bonus', 'fee', 'adjustment'],
+    enum: ['deposit', 'withdrawal', 'stake', 'payout', 'refund', 'bonus', 'fee', 'adjustment', 'transfer'],
     index: true
   },
   status: {
@@ -142,6 +148,11 @@ const TransactionSchema = new Schema({
     accountNumber: { type: String },
     accountName: { type: String },
     narration: { type: String },
+    senderUserId: { type: Schema.Types.ObjectId, ref: 'User' },
+    recipientUserId: { type: Schema.Types.ObjectId, ref: 'User' },
+    recipientPhone: { type: String, trim: true },
+    recipientName: { type: String, trim: true },
+    transferReference: { type: String, trim: true },
     originalStake: { type: Number },
     cashoutAmount: { type: Number },
     fee: { type: Number },

@@ -2,11 +2,13 @@ import mongoose from 'mongoose';
 import crypto from 'crypto';
 import { WalletModel, IWallet } from '../models/wallet.model';
 import { TransactionModel, ITransaction } from '../models/transaction.model';
+import { TransferModel, ITransfer } from '../models/transfer.model';
+import { UserModel } from '../models/user.model';
 import { StakeModel } from '../models/stake.model';
 import { BankAccountModel, IBankAccount } from '../models/bank-account.model';
 import { paymentService } from './payment.service';
 import { userService } from './user.service';
-import { notifyDepositSuccess, notifyDepositFailed, notifyWithdrawalSubmitted, notifyWithdrawalCompleted, notifyWithdrawalFailed } from './notification.service';
+import { notifyDepositSuccess, notifyDepositFailed, notifyWithdrawalSubmitted, notifyWithdrawalCompleted, notifyWithdrawalFailed, notifyTransferSent, notifyTransferReceived } from './notification.service';
 import { runTransaction } from '../utils/transaction';
 import { logger } from './logger.service';
 import {
@@ -14,6 +16,11 @@ import {
   TransactionHistoryResult,
   WALLET_TYPES,
   WALLET_STATUSES,
+  TransferQuery,
+  TransferHistoryResult,
+  TransferRecordDTO,
+  TRANSFER_STATUSES,
+  TRANSFER_SORT_FIELDS,
 } from '../modules/wallet/wallet.dto';
 
 function clampInt(value: unknown, fallback: number, min: number, max: number): number {
@@ -24,6 +31,14 @@ function clampInt(value: unknown, fallback: number, min: number, max: number): n
 
 function escapeRegex(s: string): string {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function escapeCsvCell(value: string): string {
+  const v = String(value ?? '');
+  if (/[",\r\n]/.test(v)) {
+    return `"${v.replace(/"/g, '""')}"`;
+  }
+  return v;
 }
 
 function parseDate(value: unknown): Date | undefined {
@@ -39,6 +54,17 @@ const HISTORY_SORT_FIELDS: Record<string, string> = {
   type: 'type',
   status: 'status',
 };
+
+const TRANSFER_HISTORY_SORT_FIELDS: Record<string, string> = {
+  createdAt: 'createdAt',
+  amount: 'amount',
+  status: 'status',
+};
+
+export const TRANSFER_MIN_AMOUNT = 500;
+export const TRANSFER_MAX_AMOUNT = 5_000_000;
+export const TRANSFER_DAILY_LIMIT = 10_000_000;
+export const TRANSFER_EXPORT_CAP = 5000;
 
 interface DepositResult {
   success: boolean;
@@ -826,6 +852,302 @@ export class WalletService {
     ]);
 
     return { transactions, total, page, limit };
+  }
+
+  // ========================
+  // WALLET-TO-WALLET TRANSFERS
+  // ========================
+
+  async resolveRecipient(userId: string, term: string): Promise<Array<{ id: string; fullName: string; phone: string; email?: string }>> {
+    const query = String(term || '').trim().slice(0, 60);
+    if (!query) return [];
+    const safe = escapeRegex(query);
+    const phoneDigits = query.replace(/\D/g, '');
+    const ors: Record<string, any>[] = [
+      { phone: { $regex: `^\\+?${safe}`, $options: 'i' } },
+      { email: { $regex: `^${safe}`, $options: 'i' } },
+    ];
+    if (phoneDigits.length >= 7) {
+      // Allow searching by the last digits (e.g. 080... or ...1234)
+      ors.push({ phone: { $regex: `${escapeRegex(phoneDigits)}$`, $options: 'i' } });
+    }
+    const users = await UserModel.find({
+      $or: ors,
+      _id: { $ne: userId },
+      isActive: true,
+      isSuspended: false,
+    })
+      .select('fullName phone email')
+      .limit(8)
+      .lean();
+    return users.map(u => ({
+      id: String(u._id),
+      fullName: u.fullName || '',
+      phone: u.phone || '',
+      email: u.email || undefined,
+    }));
+  }
+
+  async initiateTransfer(
+    userId: string,
+    recipientId: string,
+    amount: number,
+    pin: string,
+    narration?: string,
+    meta?: { ip?: string; userAgent?: string }
+  ): Promise<{ success: boolean; reference: string; message?: string }> {
+    const pinValid = await userService.verifyPin(userId, pin);
+    if (!pinValid) return { success: false, reference: '', message: 'Incorrect PIN' };
+
+    if (amount < TRANSFER_MIN_AMOUNT) return { success: false, reference: '', message: `Minimum transfer is ₦${TRANSFER_MIN_AMOUNT.toLocaleString()}` };
+    if (amount > TRANSFER_MAX_AMOUNT) return { success: false, reference: '', message: `Maximum transfer is ₦${TRANSFER_MAX_AMOUNT.toLocaleString()}` };
+    if (!recipientId || !mongoose.Types.ObjectId.isValid(recipientId)) return { success: false, reference: '', message: 'Invalid recipient' };
+    if (String(userId) === String(recipientId)) return { success: false, reference: '', message: 'You cannot transfer to yourself' };
+
+    const recipient = await UserModel.findById(recipientId).select('fullName phone isActive isSuspended');
+    if (!recipient) return { success: false, reference: '', message: 'Recipient not found' };
+    if (!recipient.isActive || recipient.isSuspended) return { success: false, reference: '', message: 'Recipient account is not active' };
+
+    const sender = await UserModel.findById(userId).select('fullName phone').lean();
+
+    // Daily transfer limit (mirrors the withdrawal daily-limit aggregation)
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayAgg = await TransferModel.aggregate([
+      {
+        $match: {
+          sender: new mongoose.Types.ObjectId(String(userId)),
+          status: { $in: ['completed', 'pending'] },
+          createdAt: { $gte: todayStart },
+        },
+      },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]);
+    const todayTransferred = todayAgg[0]?.total || 0;
+    if (todayTransferred + amount > TRANSFER_DAILY_LIMIT) {
+      return { success: false, reference: '', message: `Daily transfer limit of ₦${TRANSFER_DAILY_LIMIT.toLocaleString()} exceeded` };
+    }
+
+    const reference = this.generateReference('TRF');
+
+    const created = await runTransaction(async (session) => {
+      // Phase 1 — atomic debit of the sender (available balance guard)
+      const senderWallet = await WalletModel.findOneAndUpdate(
+        {
+          user: userId,
+          $expr: { $gte: [{ $subtract: ['$balance', '$lockedBalance'] }, amount] },
+        },
+        { $inc: { balance: -amount }, $set: { lastTransactionAt: new Date() } },
+        { new: true, session }
+      );
+      if (!senderWallet) return null;
+
+      // Phase 2 — ensure recipient wallet exists, then credit it
+      let recipientWallet = await WalletModel.findOne({ user: recipientId }).session(session);
+      if (!recipientWallet) {
+        recipientWallet = (await WalletModel.create([{
+          user: recipientId,
+          balance: 0,
+          lockedBalance: 0,
+          currency: 'NGN',
+        }], { session }))[0];
+      }
+      const recipientWalletDoc = Array.isArray(recipientWallet) ? recipientWallet[0] : recipientWallet;
+      await WalletModel.findOneAndUpdate(
+        { user: recipientId },
+        { $inc: { balance: amount }, $set: { lastTransactionAt: new Date() } },
+        { new: true, session }
+      );
+
+      // Phase 3 — double-entry ledger: one record per participant
+      const senderTxn = await TransactionModel.create([{
+        user: userId,
+        wallet: senderWallet._id,
+        type: 'transfer',
+        status: 'completed',
+        amount,
+        fee: 0,
+        netAmount: amount,
+        balanceBefore: senderWallet.balance + amount,
+        balanceAfter: senderWallet.balance,
+        currency: 'NGN',
+        reference: `${reference}_OUT`,
+        provider: 'internal',
+        completedAt: new Date(),
+        metadata: {
+          description: `Transfer to ${recipient.fullName || recipient.phone || 'user'}`,
+          transferReference: reference,
+          recipientUserId: recipientId,
+          recipientName: recipient.fullName || '',
+          recipientPhone: recipient.phone || '',
+          narration: narration || '',
+          ipAddress: meta?.ip,
+          userAgent: meta?.userAgent,
+        },
+      }], { session });
+
+      const recipientTxn = await TransactionModel.create([{
+        user: recipientId,
+        wallet: recipientWalletDoc._id,
+        type: 'transfer',
+        status: 'completed',
+        amount,
+        fee: 0,
+        netAmount: amount,
+        balanceBefore: recipientWalletDoc.balance,
+        balanceAfter: recipientWalletDoc.balance + amount,
+        currency: 'NGN',
+        reference: `${reference}_IN`,
+        provider: 'internal',
+        completedAt: new Date(),
+        metadata: {
+          description: `Transfer from ${sender?.fullName || sender?.phone || 'a BetPool user'}`,
+          transferReference: reference,
+          senderUserId: userId,
+          narration: narration || '',
+          ipAddress: meta?.ip,
+          userAgent: meta?.userAgent,
+        },
+      }], { session });
+
+      // Phase 4 — transfer record with full balance snapshot (audit trail)
+      const transfer = await TransferModel.create([{
+        sender: userId,
+        recipient: recipientId,
+        amount,
+        fee: 0,
+        netAmount: amount,
+        status: 'completed',
+        reference,
+        senderBalanceBefore: senderWallet.balance + amount,
+        senderBalanceAfter: senderWallet.balance,
+        recipientBalanceBefore: recipientWalletDoc.balance,
+        recipientBalanceAfter: recipientWalletDoc.balance + amount,
+        senderTransactionId: senderTxn[0]._id,
+        recipientTransactionId: recipientTxn[0]._id,
+        narration: narration || '',
+        recipientName: recipient.fullName || '',
+        recipientPhone: recipient.phone || '',
+        senderName: sender?.fullName || '',
+        senderPhone: sender?.phone || '',
+        metadata: { ipAddress: meta?.ip, userAgent: meta?.userAgent },
+        completedAt: new Date(),
+      }], { session });
+
+      return transfer[0];
+    });
+
+    if (!created) return { success: false, reference: '', message: 'Insufficient balance' };
+
+    // Notifications (fire-and-forget, mirroring the withdrawal flow)
+    notifyTransferSent(userId, amount, recipient.fullName || recipient.phone || 'a BetPool user').catch(e => logger.error('notifyTransferSent error', e));
+    notifyTransferReceived(recipientId, amount, sender?.fullName || sender?.phone || 'a BetPool user').catch(e => logger.error('notifyTransferReceived error', e));
+
+    return { success: true, reference, message: `Transfer of ₦${amount.toLocaleString()} successful` };
+  }
+
+  async getTransfers(userId: string, options: TransferQuery = {}): Promise<TransferHistoryResult> {
+    const { query, sortField, sortOrder } = this.buildTransferQuery(userId, options);
+    const page = clampInt(options.page, 1, 1, 10000);
+    const limit = clampInt(options.limit, 20, 5, 100);
+
+    const [transfers, total] = await Promise.all([
+      TransferModel.find(query)
+        .sort({ [sortField]: sortOrder })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean() as unknown as Promise<ITransfer[]>,
+      TransferModel.countDocuments(query),
+    ]);
+
+    return { transfers: transfers.map(t => this.toTransferDTO(t, userId)), total, page, limit };
+  }
+
+  async exportTransfersCsv(userId: string, options: TransferQuery = {}): Promise<string> {
+    const { query, sortField, sortOrder } = this.buildTransferQuery(userId, options);
+    const rows = await TransferModel.find(query)
+      .sort({ [sortField]: sortOrder })
+      .limit(TRANSFER_EXPORT_CAP)
+      .lean() as unknown as ITransfer[];
+
+    const header = ['Reference', 'Date', 'Direction', 'Counterparty', 'Phone', 'Amount (NGN)', 'Status', 'Narration'];
+    const lines = rows.map(t => {
+      const dto = this.toTransferDTO(t, userId);
+      return [
+        dto.reference,
+        new Date(dto.createdAt).toISOString(),
+        dto.direction,
+        dto.counterpartyName,
+        dto.counterpartyPhone,
+        String(dto.amount),
+        dto.status,
+        dto.narration || '',
+      ].map(escapeCsvCell).join(',');
+    });
+    return [header.map(escapeCsvCell).join(','), ...lines].join('\r\n');
+  }
+
+  private buildTransferQuery(userId: string, options: TransferQuery): { query: Record<string, any>; sortField: string; sortOrder: 1 | -1 } {
+    // Participant scope is ALWAYS applied — never mergable with an unscoped query
+    const scope: Record<string, any> = options.direction === 'sent'
+      ? { sender: userId }
+      : options.direction === 'received'
+        ? { recipient: userId }
+        : { $or: [{ sender: userId }, { recipient: userId }] };
+
+    const filters: Record<string, any> = {};
+    if (options.status && TRANSFER_STATUSES.includes(options.status as any)) filters.status = options.status;
+
+    const start = parseDate(options.from);
+    const end = parseDate(options.to);
+    if (start || end) {
+      filters.createdAt = {};
+      if (start) filters.createdAt.$gte = start;
+      if (end) filters.createdAt.$lte = end;
+    }
+
+    let query: Record<string, any>;
+    if (options.search && String(options.search).trim()) {
+      const term = escapeRegex(String(options.search).trim().slice(0, 120));
+      const searchOrs: Record<string, any>[] = [
+        { reference: { $regex: term, $options: 'i' } },
+        { recipientName: { $regex: term, $options: 'i' } },
+        { recipientPhone: { $regex: term, $options: 'i' } },
+        { senderName: { $regex: term, $options: 'i' } },
+        { senderPhone: { $regex: term, $options: 'i' } },
+        { narration: { $regex: term, $options: 'i' } },
+      ];
+      const amountNum = Number(String(options.search).trim().replace(/[^\d.-]/g, ''));
+      if (Number.isFinite(amountNum) && amountNum > 0) searchOrs.push({ amount: amountNum });
+      query = { $and: [scope, filters, { $or: searchOrs }] };
+    } else {
+      query = { ...scope, ...filters };
+    }
+
+    const sortField = TRANSFER_SORT_FIELDS.includes(options.sortField as any)
+      ? (TRANSFER_HISTORY_SORT_FIELDS[options.sortField as string] || 'createdAt')
+      : 'createdAt';
+    const sortOrder: 1 | -1 = options.sortOrder === 'asc' ? 1 : -1;
+    return { query, sortField, sortOrder };
+  }
+
+  private toTransferDTO(t: ITransfer, viewerId: string): TransferRecordDTO {
+    const isSender = String(t.sender) === String(viewerId);
+    return {
+      id: String(t._id),
+      reference: t.reference,
+      amount: t.amount,
+      fee: t.fee || 0,
+      netAmount: t.netAmount,
+      status: t.status,
+      direction: isSender ? 'sent' : 'received',
+      counterpartyId: String(isSender ? t.recipient : t.sender),
+      counterpartyName: (isSender ? t.recipientName : t.senderName) || '',
+      counterpartyPhone: (isSender ? t.recipientPhone : t.senderPhone) || '',
+      narration: t.narration || undefined,
+      createdAt: t.createdAt?.toISOString ? t.createdAt.toISOString() : String(t.createdAt),
+      completedAt: t.completedAt?.toISOString ? t.completedAt.toISOString() : undefined,
+    };
   }
 
   async getWalletSummary(userId: string): Promise<{

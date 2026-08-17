@@ -4,6 +4,8 @@ import { podService } from './pod.service';
 import { PodModel } from '../../models/pod.model';
 import { UserModel } from '../../models/user.model';
 import { cacheService } from '../../services/cache.service';
+import { socialService } from '../social/social.service';
+import { adminService } from '../admin/admin.service';
 
 async function getOraId(): Promise<string> {
   const cached = cacheService.get<string>('feed:oraId');
@@ -15,6 +17,144 @@ async function getOraId(): Promise<string> {
 }
 
 export class PodController {
+  async createPick(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      if (!req.user) {
+        res.status(401).json({ success: false, message: 'Authentication required' });
+        return;
+      }
+      const body = req.body || {};
+      const errors: string[] = [];
+      if (!body.sport || typeof body.sport !== 'string') errors.push('sport is required');
+      if (!body.homeTeam || typeof body.homeTeam !== 'string') errors.push('homeTeam is required');
+      if (!body.awayTeam || typeof body.awayTeam !== 'string') errors.push('awayTeam is required');
+      if (!body.selection || typeof body.selection !== 'string') errors.push('selection is required');
+
+      const mult = Number(body.gainsMultiplier);
+      if (!isFinite(mult) || mult < 1.01 || mult > 1000) errors.push('gainsMultiplier must be between 1.01 and 1000');
+
+      const close = body.stakingClosesAt ? new Date(body.stakingClosesAt) : null;
+      if (!close || isNaN(close.getTime())) {
+        errors.push('stakingClosesAt is required');
+      } else if (close.getTime() <= Date.now()) {
+        errors.push('stakingClosesAt must be in the future');
+      }
+
+      const match = body.matchDate ? new Date(body.matchDate) : close;
+      if (!match || isNaN(match.getTime())) errors.push('matchDate is invalid');
+
+      const minStake = body.minStake === undefined ? 100 : Number(body.minStake);
+      const maxStake = body.maxStake === undefined ? 50000 : Number(body.maxStake);
+      if (!isFinite(minStake) || minStake < 10) errors.push('minStake must be at least 10');
+      if (!isFinite(maxStake) || maxStake < minStake) errors.push('maxStake must be greater than or equal to minStake');
+
+      const maxTotalExposure = body.maxTotalExposure === undefined ? 5000000 : Number(body.maxTotalExposure);
+      if (!isFinite(maxTotalExposure) || maxTotalExposure < maxStake) errors.push('maxTotalExposure must be at least maxStake');
+
+      if (errors.length > 0) {
+        res.status(400).json({ success: false, message: errors.join('; ') });
+        return;
+      }
+
+      const pod = await podService.createUserPick(req.user.userId, {
+        sport: body.sport,
+        league: body.league || undefined,
+        homeTeam: body.homeTeam,
+        awayTeam: body.awayTeam,
+        matchDate: match as Date,
+        selection: body.selection,
+        gainsMultiplier: mult,
+        minStake,
+        maxStake,
+        maxTotalExposure,
+        stakingClosesAt: close as Date
+      });
+
+      await socialService.recordActivity(req.user.userId, 'pick_published', String(pod._id), {
+        title: pod.title
+      });
+      await socialService.notifyFollowersOfNewPick(req.user.userId, String(pod._id), pod.title);
+
+      res.status(201).json({
+        success: true,
+        data: {
+          id: String(pod._id),
+          pod: {
+            ...pod.toObject(),
+            id: String(pod._id),
+            createdBy: String(pod.createdBy),
+            creatorName: (pod as any).creatorName || null
+          }
+        }
+      });
+    } catch (error) {
+      console.error('Create pick error:', error);
+      res.status(500).json({ success: false, message: 'Failed to create pick' });
+    }
+  }
+
+  async managePick(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      if (!req.user) {
+        res.status(401).json({ success: false, message: 'Authentication required' });
+        return;
+      }
+      const { id } = req.params;
+      const body = req.body || {};
+      const action = body.action;
+      if (action !== 'extend' && action !== 'cancel') {
+        res.status(400).json({ success: false, message: 'action must be "extend" or "cancel"' });
+        return;
+      }
+
+      const pod = await PodModel.findById(id).select('createdBy status stakingClosesAt currentParticipants').lean();
+      if (!pod) {
+        res.status(404).json({ success: false, message: 'Pod not found' });
+        return;
+      }
+      const isOwner = String(pod.createdBy) === req.user.userId;
+      const isAdmin = req.user.role === 'admin';
+      if (!isOwner && !isAdmin) {
+        res.status(403).json({ success: false, message: 'Only the creator can manage this pick' });
+        return;
+      }
+
+      if (action === 'extend') {
+        const close = body.stakingClosesAt ? new Date(body.stakingClosesAt) : null;
+        if (!close || isNaN(close.getTime())) {
+          res.status(400).json({ success: false, message: 'stakingClosesAt is required' });
+          return;
+        }
+        if (close.getTime() <= Date.now()) {
+          res.status(400).json({ success: false, message: 'New closing time must be in the future' });
+          return;
+        }
+        if (pod.status !== 'active') {
+          res.status(400).json({ success: false, message: 'Only active picks can be extended' });
+          return;
+        }
+        if (close.getTime() <= new Date(pod.stakingClosesAt).getTime()) {
+          res.status(400).json({ success: false, message: 'New closing time must be later than the current closing time' });
+          return;
+        }
+        const updated = await podService.extendOwnPick(id, close);
+        res.json({ success: true, data: updated });
+        return;
+      }
+
+      if (pod.status !== 'active') {
+        res.status(400).json({ success: false, message: 'Only active picks can be cancelled' });
+        return;
+      }
+      const cancelled = await adminService.cancelPod(id, req.user.userId);
+      cacheService.clear('feed:');
+      res.json({ success: true, data: cancelled });
+    } catch (error) {
+      console.error('Manage pick error:', error);
+      res.status(500).json({ success: false, message: 'Failed to manage pick' });
+    }
+  }
+
   async getActiveFeed(req: AuthRequest, res: Response): Promise<void> {
     try {
       const { sport, isLive, limit, offset, cursor, personalized } = req.query;
@@ -97,6 +237,7 @@ export class PodController {
           $match: {
             status: 'active',
             stakingClosesAt: { $gte: now },
+            visibility: { $ne: 'followers' },
             $expr: { $lt: ['$currentExposure', '$maxTotalExposure'] }
           }
         },
