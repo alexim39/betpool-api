@@ -26,6 +26,30 @@ export interface SettlementCheckResult {
 
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 
+// ---- Team-name helpers -------------------------------------------------------
+// The sports API sometimes lists a fixture with the teams in the opposite order
+// to the pod, and a stale/rotated fixtureId can even point at a different event.
+// Settling must never trust the raw score fields until the teams are verified.
+const pickTeamName = (v: any): string => {
+  if (!v) return '';
+  if (typeof v === 'string') return v;
+  return v?.name ?? v?.name_long ?? v?.title ?? '';
+};
+
+const normalizeTeamName = (name: string): string =>
+  (name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\b(fc|cf|sc|wfc|afc|utd|club|football|soccer|womens|women)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const teamNamesMatch = (a: string, b: string): boolean => {
+  const na = normalizeTeamName(a);
+  const nb = normalizeTeamName(b);
+  return na.length >= 3 && nb.length >= 3 && (na.includes(nb) || nb.includes(na));
+};
+
 export class AISettlementService {
   private get apiKey(): string { return process.env.SPORTSAPI_KEY || ''; }
   private get baseUrl(): string {
@@ -75,8 +99,31 @@ export class AISettlementService {
       base.matchFound = true;
       base.matchStatus = ev.status || 'unknown';
 
-      const primaryHomeScore = ev.home_score ?? ev.scores?.home ?? ev.home_team?.score ?? null;
-      const primaryAwayScore = ev.away_score ?? ev.scores?.away ?? ev.away_team?.score ?? null;
+      const rawHomeScore = ev.home_score ?? ev.scores?.home ?? ev.home_team?.score ?? null;
+      const rawAwayScore = ev.away_score ?? ev.scores?.away ?? ev.away_team?.score ?? null;
+
+      // Verify the API event's teams actually match the pod's fixture before
+      // trusting any score — a stale/rotated fixtureId must never settle against
+      // the wrong match, and an inverted home/away listing must not flip the verdict.
+      const apiHomeName = pickTeamName(ev.home_team_name ?? ev.home_team);
+      const apiAwayName = pickTeamName(ev.away_team_name ?? ev.away_team);
+      let flippedOrientation = false;
+      if (apiHomeName && apiAwayName) {
+        const aligned = teamNamesMatch(apiHomeName, pod.homeTeam) && teamNamesMatch(apiAwayName, pod.awayTeam);
+        flippedOrientation = !aligned && teamNamesMatch(apiHomeName, pod.awayTeam) && teamNamesMatch(apiAwayName, pod.homeTeam);
+        if (!aligned && !flippedOrientation) {
+          base.matchFound = false;
+          base.reasoning = `Fixture ${base.fixtureId} on the sports API does not match the pod teams "${pod.homeTeam}" vs "${pod.awayTeam}". API returned "${apiHomeName}" vs "${apiAwayName}". Manual settlement required.`;
+          return base;
+        }
+      }
+
+      let primaryHomeScore = rawHomeScore;
+      let primaryAwayScore = rawAwayScore;
+      if (flippedOrientation) {
+        [primaryHomeScore, primaryAwayScore] = [primaryAwayScore, primaryHomeScore];
+        base.reasoning = `API lists this fixture with the teams in the opposite order (${apiHomeName} vs ${apiAwayName}); scores were aligned to the pod's orientation. `;
+      }
       base.homeScore = primaryHomeScore;
       base.awayScore = primaryAwayScore;
 
@@ -121,9 +168,9 @@ export class AISettlementService {
             const secondaryAwayScore = matchedEvent.away_score ?? matchedEvent.scores?.away ?? null;
 
             if (secondaryHomeScore !== null && secondaryAwayScore !== null &&
-                (secondaryHomeScore !== primaryHomeScore || secondaryAwayScore !== primaryAwayScore)) {
+                (secondaryHomeScore !== rawHomeScore || secondaryAwayScore !== rawAwayScore)) {
               base.disputed = true;
-              base.disputeReason = `Score mismatch: primary source says ${primaryHomeScore}-${primaryAwayScore}, secondary source says ${secondaryHomeScore}-${secondaryAwayScore}. Manual review required.`;
+              base.disputeReason = `Score mismatch: primary source says ${rawHomeScore}-${rawAwayScore}, secondary source says ${secondaryHomeScore}-${secondaryAwayScore}. Manual review required.`;
               base.confidence = 30;
               base.reasoning = base.disputeReason;
               return base;

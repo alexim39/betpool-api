@@ -166,4 +166,85 @@ describe('AISettlementService.checkPod', () => {
     expect(result.disputed).toBe(true);
     expect(result.recommendedResult).toBe('cannot_determine');
   });
+
+  it('aligns scores when the API lists the fixture with the teams in the opposite order', async () => {
+    axiosGetMock.mockImplementation((url: string) => {
+      if (url.includes('/events/123/')) {
+        return Promise.resolve({
+          data: {
+            id: 123,
+            status: 'finished',
+            home_team_id: 22,
+            away_team_id: 11,
+            home_team: 'Philadelphia Union',
+            away_team: 'New York City FC',
+            home_score: 0,
+            away_score: 2,
+            event_date: '2026-08-10T19:00:00.000Z',
+          },
+        });
+      }
+      return Promise.resolve({
+        data: { results: [{ id: 123, home_team_id: 22, away_team_id: 11, home_score: 0, away_score: 2 }] },
+      });
+    });
+    (PodModel.findById as jest.Mock).mockReturnValue({ populate: jest.fn().mockResolvedValue(pod('Home Win')) });
+    const result = await service.checkPod('pod-1');
+    expect(result.homeScore).toBe(2);
+    expect(result.awayScore).toBe(0);
+    expect(result.recommendedResult).toBe('win');
+  });
+
+  it('refuses to settle when the API event teams do not match the pod fixture', async () => {
+    axiosGetMock.mockImplementation((url: string) => {
+      if (url.includes('/events/123/')) {
+        return Promise.resolve({
+          data: {
+            id: 123,
+            status: 'finished',
+            home_team_id: 33,
+            away_team_id: 44,
+            home_team: 'Los Angeles FC',
+            away_team: 'Seattle Sounders',
+            home_score: 3,
+            away_score: 1,
+            event_date: '2026-08-10T19:00:00.000Z',
+          },
+        });
+      }
+      return Promise.resolve({ data: { results: [] } });
+    });
+    (PodModel.findById as jest.Mock).mockReturnValue({ populate: jest.fn().mockResolvedValue(pod('Home Win')) });
+    const result = await service.checkPod('pod-1');
+    expect(result.matchFound).toBe(false);
+    expect(result.recommendedResult).toBe('cannot_determine');
+    expect(result.reasoning).toContain('Manual settlement required');
+  });
+
+  it('matches team names despite club suffixes ("Angel City FC" vs "Angel City")', async () => {
+    axiosGetMock.mockImplementation((url: string) => {
+      if (url.includes('/events/123/')) {
+        return Promise.resolve({
+          data: {
+            id: 123,
+            status: 'finished',
+            home_team_id: 11,
+            away_team_id: 22,
+            home_team: 'Angel City',
+            away_team: 'Washington Spirit',
+            home_score: 2,
+            away_score: 0,
+            event_date: '2026-08-10T19:00:00.000Z',
+          },
+        });
+      }
+      return Promise.resolve({
+        data: { results: [{ id: 123, home_team_id: 11, away_team_id: 22, home_score: 2, away_score: 0 }] },
+      });
+    });
+    (PodModel.findById as jest.Mock).mockReturnValue({ populate: jest.fn().mockResolvedValue(pod('Home Win', 'Angel City FC', 'Washington Spirit')) });
+    const result = await service.checkPod('pod-1');
+    expect(result.matchFound).toBe(true);
+    expect(result.recommendedResult).toBe('win');
+  });
 });
