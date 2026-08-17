@@ -135,6 +135,19 @@ export class AdminController {
     }
   }
 
+  async unsettlePod(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { notes } = req.body || {};
+      const userId = req.user!.userId;
+      const pod = await adminService.unsettlePod(id, userId, notes);
+      res.json({ success: true, data: pod });
+    } catch (error: any) {
+      logger.error('Admin unsettle pod error', error);
+      res.status(400).json({ success: false, message: error.message || 'Failed to reopen pod' });
+    }
+  }
+
   async cancelPod(req: AuthRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;

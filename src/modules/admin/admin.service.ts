@@ -482,6 +482,75 @@ export class AdminService {
     });
   }
 
+  async unsettlePod(id: string, adminUserId: string, notes?: string): Promise<IPod | null> {
+    return runTransaction(async (session) => {
+      const pod = await PodModel.findById(id).session(session);
+      if (!pod) throw new Error('Pod not found');
+      if (pod.status !== 'settled' || pod.result !== 'loss') {
+        throw new Error('Only pods settled with a loss result can be reopened (no payouts were made)');
+      }
+
+      // 1. Revert single-pod stakes that were marked lost (claw back the consolation refund)
+      const singleStakes = await StakeModel.find({ pod: id, status: 'lost', items: { $exists: false } }).session(session);
+      for (const stake of singleStakes) {
+        const refund = stake.refundAmount ?? 0;
+        if (refund > 0) {
+          await WalletModel.findOneAndUpdate(
+            { user: stake.user },
+            { $inc: { balance: -refund }, $set: { lastTransactionAt: new Date() } },
+            { session }
+          );
+          await TransactionModel.deleteOne({ reference: `LOST_${stake._id}` }).session(session);
+        }
+        await StakeModel.updateOne(
+          { _id: stake._id },
+          {
+            $set: { status: 'confirmed', settlementNotes: `Reopened for re-settlement (${notes || 'incorrect settlement'})` },
+            $unset: { settledAt: 1, settledBy: 1, settledOdds: 1 },
+          },
+          { session }
+        );
+        await PodModel.findByIdAndUpdate(id, { $inc: { currentExposure: stake.stakeAmount, currentParticipants: 1 } }).session(session);
+      }
+
+      // 2. Revert lost parlay legs referencing this pod (lost parlays paid nothing)
+      const parlays = await StakeModel.find({ 'items.pod': id, status: 'lost' }).session(session);
+      for (const stake of parlays) {
+        let touched = false;
+        for (const item of stake.items || []) {
+          if (item.pod.toString() === id && item.status === 'lost') {
+            item.status = 'pending';
+            item.settledAt = undefined;
+            touched = true;
+          }
+        }
+        if (touched) {
+          await StakeModel.updateOne(
+            { _id: stake._id },
+            {
+              $set: { status: 'confirmed', settlementNotes: `Reopened for re-settlement (${notes || 'incorrect settlement'})` },
+              $unset: { settledAt: 1, settledBy: 1, settledOdds: 1 },
+            },
+            { session }
+          );
+          await PodModel.findByIdAndUpdate(id, { $inc: { currentExposure: stake.stakeAmount, currentParticipants: 1 } }).session(session);
+        }
+      }
+
+      // 3. Reset the pod so it can be re-checked and re-settled
+      await PodModel.findByIdAndUpdate(
+        id,
+        {
+          $set: { status: 'active', settlementDisputed: false },
+          $unset: { result: 1, settledAt: 1, settledBy: 1, resultNotes: 1, settlementStatus: 1, settlementDisputedReason: 1, homeScore: 1, awayScore: 1 },
+        },
+        { session }
+      );
+
+      return PodModel.findById(id).session(session);
+    });
+  }
+
   async cancelPod(id: string, cancelledBy: string): Promise<IPod | null> {
     return runTransaction(async (session) => {
       const pod = await PodModel.findById(id).session(session);

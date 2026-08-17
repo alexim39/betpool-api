@@ -147,7 +147,7 @@ export class AISettlementService {
       // Map actual result to pod selection
       base.recommendedResult = 'cannot_determine';
 
-const sel = pod.selection?.trim().toLowerCase() || '';
+      const sel = pod.selection?.trim().toLowerCase() || '';
       const homeName = pod.homeTeam?.toLowerCase() || '';
       const awayName = pod.awayTeam?.toLowerCase() || '';
       const hasHomeTeam = homeName && sel.includes(homeName);
@@ -155,36 +155,67 @@ const sel = pod.selection?.trim().toLowerCase() || '';
       const hasBothTeams = hasHomeTeam && hasAwayTeam;
 
       const isDrawNoBet = /draw no bet/.test(sel);
+      const isBttsNo = /btts\s*no|both teams? (?:to )?score\s*no/.test(sel);
       const isBtts = /btts|both team/.test(sel);
-      const homeCovered = /home/.test(sel) || /\b1\b/.test(sel) || /\b1x\b/.test(sel) || /\b12\b/.test(sel) || (hasHomeTeam && !hasBothTeams);
-      const awayCovered = /away/.test(sel) || /\b2\b/.test(sel) || /\bx2\b/.test(sel) || /\b12\b/.test(sel) || (hasAwayTeam && !hasBothTeams);
-      const drawCovered = /draw/.test(sel) || /\bx\b/.test(sel) || /\b1x\b/.test(sel) || /\bx2\b/.test(sel);
+
+      // Token helper that never matches digits inside numbers ("1.50", "2.5")
+      const hasToken = (t: string) => new RegExp(`(^|[^0-9.])${t}([^0-9.]|$)`).test(sel);
+      const homeCovered = /home/.test(sel) || hasToken('1') || /\b1x\b/.test(sel) || /\b12\b/.test(sel) || (hasHomeTeam && !hasBothTeams);
+      const awayCovered = /away/.test(sel) || hasToken('2') || /\bx2\b/.test(sel) || /\b12\b/.test(sel) || (hasAwayTeam && !hasBothTeams);
+      const drawCovered = /draw/.test(sel) || hasToken('x') || /\b1x\b/.test(sel) || /\bx2\b/.test(sel);
       const hasCoverage = homeCovered || awayCovered || drawCovered;
 
+      // OVER / UNDER markets — settled on total goals, never via the 1X2 coverage tokens
+      const overUnder = sel.match(/\b(over|under)\s*(\d+(?:\.\d+)?)/);
+      const multipleLines = (sel.match(/\b(?:over|under)\b/g) || []).length > 1;
+
+      let matched = false;
+      let needsManualReview = false;
+
       if (base.actualResult !== 'unknown') {
-        let matched = false;
-        if (isBtts && primaryHomeScore != null && primaryAwayScore != null) {
-          matched = Number(primaryHomeScore) > 0 && Number(primaryAwayScore) > 0;
+        // Composite selections (e.g. "Home & Over 2.5" or "Over 1.5 & Under 2.5") can't be auto-settled reliably — flag for review
+        if (overUnder && ((homeCovered || awayCovered || drawCovered) || multipleLines)) {
+          needsManualReview = true;
+          base.reasoning = `Selection "${pod.selection}" combines over/under with a match result market — manual settlement required.`;
+        } else if (isBtts && primaryHomeScore != null && primaryAwayScore != null) {
+          const bothScored = Number(primaryHomeScore) > 0 && Number(primaryAwayScore) > 0;
+          matched = isBttsNo ? !bothScored : bothScored;
+        } else if (overUnder && primaryHomeScore != null && primaryAwayScore != null) {
+          const line = Number(overUnder[2]);
+          const total = Number(primaryHomeScore) + Number(primaryAwayScore);
+          if (total > line) {
+            matched = overUnder[1] === 'over';
+          } else if (total < line) {
+            matched = overUnder[1] === 'under';
+          } else {
+            // Total equals the line exactly — push/refund
+            base.recommendedResult = 'void';
+            base.confidence = 95;
+            base.reasoning = `${pod.homeTeam} ${primaryHomeScore} - ${primaryAwayScore} ${pod.awayTeam} (total ${total}). Pod selected "${pod.selection}" — total equals the line (${line}). Stake should be refunded (push).`;
+          }
         } else if (!(isDrawNoBet && base.actualResult === 'draw')) {
           matched =
             (homeCovered && base.actualResult === 'home_win') ||
             (awayCovered && base.actualResult === 'away_win') ||
             (drawCovered && !isDrawNoBet && base.actualResult === 'draw');
         }
+      }
+
+      if (base.recommendedResult !== 'void' && !needsManualReview) {
         if (matched) {
           base.recommendedResult = 'win';
           base.confidence = Math.max(base.confidence, 95);
           base.reasoning = `${pod.homeTeam} ${primaryHomeScore} - ${primaryAwayScore} ${pod.awayTeam}. Pod selected "${pod.selection}" — covered the actual result.`;
-        } else if (hasCoverage || isBtts) {
+        } else if (hasCoverage || isBtts || overUnder) {
           base.recommendedResult = 'loss';
           base.confidence = Math.max(base.confidence, 95);
           base.reasoning = `${pod.homeTeam} ${primaryHomeScore} - ${primaryAwayScore} ${pod.awayTeam}. Pod selected "${pod.selection}" — does not match actual result (${base.actualResult.replace('_', ' ')}).`;
         }
       }
 
-      if (base.recommendedResult === 'cannot_determine' && base.matchStatus === 'finished') {
+      if (base.recommendedResult === 'cannot_determine' && base.matchStatus === 'finished' && !base.reasoning) {
         base.reasoning = `Match finished ${primaryHomeScore}-${primaryAwayScore} but pod selection "${pod.selection}" could not be mapped.`;
-      } else if (base.recommendedResult === 'cannot_determine') {
+      } else if (base.recommendedResult === 'cannot_determine' && !base.reasoning) {
         base.reasoning = `Match status is "${base.matchStatus}". Cannot determine result yet.`;
       }
 
