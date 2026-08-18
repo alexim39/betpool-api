@@ -4,7 +4,7 @@ import { PodModel, IPod } from '../../models/pod.model';
 import { WalletModel } from '../../models/wallet.model';
 import { TransactionModel } from '../../models/transaction.model';
 import { walletService } from '../../services/wallet.service';
-import { notifyStakePlaced, notifyStakeWon, notifyStakeLost, notifyStakeCashedOut } from '../../services/notification.service';
+import { notifyStakePlaced, notifyStakeWon, notifyStakeLost, notifyStakeCashedOut, createInAppNotification } from '../../services/notification.service';
 import { userService } from '../../services/user.service';
 import { abtestService } from '../abtest/abtest.service';
 import { loyaltyService } from '../loyalty/loyalty.service';
@@ -12,6 +12,10 @@ import { coachingService } from '../coaching/coaching.service';
 import { evaluateAccumulatorInsurance } from '../../utils/parlay-insurance';
 import { GameAnalysisModel } from '../../models/game-analysis.model';
 import { GAME_LIVE_STATUSES } from '../ai/ai-games.service';
+import BookingCodeModel from '../../models/booking-code.model';
+import { getMaxAccumulatorLegs, getMaxBookingCodeLegs } from './booking-code.service';
+import { socialService } from '../social/social.service';
+import { cacheService } from '../../services/cache.service';
 
 // Type helper to cast Mongoose lean queries
 function toLeanArray<T>(): (query: any) => Promise<T[]> {
@@ -29,6 +33,7 @@ export interface PlaceStakeData {
   podIds?: string[];
   stakeAmount: number;
   idempotencyKey?: string;
+  bookingCode?: string;
 }
 
 export interface PlaceMultiStakeData {
@@ -36,6 +41,7 @@ export interface PlaceMultiStakeData {
   podIds: string[];
   stakeAmount: number;
   idempotencyKey?: string;
+  bookingCode?: string;
 }
 
 export interface StakeResult {
@@ -50,9 +56,35 @@ export interface StakeResult {
 export class StakeService {
   private readonly PLATFORM_FEE_PERCENT = 10;
 
+  /**
+   * Validates that a booking code exists, has not expired, and covers exactly
+   * the pods being staked. Returns the code (normalized) or throws.
+   */
+  private async resolveBookingCode(code: string | undefined, podIds: string[]): Promise<string | null> {
+    if (!code) return null;
+    const normalized = String(code).trim().toUpperCase();
+    const booking = await BookingCodeModel.findOne({ code: normalized }).lean();
+    if (!booking) throw new Error('Booking code not found');
+    if (new Date(booking.expiresAt) < new Date()) throw new Error('Booking code has expired');
+    const codePods = booking.podIds.map(p => String(p));
+    const stakePods = podIds.map(p => String(p));
+    if (codePods.length !== stakePods.length || !codePods.every(p => stakePods.includes(p))) {
+      throw new Error('The selections do not match this booking code');
+    }
+    return normalized;
+  }
+
+  private async getBookingCodeCreator(code: string): Promise<string | null> {
+    const booking = await BookingCodeModel.findOne({ code }).select('userId').lean();
+    return booking ? String(booking.userId) : null;
+  }
+
   async placeStake(data: PlaceStakeData): Promise<StakeResult> {
     const podId = data.podId || data.oddsOfferId;
     if (!podId) throw new Error('Pod ID required');
+    if (data.bookingCode) {
+      throw new Error('Booking codes cover at least 2 selections — place the full accumulator');
+    }
 
     // Idempotency check
     if (data.idempotencyKey) {
@@ -438,9 +470,10 @@ export class StakeService {
   async placeAccumulator(data: PlaceMultiStakeData): Promise<StakeResult> {
     const { userId, podIds, stakeAmount, idempotencyKey } = data;
 
-    const maxAccumulatorLegs = parseInt(process.env.MAX_ACCUMULATOR_LEGS || '5', 10);
-    if (podIds.length < 2 || podIds.length > maxAccumulatorLegs) {
-      throw new Error(`Accumulator requires 2 to ${maxAccumulatorLegs} selections`);
+    const bookingCode = await this.resolveBookingCode(data.bookingCode, podIds);
+    const maxLegs = bookingCode ? getMaxBookingCodeLegs() : getMaxAccumulatorLegs();
+    if (podIds.length < 2 || podIds.length > maxLegs) {
+      throw new Error(`Accumulator requires 2 to ${maxLegs} selections`);
     }
 
     if (data.idempotencyKey) {
@@ -498,7 +531,7 @@ export class StakeService {
       }
 
       const combinedMultiplier = pods.reduce((acc, p) => acc * p.gainsMultiplier, 1);
-      if (combinedMultiplier > 50) {
+      if (combinedMultiplier > 50 && !bookingCode) {
         throw new Error('Combined odds exceed maximum of 50x');
       }
 
@@ -573,10 +606,12 @@ export class StakeService {
         refundPercent: 0,
         refundAmount: 0,
         status: 'confirmed',
+        bookingCode: bookingCode || undefined,
         metadata: {
           ...(idempotencyKey ? { idempotencyKey } : {}),
           isParlay: true,
-          podIds: podIds.map(id => id.toString())
+          podIds: podIds.map(id => id.toString()),
+          ...(bookingCode ? { bookingCode } : {})
         }
       }], { session });
 
@@ -600,6 +635,25 @@ export class StakeService {
       }], { session });
 
       await session.commitTransaction();
+
+      if (bookingCode) {
+        const creatorId = await this.getBookingCodeCreator(bookingCode);
+        if (creatorId && creatorId !== userId) {
+          socialService.recordActivity(userId, 'staked_on_code', undefined, {
+            code: bookingCode,
+            creatorId,
+            stakeAmount,
+            legCount: podIds.length
+          }).catch(e => console.error('Staked-on-code activity error', e));
+          const staker = await userService.getUserById(userId).catch(() => null);
+          createInAppNotification(
+            creatorId,
+            'system',
+            'Someone staked on your booking code',
+            `${(staker as any)?.fullName || 'A follower'} placed a ₦${stakeAmount.toLocaleString()} accumulator on code ${bookingCode}.`
+          ).catch(e => console.error(e));
+        }
+      }
 
       userService.payReferralBonusOnStake(userId).catch(e => console.error('Referral bonus error', e));
 
@@ -813,6 +867,7 @@ export class StakeService {
         } else if (result === 'lost') {
           await notifyStakeLost(stake.user.toString(), notifPod?.title || 'Pod', stake.stakeAmount - payoutAmount).catch(e => console.error(e));
         }
+        cacheService.clear('virality:');
       }
 
       if (result === 'lost') {

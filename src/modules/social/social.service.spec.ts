@@ -8,15 +8,28 @@ jest.mock('../../models/pod.model', () => ({
 jest.mock('../../models/user.model', () => ({
   UserModel: { findById: jest.fn(), findOne: jest.fn(), find: jest.fn() }
 }));
+jest.mock('../../models/booking-code.model', () => ({
+  __esModule: true,
+  default: { findById: jest.fn(), findOne: jest.fn() }
+}));
 jest.mock('../../services/notification.service', () => ({
   createInAppNotification: jest.fn()
+}));
+jest.mock('../staking/booking-code.service', () => ({
+  bookingCodeService: { view: jest.fn() }
+}));
+jest.mock('./creator-virality.service', () => ({
+  creatorViralityService: {
+    isTopCreator: jest.fn(),
+    getVirality: jest.fn().mockResolvedValue({ score: 0, codesShared: 0, stakesPlaced: 0, wins: 0, badge: 'Rookie', isTopCreator: false, rank: null })
+  }
 }));
 jest.mock('./social.model', () => ({
   SocialLikeModel: { findOne: jest.fn(), create: jest.fn(), deleteOne: jest.fn(), countDocuments: jest.fn(), aggregate: jest.fn(), distinct: jest.fn() },
   SocialSaveModel: { findOne: jest.fn(), create: jest.fn(), deleteOne: jest.fn(), distinct: jest.fn() },
   SocialFollowModel: { find: jest.fn(), findOne: jest.fn(), create: jest.fn(), deleteOne: jest.fn(), countDocuments: jest.fn(), aggregate: jest.fn() },
   SocialCommentModel: { find: jest.fn(), findById: jest.fn(), create: jest.fn(), countDocuments: jest.fn(), aggregate: jest.fn() },
-  SocialActivityModel: { find: jest.fn(), create: jest.fn(), countDocuments: jest.fn() }
+  SocialActivityModel: { find: jest.fn(), create: jest.fn(), countDocuments: jest.fn(), aggregate: jest.fn().mockResolvedValue([]) }
 }));
 
 const MockPodModel = require('../../models/pod.model').PodModel;
@@ -260,56 +273,53 @@ describe('SocialService', () => {
       expect(result).toEqual({ items: [], total: 0, page: 1, limit: 12, pages: 0 });
     });
 
-    it('queries active pods by followed creators (Ora always included)', async () => {
+    it('returns enriched booking-code posts from followed creators', async () => {
       oraChain(null);
       MockSocialFollowModel.find.mockReturnValue(findChain([{ followee: OID }]));
-      const pods = [{ _id: POD, title: 'Pick', createdBy: { _id: OID, fullName: 'Ada Lovelace' } }];
-      MockPodModel.find.mockReturnValue({
-        sort: jest.fn().mockReturnValue({
-          skip: jest.fn().mockReturnValue({
-            limit: jest.fn().mockReturnValue({
-              select: jest.fn().mockReturnValue({
-                populate: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(pods) })
-              })
-            })
-          })
-        })
+      const activities = [{
+        _id: 'act-1',
+        actor: { _id: OID, fullName: 'Ada Lovelace' },
+        payload: { code: 'ABC12345', codeId: 'code-1', legCount: 2, combinedMultiplier: 3.0 },
+        createdAt: new Date('2026-08-01T10:00:00Z')
+      }];
+      MockSocialActivityModel.find.mockReturnValue(populateChain(activities));
+      MockSocialActivityModel.countDocuments.mockResolvedValue(1);
+      const MockBookingCodeService = require('../staking/booking-code.service').bookingCodeService;
+      MockBookingCodeService.view.mockResolvedValue({
+        code: 'ABC12345', codeId: 'code-1', expiresAt: '2026-08-02T10:00:00Z',
+        combinedMultiplier: 3.0, legCount: 2,
+        legs: [{ podId: POD.toString(), homeTeam: 'Arsenal', awayTeam: 'Chelsea', selection: 'Home', multiplier: 1.5 }],
+        creator: { id: OID.toString(), name: 'Ada Lovelace' }
       });
-      MockPodModel.countDocuments.mockResolvedValue(1);
+      const MockCreatorVirality = require('./creator-virality.service').creatorViralityService;
+      MockCreatorVirality.isTopCreator.mockResolvedValue(true);
 
       const result = await service.getFollowingFeed(USER.toString(), 1, 12);
 
-      const filter = MockPodModel.find.mock.calls[0][0];
-      expect(filter.status).toBe('active');
-      expect(filter.createdBy.$in[0].toString()).toBe(OID.toString());
-      expect(filter.createdBy.$in.map((x: { toString: () => string }) => x.toString())).toContain(USER.toString());
-      expect(result.items[0].title).toBe('Pick');
-      expect(result.items[0].createdBy).toBe(OID.toString());
+      const filter = MockSocialActivityModel.find.mock.calls[0][0];
+      expect(filter.type).toBe('booking_code_shared');
+      expect(filter.actor.$in[0].toString()).toBe(OID.toString());
+      expect(result.total).toBe(1);
+      expect(result.items[0].kind).toBe('code');
+      expect(result.items[0].code).toBe('ABC12345');
       expect(result.items[0].creatorName).toBe('Ada Lovelace');
+      expect(result.items[0].boosted).toBe(true);
+      expect(result.items[0].legCount).toBe(2);
+      expect(result.items[0].legs[0].homeTeam).toBe('Arsenal');
     });
 
     it('includes Ora in the followed set even with no follow rows', async () => {
       oraChain(OID.toString());
       MockSocialFollowModel.find.mockReturnValue(findChain([]));
-      const pods = [{ _id: POD, title: 'Ora pick' }];
-      MockPodModel.find.mockReturnValue({
-        sort: jest.fn().mockReturnValue({
-          skip: jest.fn().mockReturnValue({
-            limit: jest.fn().mockReturnValue({
-              select: jest.fn().mockReturnValue({
-                populate: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(pods) })
-              })
-            })
-          })
-        })
-      });
-      MockPodModel.countDocuments.mockResolvedValue(1);
+      MockSocialActivityModel.find.mockReturnValue(populateChain([]));
+      MockSocialActivityModel.countDocuments.mockResolvedValue(0);
 
       const result = await service.getFollowingFeed(USER.toString(), 1, 12);
 
-      expect(MockPodModel.find.mock.calls[0][0].createdBy.$in[0].toString()).toBe(OID.toString());
-      expect(result.items[0].title).toBe('Ora pick');
-      expect(result.items[0].creatorName).toBeNull();
+      const filter = MockSocialActivityModel.find.mock.calls[0][0];
+      expect(filter.type).toBe('booking_code_shared');
+      expect(filter.actor.$in.map((x: { toString: () => string }) => x.toString())).toContain(OID.toString());
+      expect(result.items).toEqual([]);
     });
   });
 

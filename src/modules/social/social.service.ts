@@ -2,9 +2,12 @@ import mongoose from 'mongoose';
 import { AppError } from '../../middleware/error.middleware';
 import { PodModel } from '../../models/pod.model';
 import { UserModel } from '../../models/user.model';
+import BookingCodeModel from '../../models/booking-code.model';
 import { cacheService } from '../../services/cache.service';
 import { logger } from '../../services/logger.service';
 import { createInAppNotification } from '../../services/notification.service';
+import { bookingCodeService } from '../staking/booking-code.service';
+import { creatorViralityService } from './creator-virality.service';
 import {
   SocialLikeModel,
   SocialSaveModel,
@@ -33,8 +36,11 @@ const MAX_STATS_IDS = 200;
 
 export class SocialService {
   private async ensurePodExists(podId: string): Promise<void> {
-    const pod = await PodModel.findById(podId).select('_id').lean();
-    if (!pod) throw new AppError('Pod not found', 404);
+    const [pod, booking] = await Promise.all([
+      PodModel.findById(podId).select('_id').lean(),
+      BookingCodeModel.findById(podId).select('_id').lean()
+    ]);
+    if (!pod && !booking) throw new AppError('Pod not found', 404);
   }
 
   private async getOraCreatorId(): Promise<string> {
@@ -103,12 +109,18 @@ export class SocialService {
 
   async listCreators(userId: string, limit: number): Promise<Record<string, any>[]> {
     const safeLimit = Math.min(50, Math.max(1, limit || 20));
-    const rows = await PodModel.aggregate<{ _id: mongoose.Types.ObjectId; podCount: number }>([
-      { $match: { createdBy: { $exists: true, $ne: null }, status: 'active' } },
-      { $group: { _id: '$createdBy', podCount: { $sum: 1 } } }
+    const [rows, codeRows] = await Promise.all([
+      PodModel.aggregate<{ _id: mongoose.Types.ObjectId; podCount: number }>([
+        { $match: { createdBy: { $exists: true, $ne: null }, status: 'active' } },
+        { $group: { _id: '$createdBy', podCount: { $sum: 1 } } }
+      ]),
+      SocialActivityModel.aggregate<{ _id: mongoose.Types.ObjectId; codeCount: number }>([
+        { $match: { type: 'booking_code_shared' } },
+        { $group: { _id: '$actor', codeCount: { $sum: 1 } } }
+      ])
     ]);
-    if (rows.length === 0) return [];
-    const ids = rows.map(r => r._id);
+    if (rows.length === 0 && codeRows.length === 0) return [];
+    const ids = [...new Set([...rows.map(r => r._id), ...codeRows.map(r => r._id)])];
     const users = await UserModel.find({ _id: { $in: ids }, isActive: true, isSuspended: false })
       .select('_id fullName')
       .lean();
@@ -123,6 +135,7 @@ export class SocialService {
     ]);
     const followed = new Set(follows.map(f => f.followee.toString()));
     const counts = new Map(rows.map(r => [r._id.toString(), r.podCount]));
+    const codeCounts = new Map(codeRows.map(r => [r._id.toString(), r.codeCount]));
     const followerCounts = new Map(followerRows.map(r => [r._id.toString(), r.followers]));
     return users
       .map(u => {
@@ -132,6 +145,7 @@ export class SocialService {
           id,
           fullName: (u as any).fullName || 'BetPool user',
           podCount: counts.get(id) || 0,
+          codeCount: codeCounts.get(id) || 0,
           followerCount: followerCounts.get(id) || 0,
           isOra,
           isFollowing: isOra || followed.has(id)
@@ -141,6 +155,7 @@ export class SocialService {
       .sort((a, b) =>
         (b.isOra ? 1 : 0) - (a.isOra ? 1 : 0) ||
         b.followerCount - a.followerCount ||
+        (b.codeCount || 0) - (a.codeCount || 0) ||
         b.podCount - a.podCount
       )
       .slice(0, safeLimit);
@@ -172,6 +187,15 @@ export class SocialService {
       logger.error('Social getProfile stats query failed', err);
     }
     const achievements = this.buildAchievements({ isOra, picks, followers, likesReceived, stakers });
+    const virality = await creatorViralityService.getVirality(targetId).catch(() => ({
+      score: 0,
+      codesShared: 0,
+      stakesPlaced: 0,
+      wins: 0,
+      badge: 'Rookie',
+      isTopCreator: false,
+      rank: null
+    }));
     return {
       user: {
         id: targetId,
@@ -180,6 +204,7 @@ export class SocialService {
       },
       stats: { picks, followers, following, likesReceived, stakers },
       achievements,
+      virality,
       isSelf: requesterId === targetId,
       isFollowing: isOra || !!followRow
     };
@@ -414,24 +439,60 @@ export class SocialService {
     if (followedIds.length === 0) {
       return { items: [], total: 0, page: safePage, limit: safeLimit, pages: 0 };
     }
-    const now = new Date();
-    const includedIds = [...followedIds, userId].filter(id => mongoose.isValidObjectId(id));
-    const filter = {
-      status: 'active',
-      stakingClosesAt: { $gte: now },
-      createdBy: { $in: includedIds.map(id => new mongoose.Types.ObjectId(id)) },
-      $expr: { $lt: ['$currentExposure', '$maxTotalExposure'] }
+    const actorFilter = {
+      actor: { $in: followedIds.map(id => new mongoose.Types.ObjectId(id)) },
+      type: 'booking_code_shared' as const
     };
-    const raw = (await PodModel.find(filter)
-      .sort({ stakingClosesAt: 1, isLive: -1, displayOrder: 1, opensAt: 1, _id: 1 })
-      .skip((safePage - 1) * safeLimit)
-      .limit(safeLimit)
-      .select('-legs -marketOdds')
-      .populate('createdBy', 'fullName')
-      .lean()) as any[];
-    const items = this.mapFeedPods(raw);
-    const total = await PodModel.countDocuments(filter);
+    const [activities, total] = await Promise.all([
+      SocialActivityModel.find(actorFilter)
+        .sort({ createdAt: -1 })
+        .skip((safePage - 1) * safeLimit)
+        .limit(safeLimit)
+        .populate('actor', 'fullName')
+        .lean() as Promise<Record<string, any>[]>,
+      SocialActivityModel.countDocuments(actorFilter)
+    ]);
+    const items = await Promise.all(activities.map(a => this.toCodePost(a)));
+    items.sort((a, b) => (b.boosted ? 1 : 0) - (a.boosted ? 1 : 0) || b.createdAt - a.createdAt);
     return { items, total, page: safePage, limit: safeLimit, pages: Math.ceil(total / safeLimit) };
+  }
+
+  private async toCodePost(activity: Record<string, any>): Promise<Record<string, any>> {
+    const payload = activity?.payload || {};
+    const code = String(payload.code || '');
+    const creator = (activity?.actor as any) || {};
+    const creatorId = String(creator?._id || payload.creatorId || '');
+    let view: any = null;
+    if (code) {
+      try {
+        view = await bookingCodeService.view(code);
+      } catch {
+        view = null;
+      }
+    }
+    const boosted = await creatorViralityService.isTopCreator(creatorId).catch(() => false);
+    return {
+      kind: 'code',
+      id: String(activity?._id || ''),
+      codeId: String(view?.codeId || payload.codeId || ''),
+      code,
+      creatorId,
+      creatorName: creator?.fullName || payload.creatorName || 'BetPool user',
+      boosted,
+      createdAt: activity?.createdAt ? new Date(activity.createdAt).getTime() : Date.now(),
+      expiresAt: view?.expiresAt || payload.expiresAt || null,
+      combinedMultiplier: (view?.combinedMultiplier ?? Number(payload.combinedMultiplier)) || 1,
+      legCount: (view?.legCount ?? Number(payload.legCount)) || 0,
+      legs: (view?.legs || payload.legs || []).slice(0, 3).map((l: any) => ({
+        podId: String(l.podId || ''),
+        homeTeam: l.homeTeam,
+        awayTeam: l.awayTeam,
+        selection: l.selection,
+        multiplier: l.multiplier
+      })),
+      totalLegs: (view?.legCount ?? Number(payload.legCount)) || 0,
+      stakeAmount: payload.stakeAmount ? Number(payload.stakeAmount) : null
+    };
   }
 
   async getActivity(userId: string, page: number, limit: number): Promise<PagedResult<Record<string, any>>> {
@@ -473,6 +534,28 @@ export class SocialService {
           `New pick from ${name}`,
           `"${title}" is open for staking now.`,
           { podId, creatorId }
+        )
+      ));
+      return unique.length;
+    } catch (err) {
+      return 0;
+    }
+  }
+
+  async notifyFollowersOfCode(creatorId: string, code: string, legCount: number, combinedMultiplier: number): Promise<number> {
+    try {
+      const creator = await UserModel.findById(creatorId).select('fullName').lean();
+      const name = (creator as any)?.fullName || 'A creator';
+      const followers = await SocialFollowModel.find({ followee: creatorId }).select('follower').lean();
+      if (followers.length === 0) return 0;
+      const unique = [...new Set(followers.map(f => String(f.follower)))];
+      await Promise.all(unique.map(followerId =>
+        createInAppNotification(
+          followerId,
+          'system',
+          `${name} shared a booking code`,
+          `Code ${code} — ${legCount} legs at ${combinedMultiplier.toFixed(2)}x. Enter it to stake.`,
+          { code, creatorId }
         )
       ));
       return unique.length;

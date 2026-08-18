@@ -46,7 +46,8 @@ describe('PodService', () => {
         matchDate: closesAt,
         selection: 'Home Win',
         gainsMultiplier: 2.1,
-        stakingClosesAt: closesAt
+        stakingClosesAt: closesAt,
+        fixtureId: 12345
       });
 
       const created = MockPodModel.create.mock.calls[0][0];
@@ -60,6 +61,7 @@ describe('PodService', () => {
       expect(created.maxPayout).toBe(Math.floor(50000 * 2.1));
       expect(created.title).toBe('Team A vs Team B — Home Win');
       expect(created.opensAt.getTime()).toBeLessThanOrEqual(Date.now());
+      expect(created.metadata).toMatchObject({ source: 'user-pick', fixtureId: 12345 });
       expect(result._id).toEqual(OID);
     });
 
@@ -74,7 +76,8 @@ describe('PodService', () => {
         matchDate: new Date(),
         selection: 'Draw',
         gainsMultiplier: 3,
-        stakingClosesAt: new Date(Date.now() + 60000)
+        stakingClosesAt: new Date(Date.now() + 60000),
+        fixtureId: 67890
       });
 
       expect(cacheService.get('feed:all:all')).toBeNull();

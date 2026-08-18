@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { AuthRequest } from '../../middleware/auth.middleware';
 import { logger } from '../../services/logger.service';
 import { socialService } from './social.service';
+import { creatorViralityService } from './creator-virality.service';
 
 function getUserId(req: AuthRequest): string | null {
   return req.user?.userId ?? null;
@@ -125,6 +126,16 @@ export class SocialController {
     } catch (error: any) {
       logger.error('Social listCreators error', error);
       res.status(500).json({ success: false, message: error?.message || 'Failed to fetch creators' });
+    }
+  }
+
+  async getLeaderboard(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const data = await creatorViralityService.getLeaderboard(parseLimit(req, 20));
+      res.json({ success: true, data: { items: data } });
+    } catch (error: any) {
+      logger.error('Social leaderboard error', error);
+      res.status(500).json({ success: false, message: error?.message || 'Failed to fetch leaderboard' });
     }
   }
 

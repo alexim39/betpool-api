@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { PodModel } from '../../models/pod.model';
-import BookingCodeModel from '../../models/booking-code.model';
+import BookingCodeModel, { IBookingCode } from '../../models/booking-code.model';
+import { UserModel } from '../../models/user.model';
 
 export interface BookingCodeLegView {
   podId: string;
@@ -16,8 +17,12 @@ export interface BookingCodeLegView {
 
 export interface BookingCodeView {
   code: string;
+  codeId: string;
   expiresAt: string;
   legs: BookingCodeLegView[];
+  combinedMultiplier: number;
+  legCount: number;
+  creator?: { id: string; name: string } | null;
 }
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -26,6 +31,19 @@ const CODE_TTL_HOURS = 48;
 
 export function getMaxAccumulatorLegs(): number {
   return parseInt(process.env.MAX_ACCUMULATOR_LEGS || '5', 10);
+}
+
+/** Booking codes (shareable creator cards) allow far more legs than regular parlays. */
+export function getMaxBookingCodeLegs(): number {
+  return parseInt(process.env.MAX_BOOKING_CODE_LEGS || '30', 10);
+}
+
+function getMinKickoffHoursAhead(): number {
+  return parseInt(process.env.BOOKING_CODE_MIN_HOURS_AHEAD || '24', 10);
+}
+
+function getMaxKickoffDaysAhead(): number {
+  return parseInt(process.env.BOOKING_CODE_MAX_DAYS_AHEAD || '7', 10);
 }
 
 function generateCode(): string {
@@ -37,11 +55,26 @@ function generateCode(): string {
   return code;
 }
 
-const POD_SELECT_FIELDS = 'title homeTeam awayTeam league selection gainsMultiplier status stakingClosesAt currentExposure maxTotalExposure';
+const POD_SELECT_FIELDS = 'title homeTeam awayTeam league selection gainsMultiplier status stakingClosesAt matchDate currentExposure maxTotalExposure';
+
+interface PodForCode {
+  _id: any;
+  title: string;
+  homeTeam: string;
+  awayTeam: string;
+  league?: string;
+  selection: string;
+  gainsMultiplier: number;
+  status: string;
+  stakingClosesAt: Date;
+  matchDate?: Date;
+  currentExposure?: number;
+  maxTotalExposure?: number;
+}
 
 export class BookingCodeService {
   async create(userId: string, podIds: string[]): Promise<BookingCodeView> {
-    const maxLegs = getMaxAccumulatorLegs();
+    const maxLegs = getMaxBookingCodeLegs();
     const unique = [...new Set((podIds || []).map(p => String(p)).filter(Boolean))];
 
     if (unique.length < 2) {
@@ -53,25 +86,26 @@ export class BookingCodeService {
 
     const pods = await PodModel.find({ _id: { $in: unique } })
       .select(POD_SELECT_FIELDS)
-      .lean() as unknown as Array<{
-        _id: any;
-        title: string;
-        homeTeam: string;
-        awayTeam: string;
-        league?: string;
-        selection: string;
-        gainsMultiplier: number;
-        status: string;
-        stakingClosesAt: Date;
-        currentExposure?: number;
-        maxTotalExposure?: number;
-      }>;
+      .lean() as unknown as PodForCode[];
 
     if (pods.length !== unique.length) {
       throw new Error('One or more selections no longer exist');
     }
 
     const now = new Date();
+    const minKickoff = new Date(now.getTime() + getMinKickoffHoursAhead() * 60 * 60 * 1000);
+    const maxKickoff = new Date(now.getTime() + getMaxKickoffDaysAhead() * 24 * 60 * 60 * 1000);
+
+    const outOfWindow = pods.filter(p => {
+      const kickoff = p.matchDate ? new Date(p.matchDate) : null;
+      return !kickoff || isNaN(kickoff.getTime()) || kickoff < minKickoff || kickoff > maxKickoff;
+    });
+    if (outOfWindow.length > 0) {
+      throw new Error(
+        `Selections must be for games kicking off within the next ${getMinKickoffHoursAhead()} hours to ${getMaxKickoffDaysAhead()} days: ${outOfWindow.map(p => p.title).join(', ')}`
+      );
+    }
+
     const unavailable = pods.filter(p =>
       p.status !== 'active' ||
       new Date(p.stakingClosesAt) <= now ||
@@ -111,21 +145,7 @@ export class BookingCodeService {
       usedCount: 0
     });
 
-    return {
-      code: booking.code,
-      expiresAt: booking.expiresAt.toISOString(),
-      legs: pods.map(p => ({
-        podId: String(p._id),
-        homeTeam: p.homeTeam,
-        awayTeam: p.awayTeam,
-        selection: p.selection,
-        multiplier: p.gainsMultiplier,
-        league: p.league,
-        status: p.status,
-        available: true,
-        stakingClosesAt: new Date(p.stakingClosesAt).toISOString()
-      }))
-    };
+    return this.toView(booking, pods);
   }
 
   async redeem(code: string): Promise<BookingCodeView> {
@@ -144,20 +164,33 @@ export class BookingCodeService {
 
     const pods = await PodModel.find({ _id: { $in: booking.podIds } })
       .select(POD_SELECT_FIELDS)
-      .lean() as unknown as Array<{
-        _id: any;
-        title: string;
-        homeTeam: string;
-        awayTeam: string;
-        league?: string;
-        selection: string;
-        gainsMultiplier: number;
-        status: string;
-        stakingClosesAt: Date;
-        currentExposure?: number;
-        maxTotalExposure?: number;
-      }>;
+      .lean() as unknown as PodForCode[];
 
+    await BookingCodeModel.updateOne({ _id: booking._id }, { $inc: { usedCount: 1 } });
+
+    return this.toView(booking, pods);
+  }
+
+  /** Read-only view used by the social feed — does not increment usage. */
+  async view(code: string): Promise<BookingCodeView | null> {
+    const normalized = String(code || '').trim().toUpperCase();
+    if (!/^[A-Z2-9]{6,12}$/.test(normalized)) return null;
+    const booking = await BookingCodeModel.findOne({ code: normalized });
+    if (!booking) return null;
+    const pods = await PodModel.find({ _id: { $in: booking.podIds } })
+      .select(POD_SELECT_FIELDS)
+      .lean() as unknown as PodForCode[];
+    return this.toView(booking, pods);
+  }
+
+  async getCreatorByCode(code: string): Promise<string | null> {
+    const normalized = String(code || '').trim().toUpperCase();
+    if (!normalized) return null;
+    const booking = await BookingCodeModel.findOne({ code: normalized }).select('userId').lean();
+    return booking ? String(booking.userId) : null;
+  }
+
+  private async toView(booking: IBookingCode, pods: PodForCode[]): Promise<BookingCodeView> {
     const byId = new Map(pods.map(p => [String(p._id), p]));
     const now = new Date();
 
@@ -193,12 +226,22 @@ export class BookingCodeService {
       };
     });
 
-    await BookingCodeModel.updateOne({ _id: booking._id }, { $inc: { usedCount: 1 } });
+    let creator: { id: string; name: string } | null = null;
+    try {
+      const user = await UserModel.findById(booking.userId).select('fullName').lean();
+      if (user) creator = { id: String(user._id), name: (user as any).fullName || 'BetPool user' };
+    } catch {
+      creator = null;
+    }
 
     return {
       code: booking.code,
+      codeId: String(booking._id),
       expiresAt: booking.expiresAt.toISOString(),
-      legs
+      legs,
+      combinedMultiplier: legs.reduce((acc, l) => acc * l.multiplier, 1),
+      legCount: legs.length,
+      creator
     };
   }
 }

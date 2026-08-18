@@ -6,6 +6,7 @@ import { UserModel } from '../../models/user.model';
 import { cacheService } from '../../services/cache.service';
 import { socialService } from '../social/social.service';
 import { adminService } from '../admin/admin.service';
+import { verifyFixture } from './fixture-verifier';
 
 async function getOraId(): Promise<string> {
   const cached = cacheService.get<string>('feed:oraId');
@@ -25,6 +26,8 @@ export class PodController {
       }
       const body = req.body || {};
       const errors: string[] = [];
+      const fixtureId = Number(body.fixtureId);
+      if (!Number.isInteger(fixtureId) || fixtureId < 1) errors.push('fixtureId is required — pick a real game from the games list');
       if (!body.sport || typeof body.sport !== 'string') errors.push('sport is required');
       if (!body.homeTeam || typeof body.homeTeam !== 'string') errors.push('homeTeam is required');
       if (!body.awayTeam || typeof body.awayTeam !== 'string') errors.push('awayTeam is required');
@@ -40,9 +43,6 @@ export class PodController {
         errors.push('stakingClosesAt must be in the future');
       }
 
-      const match = body.matchDate ? new Date(body.matchDate) : close;
-      if (!match || isNaN(match.getTime())) errors.push('matchDate is invalid');
-
       const minStake = body.minStake === undefined ? 100 : Number(body.minStake);
       const maxStake = body.maxStake === undefined ? 50000 : Number(body.maxStake);
       if (!isFinite(minStake) || minStake < 10) errors.push('minStake must be at least 10');
@@ -55,19 +55,38 @@ export class PodController {
         res.status(400).json({ success: false, message: errors.join('; ') });
         return;
       }
+      if (!close) {
+        res.status(400).json({ success: false, message: 'stakingClosesAt is required' });
+        return;
+      }
+
+      // The fixture MUST exist in the sports feed, teams must match, and the
+      // match must not have started. The verified fixture data (not the client
+      // payload) is what gets stored on the pod.
+      const verification = await verifyFixture(fixtureId, { homeTeam: body.homeTeam, awayTeam: body.awayTeam });
+      if (!verification.ok || !verification.fixture) {
+        res.status(400).json({ success: false, message: verification.reason || 'That game could not be verified' });
+        return;
+      }
+      const kickoff = verification.fixture.matchDate;
+      if (close.getTime() >= kickoff.getTime()) {
+        res.status(400).json({ success: false, message: 'Staking must close before the game kicks off' });
+        return;
+      }
 
       const pod = await podService.createUserPick(req.user.userId, {
         sport: body.sport,
-        league: body.league || undefined,
-        homeTeam: body.homeTeam,
-        awayTeam: body.awayTeam,
-        matchDate: match as Date,
+        league: verification.fixture.league,
+        homeTeam: verification.fixture.homeTeam,
+        awayTeam: verification.fixture.awayTeam,
+        matchDate: kickoff,
         selection: body.selection,
         gainsMultiplier: mult,
         minStake,
         maxStake,
         maxTotalExposure,
-        stakingClosesAt: close as Date
+        stakingClosesAt: close as Date,
+        fixtureId
       });
 
       await socialService.recordActivity(req.user.userId, 'pick_published', String(pod._id), {
