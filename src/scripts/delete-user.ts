@@ -7,7 +7,7 @@ import { TransferModel } from '../models/transfer.model';
 import { StakeModel } from '../models/stake.model';
 import { PickOutcomeModel } from '../models/pick-outcome.model';
 import { PodModel } from '../models/pod.model';
-import { NotificationModel } from '../models/notification.model';
+import NotificationModel from '../models/notification.model';
 import { BankAccountModel } from '../models/bank-account.model';
 import { BookingCodeModel } from '../models/booking-code.model';
 import { BetManagerAccountModel } from '../models/bet-manager-account.model';
@@ -16,12 +16,12 @@ import { BetManagerAllocationModel } from '../models/bet-manager-allocation.mode
 import { DigestSendLogModel } from '../models/digest-send-log.model';
 import { GameAnalysisModel } from '../models/game-analysis.model';
 import { SocialFollowModel, SocialLikeModel, SocialSaveModel, SocialCommentModel, SocialActivityModel } from '../modules/social/social.model';
-import { LoyaltyModel } from '../modules/loyalty/loyalty.model';
+import { LoyaltyProfileModel as LoyaltyModel } from '../modules/loyalty/loyalty.model';
 import { ChatConversationModel } from '../modules/ai/chat-conversation.model';
 import { LoanModel } from '../modules/admin/loan.model';
 import { PoolStakeModel } from '../modules/match-pools/pool-stake.model';
 import { MatchPoolModel } from '../modules/match-pools/match-pool.model';
-import { VirtualGamesModel } from '../modules/virtual-games/virtual-games.model';
+import { VirtualGamePlayModel as VirtualGamesModel } from '../modules/virtual-games/virtual-games.model';
 import { FeaturedBannerModel } from '../modules/featured-banners/featured-banner.model';
 import { AbTestEventModel } from '../modules/abtest/abtest-event.model';
 
@@ -32,7 +32,11 @@ import { AbTestEventModel } from '../modules/abtest/abtest-event.model';
  * bet-manager data, booking codes, loyalty, loans, match-pool stakes, etc.).
  *
  * Usage:
- *   npx ts-node src/scripts/delete-user.ts <userId | phone> [--confirm]
+ *   npx ts-node src/scripts/delete-user.ts <userId | phone | name> [--confirm]
+ *
+ * Targets can be a 24-char ObjectId, a phone number, or a name (case-insensitive
+ * substring). If a name matches multiple users, all matches are listed and you
+ * must re-run with the exact id.
  *
  * Without --confirm it prints what WOULD be deleted and exits (dry run).
  * Admin accounts (incl. the Ora creator) are protected: deleting one requires
@@ -40,6 +44,10 @@ import { AbTestEventModel } from '../modules/abtest/abtest-event.model';
  */
 function hasFlag(name: string): boolean {
   return process.argv.includes(name);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function argValue(flag: string): string | undefined {
@@ -68,7 +76,7 @@ async function run(): Promise<void> {
 
   const target = process.argv[2];
   if (!target) {
-    console.error('[DeleteUser] Usage: npx ts-node src/scripts/delete-user.ts <userId | phone> [--confirm]');
+    console.error('[DeleteUser] Usage: npx ts-node src/scripts/delete-user.ts <userId | phone | name> [--confirm]');
     process.exit(1);
   }
   const dryRun = !hasFlag('--confirm');
@@ -81,9 +89,32 @@ async function run(): Promise<void> {
   });
 
   const isObjectId = /^[0-9a-fA-F]{24}$/.test(target);
-  const user = isObjectId
-    ? await UserModel.findById(target).select('_id phone fullName role isActive isSuspended').lean()
-    : await UserModel.findOne({ phone: target }).select('_id phone fullName role isActive isSuspended').lean();
+  const isPhone = /^\+?[0-9]{7,15}$/.test(target);
+  let user;
+  if (isObjectId) {
+    user = await UserModel.findById(target).select('_id phone fullName role isActive isSuspended').lean();
+  } else if (isPhone) {
+    user = await UserModel.findOne({ phone: target }).select('_id phone fullName role isActive isSuspended').lean();
+  } else {
+    const matches = await UserModel.find({ fullName: { $regex: new RegExp(escapeRegExp(target), 'i') } })
+      .select('_id phone fullName role isActive isSuspended')
+      .sort({ createdAt: 1 })
+      .lean();
+    if (matches.length === 0) {
+      console.error(`[DeleteUser] No user found for: ${target}`);
+      process.exit(1);
+    }
+    if (matches.length > 1) {
+      console.log(`[DeleteUser] ${matches.length} users match "${target}". Re-run with one of these ids:`);
+      for (const m of matches) {
+        const pods = await PodModel.countDocuments({ createdBy: m._id.toString() });
+        console.log(`  ${m._id}  ${m.fullName}  ${m.phone}  role=${m.role}  active=${(m as any).isActive ? 'yes' : 'no'}  suspended=${(m as any).isSuspended ? 'yes' : 'no'}  pods=${pods}`);
+      }
+      await mongoose.disconnect();
+      process.exit(0);
+    }
+    user = matches[0];
+  }
 
   if (!user) {
     console.error(`[DeleteUser] No user found for: ${target}`);
