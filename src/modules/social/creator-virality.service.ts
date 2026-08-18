@@ -103,7 +103,7 @@ export class CreatorViralityService {
     const cached = cacheService.get<LeaderboardEntry[]>('virality:leaderboard');
     if (cached) return cached.slice(0, safeLimit);
 
-    const rows = await StakeModel.aggregate<{ userId: mongoose.Types.ObjectId; score: number; wins: number; stakesPlaced: number }>([
+    const rows = await StakeModel.aggregate<{ _id: mongoose.Types.ObjectId; score: number; wins: number }>([
       { $match: { bookingCode: { $exists: true, $ne: null }, status: 'won' } },
       {
         $lookup: {
@@ -127,34 +127,39 @@ export class CreatorViralityService {
     ]);
 
     const ids = rows.map(r => r._id);
-    const [users, codesCounts, stakeCounts] = await Promise.all([
-      ids.length ? UserModel.find({ _id: { $in: ids } }).select('_id fullName').lean() : [],
+    type CountRow = { _id: mongoose.Types.ObjectId; count: number };
+    const [users, codesCounts, stakeCounts] = (await Promise.all([
       ids.length
-        ? BookingCodeModel.aggregate<{ _id: mongoose.Types.ObjectId; count: number }>([
-            { $match: { userId: { $in: ids } } },
-            { $group: { _id: '$userId', count: { $sum: 1 } } }
-          ])
+        ? UserModel.find({ _id: { $in: ids } }).select('_id fullName').lean()
         : [],
-      ids.length
-        ? StakeModel.aggregate<{ _id: mongoose.Types.ObjectId; count: number }>([
-            { $match: { bookingCode: { $exists: true, $ne: null } } },
-            {
-              $lookup: {
-                from: 'bookingcodes',
-                localField: 'bookingCode',
-                foreignField: 'code',
-                as: 'code'
-              }
-            },
-            { $match: { 'code.userId': { $in: ids } } },
-            { $group: { _id: '$code.userId', count: { $sum: 1 } } }
-          ])
-        : []
-    ]);
+      ids.length ? BookingCodeModel.aggregate<CountRow>([
+        { $match: { userId: { $in: ids } } },
+        { $group: { _id: '$userId', count: { $sum: 1 } } }
+      ]) : [],
+      ids.length ? StakeModel.aggregate<CountRow>([
+        { $match: { bookingCode: { $exists: true, $ne: null } } },
+        {
+          $lookup: {
+            from: 'bookingcodes',
+            localField: 'bookingCode',
+            foreignField: 'code',
+            as: 'code'
+          }
+        },
+        { $match: { 'code.userId': { $in: ids } } },
+        { $group: { _id: '$code.userId', count: { $sum: 1 } } }
+      ]) : []
+    ])) as [Array<{ _id: mongoose.Types.ObjectId; fullName?: string }>, CountRow[], CountRow[]];
 
-    const names = new Map((users as any[]).map(u => [String(u._id), (u as any).fullName || 'BetPool user']));
-    const codesMap = new Map(codesCounts.map(r => [String(r._id), r.count]));
-    const stakesMap = new Map(stakeCounts.map(r => [String(r._id), r.count]));
+    const names = new Map<string, string>(
+      users.map(u => [String(u._id), u.fullName || 'BetPool user'] as [string, string])
+    );
+    const codesMap = new Map<string, number>(
+      codesCounts.map(r => [String(r._id), r.count] as [string, number])
+    );
+    const stakesMap = new Map<string, number>(
+      stakeCounts.map(r => [String(r._id), r.count] as [string, number])
+    );
 
     const entries: LeaderboardEntry[] = rows
       .filter(r => names.has(String(r._id)))
