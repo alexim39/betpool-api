@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import { UserModel, IUser } from '../models/user.model';
 import { WalletModel, IWallet } from '../models/wallet.model';
 import { TransactionModel } from '../models/transaction.model';
+import { BankAccountModel } from '../models/bank-account.model';
 import { otpService } from './otp.service';
 import { paymentService } from './payment.service';
 import { logger } from './logger.service';
@@ -289,6 +290,29 @@ export class UserService {
 
   async requestPinReset(phone: string): Promise<void> {
     await otpService.createOTP(phone, 'reset_pin');
+  }
+
+  async softDeleteUser(userId: string): Promise<void> {
+    const user = await UserModel.findById(userId);
+    if (!user) throw new Error('User not found');
+
+    const suffix = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    user.fullName = 'Deleted User';
+    user.phone = `+1${Math.floor(1e13 + Math.random() * 9e13)}`;
+    user.email = `deleted-${suffix}@deleted.invalid`;
+    user.referralCode = null;
+    user.pinHash = await bcrypt.hash(Math.random().toString(36), this.PIN_SALT_ROUNDS);
+    user.tokenVersion += 1;
+    user.isActive = false;
+    user.isSuspended = true;
+    user.kycType = null;
+    user.kycNumber = '';
+    user.kycData = {};
+    user.phoneVerified = false;
+    user.kycVerified = false;
+    user.isAffiliate = false;
+    await user.save();
+    await BankAccountModel.deleteMany({ userId });
   }
 
   async resetPin(phone: string, code: string, newPin: string): Promise<void> {

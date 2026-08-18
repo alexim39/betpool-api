@@ -61,6 +61,7 @@ router.post('/ai/settle-all', aiSettlementController.settleAll);
   router.get('/users/:id', adminController.getUser);
 router.put('/users/:id', adminController.updateUser);
 router.post('/users/:id/toggle-status', adminController.toggleUserStatus);
+  router.delete('/users/:id', adminController.deleteUser);
 router.post('/users/:id/verify-kyc', adminController.verifyUserKYC);
   router.post('/users/:id/reject-kyc', adminController.rejectUserKYC);
   router.post('/users/bulk-action', adminController.bulkUserAction);
