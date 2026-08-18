@@ -1,6 +1,8 @@
 import { Response } from 'express';
 import { AuthRequest } from '../../middleware/auth.middleware';
 import { adminService } from './admin.service';
+import { userService } from '../../services/user.service';
+import { UserModel } from '../../models/user.model';
 import { aiAutomationService } from '../ai/ai-automation.service';
 import { aiSettlementService } from '../ai';
 import { LoanModel } from './loan.model';
@@ -244,6 +246,31 @@ export class AdminController {
         success: false,
         message: err?.message || 'Failed to update user',
       });
+    }
+  }
+
+  async deleteUser(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const actorId = req.user?.userId;
+      if (id === actorId) {
+        res.status(400).json({ success: false, message: 'You cannot delete your own account' });
+        return;
+      }
+      const target = await UserModel.findById(id).select('role').lean();
+      if (!target) {
+        res.status(404).json({ success: false, message: 'User not found' });
+        return;
+      }
+      if (target.role === 'admin') {
+        res.status(400).json({ success: false, message: 'Admin accounts cannot be deleted here' });
+        return;
+      }
+      await userService.softDeleteUser(id);
+      res.json({ success: true, message: 'User deleted' });
+    } catch (error) {
+      logger.error('Admin delete user error', error);
+      res.status(500).json({ success: false, message: 'Failed to delete user' });
     }
   }
 

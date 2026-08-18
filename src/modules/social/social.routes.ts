@@ -20,10 +20,11 @@ router.get('/feed', authMiddleware, socialController.getFollowingFeed);
 router.get('/activity', authMiddleware, socialController.getActivity);
 router.get('/following', authMiddleware, socialController.listFollowing);
 router.get('/creators', authMiddleware, socialController.listCreators);
+router.get('/leaderboard', authMiddleware, socialController.getLeaderboard);
 router.get('/saved', authMiddleware, socialController.listSavedPods);
 router.get('/followers', authMiddleware, socialController.listFollowers);
 router.get('/following-list', authMiddleware, socialController.listFollowingUsers);
-router.get('/creator-picks', authMiddleware, socialController.getCreatorPicks);
+router.get('/creator-codes', authMiddleware, socialController.getCreatorCodes);
 router.get('/profile/:userId', authMiddleware, socialController.getProfile);
 
 export default router;

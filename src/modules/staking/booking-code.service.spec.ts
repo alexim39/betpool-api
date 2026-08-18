@@ -1,5 +1,6 @@
 import { PodModel } from '../../models/pod.model';
 import BookingCodeModel from '../../models/booking-code.model';
+import { UserModel } from '../../models/user.model';
 import { bookingCodeService } from './booking-code.service';
 
 jest.mock('../../models/pod.model', () => ({
@@ -11,11 +12,16 @@ jest.mock('../../models/booking-code.model', () => ({
   default: { exists: jest.fn(), findOne: jest.fn(), create: jest.fn(), updateOne: jest.fn() },
 }));
 
+jest.mock('../../models/user.model', () => ({
+  UserModel: { findById: jest.fn() },
+}));
+
 const podFind = PodModel.find as jest.Mock;
 const bcExists = BookingCodeModel.exists as jest.Mock;
 const bcFindOne = BookingCodeModel.findOne as jest.Mock;
 const bcCreate = BookingCodeModel.create as jest.Mock;
 const bcUpdateOne = BookingCodeModel.updateOne as jest.Mock;
+const userFindById = UserModel.findById as jest.Mock;
 
 function chainPodFind(pods: any[]) {
   podFind.mockReturnValue({
@@ -34,6 +40,7 @@ const VALID_PODS = [
     league: 'UCL',
     status: 'active',
     stakingClosesAt: new Date(Date.now() + 60 * 60 * 1000),
+    matchDate: new Date(Date.now() + 48 * 60 * 60 * 1000),
     currentExposure: 10,
     maxTotalExposure: 100,
   },
@@ -47,14 +54,23 @@ const VALID_PODS = [
     league: 'UCL',
     status: 'active',
     stakingClosesAt: new Date(Date.now() + 2 * 60 * 60 * 1000),
+    matchDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
     currentExposure: 5,
     maxTotalExposure: 100,
   },
 ];
 
+function mockUser() {
+  userFindById.mockReturnValue({
+    select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: 'user-1', fullName: 'Ada Lovelace' }) }),
+  });
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   delete process.env.MAX_ACCUMULATOR_LEGS;
+  delete process.env.MAX_BOOKING_CODE_LEGS;
+  mockUser();
 });
 
 describe('bookingCodeService.create', () => {
@@ -64,6 +80,15 @@ describe('bookingCodeService.create', () => {
     bcCreate.mockResolvedValue({
       code: 'K7M2Q9DX',
       expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
+      userId: 'user-1',
+      podIds: ['pod-1', 'pod-2'],
+      legs: VALID_PODS.map(p => ({
+        podId: String(p._id),
+        homeTeam: p.homeTeam,
+        awayTeam: p.awayTeam,
+        selection: p.selection,
+        multiplier: p.gainsMultiplier,
+      })),
     });
 
     const result = await bookingCodeService.create('user-1', ['pod-1', 'pod-2']);
@@ -71,6 +96,7 @@ describe('bookingCodeService.create', () => {
     expect(result.code).toBe('K7M2Q9DX');
     expect(result.legs).toHaveLength(2);
     expect(result.legs[0]).toMatchObject({ podId: 'pod-1', available: true });
+    expect(result.combinedMultiplier).toBeCloseTo(1.41 * 2.1);
     expect(bcCreate).toHaveBeenCalledWith(expect.objectContaining({
       userId: 'user-1',
       podIds: ['pod-1', 'pod-2'],
@@ -87,9 +113,19 @@ describe('bookingCodeService.create', () => {
   });
 
   it('rejects selections above the env leg limit', async () => {
-    process.env.MAX_ACCUMULATOR_LEGS = '2';
+    process.env.MAX_BOOKING_CODE_LEGS = '2';
     await expect(bookingCodeService.create('user-1', ['pod-1', 'pod-2', 'pod-3']))
       .rejects.toThrow('up to 2 selections');
+  });
+
+  it('rejects pods whose kickoff is outside the 24h-to-7d window', async () => {
+    const tooEarly = { ...VALID_PODS[0], matchDate: new Date(Date.now() + 60 * 60 * 1000) };
+    chainPodFind([tooEarly, VALID_PODS[1]]);
+    bcExists.mockResolvedValue(null);
+    bcCreate.mockResolvedValue({ code: 'K7M2Q9DX', expiresAt: new Date() });
+
+    await expect(bookingCodeService.create('user-1', ['pod-1', 'pod-2']))
+      .rejects.toThrow('next 24 hours to 7 days');
   });
 
   it('rejects pods that are closed or exposure-capped', async () => {

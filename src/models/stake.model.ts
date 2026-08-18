@@ -29,6 +29,7 @@ export interface IStake extends mongoose.Document {
   refundAmount: number;
   insuranceApplied?: boolean;
   status: StakeStatus;
+  bookingCode?: string;
   settledAt?: Date;
   settledBy?: mongoose.Types.ObjectId;
   settlementNotes?: string;
@@ -128,6 +129,13 @@ const StakeSchema = new Schema({
     enum: ['pending', 'confirmed', 'won', 'lost', 'void', 'refunded', 'cancelled', 'cashed_out'],
     default: 'pending',
     index: true
+  },
+  bookingCode: {
+    type: String,
+    trim: true,
+    uppercase: true,
+    index: true,
+    sparse: true
   },
   settledAt: { type: Date },
   settledBy: { type: Schema.Types.ObjectId, ref: 'User' },

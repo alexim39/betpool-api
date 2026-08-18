@@ -67,7 +67,7 @@ SocialCommentSchema.index({ pod: 1, createdAt: -1 });
 
 export const SocialCommentModel = mongoose.model<ISocialComment>('SocialComment', SocialCommentSchema);
 
-export type SocialActivityType = 'pick_published' | 'pot_won' | 'pick_lost' | 'achievement' | 'system';
+export type SocialActivityType = 'pick_published' | 'pot_won' | 'pick_lost' | 'achievement' | 'system' | 'booking_code_shared' | 'staked_on_code';
 
 export interface ISocialActivity extends Document {
   actor: mongoose.Types.ObjectId;
@@ -80,7 +80,7 @@ export interface ISocialActivity extends Document {
 
 const SocialActivitySchema = new Schema<ISocialActivity>({
   actor: { type: Schema.Types.ObjectId, ref: 'User', required: true },
-  type: { type: String, enum: ['pick_published', 'pot_won', 'pick_lost', 'achievement', 'system'], required: true },
+  type: { type: String, enum: ['pick_published', 'pot_won', 'pick_lost', 'achievement', 'system', 'booking_code_shared', 'staked_on_code'], required: true },
   pod: { type: Schema.Types.ObjectId, ref: 'Pod' },
   payload: { type: Schema.Types.Mixed }
 }, { timestamps: true });

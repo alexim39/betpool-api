@@ -25,6 +25,16 @@ export class AISettlementController {
       }
 
       const check = await aiSettlementService.checkPod(podId);
+
+      if (result !== 'void' && check.matchStatus !== 'finished' && !['postponed', 'cancelled', 'abandoned'].includes(check.matchStatus)) {
+        res.status(409).json({
+          success: false,
+          message: `Match is "${check.matchStatus || 'not finished'}" — a win/loss cannot be settled before the final whistle. Wait for the match to finish, or use the manual settle form to force an override.`,
+          check,
+        });
+        return;
+      }
+
       if (check.recommendedResult !== 'cannot_determine' && check.recommendedResult !== result) {
         res.json({
           success: true,

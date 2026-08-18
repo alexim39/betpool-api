@@ -43,6 +43,7 @@ export interface CreateUserPickData {
   maxStake?: number;
   maxTotalExposure?: number;
   stakingClosesAt: Date;
+  fixtureId: number;
 }
 
 export interface UpdatePodData {
@@ -123,6 +124,12 @@ export class PodService {
       displayOrder: 0,
       legs: [],
       visibility: 'followers',
+      metadata: {
+        source: 'user-pick',
+        fixtureId: data.fixtureId,
+        kickoff: data.matchDate,
+        verifiedAt: new Date()
+      },
       createdBy: userId
     });
 

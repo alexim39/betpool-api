@@ -69,8 +69,9 @@ export const validatePinReset = [
 export const validatePlaceStake = [
   body('podId').optional().isMongoId().withMessage('Invalid pod ID'),
   body('oddsOfferId').optional().isMongoId().withMessage('Invalid odds offer ID'),
-  body('podIds').optional().isArray({ min: 2, max: 5 }).withMessage('Accumulator requires 2-5 pod IDs'),
+  body('podIds').optional().isArray({ min: 2, max: 30 }).withMessage('Accumulator requires 2-30 pod IDs'),
   body('podIds.*').optional().isMongoId().withMessage('Invalid pod ID in accumulator'),
+  body('bookingCode').optional().matches(/^[A-Z2-9]{6,12}$/i).withMessage('Invalid booking code'),
   body('stakeAmount').isInt({ min: 10 }).withMessage('Stake amount must be at least 10'),
   validate
 ];

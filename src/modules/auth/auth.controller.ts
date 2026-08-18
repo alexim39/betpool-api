@@ -314,6 +314,34 @@ export class AuthController {
     }
   }
 
+  async deleteAccount(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = (req as any).user?.userId || (req as any).user?._id;
+      if (!userId) {
+        res.status(401).json({ success: false, message: 'Unauthorized' });
+        return;
+      }
+
+      const { pin } = req.body;
+      if (!pin || !/^\d{6}$/.test(pin)) {
+        res.status(400).json({ success: false, message: 'PIN must be 6 digits' });
+        return;
+      }
+
+      const isValid = await userService.verifyPin(userId, pin);
+      if (!isValid) {
+        res.status(400).json({ success: false, message: 'PIN is incorrect' });
+        return;
+      }
+
+      await userService.softDeleteUser(userId);
+      res.json({ success: true, message: 'Account deleted' });
+    } catch (error: any) {
+      logger.error('Delete account error', error);
+      res.status(400).json({ success: false, message: error.message || 'Failed to delete account' });
+    }
+  }
+
   async getProfile(req: Request, res: Response): Promise<void> {
     try {
       const userId = (req as any).user?.userId || (req as any).user?._id;

@@ -33,6 +33,7 @@ router.post('/otp/resend', authLimiter, authController.resendOTP);
 router.post('/pin/reset/request', authLimiter, authController.requestPinReset);
 router.post('/pin/reset', authLimiter, validatePinReset, authController.resetPin);
 router.post('/pin/change', authMiddleware, authController.changePin);
+router.post('/delete-account', authMiddleware, authController.deleteAccount);
 router.post('/logout', authMiddleware, authController.logout);
 router.post('/refresh', authLimiter, authController.refreshToken);
 router.get('/verify', authMiddleware, authController.verifyToken);

@@ -266,14 +266,20 @@ export class AISettlementService {
         base.reasoning = `Match status is "${base.matchStatus}". Cannot determine result yet.`;
       }
 
-      // For non-obvious cases, consult DeepSeek as tertiary opinion
-      if (base.confidence < 95 && this.deepseekKey && this.deepseekKey !== 'your_deepseek_api_key_here') {
+      // For non-obvious cases, consult DeepSeek as tertiary opinion —
+      // ONLY for finished matches. A mid-match score must never be treated as final.
+      if (base.confidence < 95 && base.matchStatus === 'finished' && this.deepseekKey && this.deepseekKey !== 'your_deepseek_api_key_here') {
         try {
           const aiResult = await this.consultDeepSeek(pod, base);
           if (aiResult) {
-            base.confidence = Math.max(base.confidence, aiResult.confidence);
-            base.reasoning = aiResult.reasoning;
-            if (aiResult.recommendedResult) base.recommendedResult = aiResult.recommendedResult;
+            const validResults = ['win', 'loss', 'void', 'cannot_determine'];
+            const rec = validResults.includes(aiResult.recommendedResult) ? aiResult.recommendedResult : null;
+            const conf = typeof aiResult.confidence === 'number' ? Math.min(100, Math.max(0, aiResult.confidence)) : 0;
+            if (rec) {
+              base.confidence = Math.max(base.confidence, conf);
+              base.reasoning = aiResult.reasoning || base.reasoning;
+              base.recommendedResult = rec;
+            }
           }
         } catch { /* fallback to mechanical result */ }
       }
@@ -318,8 +324,8 @@ export class AISettlementService {
           continue;
         }
 
-        // Path 1: AI settlement with high confidence
-        if (check.recommendedResult !== 'cannot_determine' && check.confidence >= 90) {
+        // Path 1: AI settlement with high confidence — only for finished matches
+        if (check.recommendedResult !== 'cannot_determine' && check.confidence >= 90 && check.matchStatus === 'finished') {
           await adminService.settlePod(pod._id.toString(), check.recommendedResult as 'win' | 'loss' | 'void', adminUserId, `Auto-settled by Ora: ${check.reasoning}`, check.homeScore ?? undefined, check.awayScore ?? undefined);
           await PodModel.findByIdAndUpdate(pod._id, {
             $set: { settlementStatus: 'settled', settlementDisputed: false },
