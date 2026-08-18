@@ -10,7 +10,10 @@ jest.mock('../../models/user.model', () => ({
 }));
 jest.mock('../../models/booking-code.model', () => ({
   __esModule: true,
-  default: { findById: jest.fn(), findOne: jest.fn() }
+  default: { findById: jest.fn(), findOne: jest.fn(), find: jest.fn(), countDocuments: jest.fn() }
+}));
+jest.mock('../../models/stake.model', () => ({
+  StakeModel: { aggregate: jest.fn() }
 }));
 jest.mock('../../services/notification.service', () => ({
   createInAppNotification: jest.fn()
@@ -34,6 +37,8 @@ jest.mock('./social.model', () => ({
 
 const MockPodModel = require('../../models/pod.model').PodModel;
 const MockUserModel = require('../../models/user.model').UserModel;
+const MockBookingCodeModel = require('../../models/booking-code.model').default;
+const MockStakeModel = require('../../models/stake.model').StakeModel;
 const MockSocialLikeModel = require('./social.model').SocialLikeModel;
 const MockSocialSaveModel = require('./social.model').SocialSaveModel;
 const MockSocialFollowModel = require('./social.model').SocialFollowModel;
@@ -514,26 +519,24 @@ describe('SocialService', () => {
       MockUserModel.findById.mockReturnValue({
         select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: OID, fullName: 'Ada Lovelace', isActive: true, isSuspended: false }) })
       });
-      MockPodModel.countDocuments.mockResolvedValue(6);
+      MockBookingCodeModel.countDocuments.mockResolvedValue(6);
       MockSocialFollowModel.countDocuments
         .mockResolvedValueOnce(12)
         .mockResolvedValueOnce(3);
       MockSocialFollowModel.findOne.mockReturnValue(findOneChain({ _id: 'f' }));
-      MockPodModel.find.mockReturnValue({
-        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: OID }]) })
-      });
+      MockBookingCodeModel.find.mockReturnValue(findChain([{ _id: OID }, { _id: 'c2' }]));
       MockSocialLikeModel.aggregate.mockResolvedValue([{ count: 14 }]);
-      MockPodModel.aggregate.mockResolvedValue([{ total: 9 }]);
+      MockStakeModel.aggregate.mockResolvedValue([{ _id: OID }, { _id: 'u9' }]);
 
       const result = await service.getProfile('me', OID.toString());
 
       expect(result.user).toEqual({ id: OID.toString(), fullName: 'Ada Lovelace', isOra: true });
-      expect(result.stats).toEqual({ picks: 6, followers: 12, following: 3, likesReceived: 14, stakers: 9 });
+      expect(result.stats).toEqual({ codes: 6, followers: 12, following: 3, likesReceived: 14, stakers: 2 });
       expect(result.isFollowing).toBe(true);
       expect(result.achievements).toContain('ai_curator');
+      expect(result.achievements).toContain('first_code');
       expect(result.achievements).toContain('rising_creator');
       expect(result.achievements).toContain('trending');
-      expect(result.achievements).toContain('community_pick');
       expect(result.achievements).toContain('crowd_favorite');
     });
 
@@ -550,11 +553,11 @@ describe('SocialService', () => {
       MockUserModel.findById.mockReturnValue({
         select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: OID, fullName: 'Ada Lovelace', isActive: true, isSuspended: false }) })
       });
-      MockPodModel.countDocuments.mockRejectedValue(new Error('connection lost'));
+      MockBookingCodeModel.countDocuments.mockRejectedValue(new Error('connection lost'));
 
       const result = await service.getProfile('me', OID.toString());
 
-      expect(result.stats).toEqual({ picks: 0, followers: 0, following: 0, likesReceived: 0, stakers: 0 });
+      expect(result.stats).toEqual({ codes: 0, followers: 0, following: 0, likesReceived: 0, stakers: 0 });
       expect(result.user.fullName).toBe('Ada Lovelace');
     });
   });
@@ -591,31 +594,61 @@ describe('SocialService', () => {
     });
   });
 
-  describe('getCreatorPicks', () => {
-    it('hides followers-only picks from non-followers', async () => {
-      const pod = { _id: POD, title: 'T', createdBy: { _id: OID, fullName: 'Ora' } };
-      MockSocialFollowModel.findOne.mockReturnValue(findOneChain(null));
-      MockPodModel.find.mockReturnValue(feedChain([pod]));
-      MockPodModel.countDocuments.mockResolvedValue(1);
+  describe('getCreatorCodes', () => {
+    it('returns booking codes as code posts for the creator', async () => {
+      const booking = {
+        _id: new mongoose.Types.ObjectId('507f1f77bcf86cd799439013'),
+        code: 'ABC23456',
+        userId: OID,
+        createdAt: new Date('2026-01-01T10:00:00Z'),
+        expiresAt: new Date('2026-01-03T10:00:00Z'),
+        legs: [
+          { podId: 'p1', homeTeam: 'A', awayTeam: 'B', selection: 'Home Win', multiplier: 2 },
+          { podId: 'p2', homeTeam: 'C', awayTeam: 'D', selection: 'Away Win', multiplier: 1.5 }
+        ]
+      };
+      MockBookingCodeModel.find.mockReturnValue({
+        sort: jest.fn().mockReturnValue({
+          skip: jest.fn().mockReturnValue({
+            limit: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([booking]) })
+          })
+        })
+      });
+      MockBookingCodeModel.countDocuments.mockResolvedValue(1);
 
-      const result = await service.getCreatorPicks('me', OID.toString(), 1, 12);
+      const result = await service.getCreatorCodes(OID.toString(), 1, 12);
 
-      const filter = MockPodModel.find.mock.calls[0][0] as any;
-      expect(filter.visibility).toEqual({ $ne: 'followers' });
-      expect(result.items[0]).toMatchObject({ createdBy: OID.toString(), creatorName: 'Ora' });
+      expect(MockBookingCodeModel.find).toHaveBeenCalledWith({ userId: new mongoose.Types.ObjectId(OID.toString()) });
+      expect(result.total).toBe(1);
+      expect(result.items[0]).toMatchObject({
+        kind: 'code',
+        code: 'ABC23456',
+        codeId: String(booking._id),
+        creatorId: OID.toString(),
+        combinedMultiplier: 3,
+        legCount: 2,
+        totalLegs: 2,
+        legs: [
+          { podId: 'p1', homeTeam: 'A', awayTeam: 'B', selection: 'Home Win', multiplier: 2 },
+          { podId: 'p2', homeTeam: 'C', awayTeam: 'D', selection: 'Away Win', multiplier: 1.5 }
+        ]
+      });
     });
 
-    it('includes followers-only picks for followers and the creator', async () => {
-      const pod = { _id: POD, title: 'T', createdBy: { _id: OID, fullName: 'Ora' } };
-      MockSocialFollowModel.findOne.mockReturnValue(findOneChain({ _id: 'f' }));
-      MockPodModel.find.mockReturnValue(feedChain([pod]));
-      MockPodModel.countDocuments.mockResolvedValue(1);
+    it('returns an empty page when the creator has no codes', async () => {
+      MockBookingCodeModel.find.mockReturnValue({
+        sort: jest.fn().mockReturnValue({
+          skip: jest.fn().mockReturnValue({
+            limit: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) })
+          })
+        })
+      });
+      MockBookingCodeModel.countDocuments.mockResolvedValue(0);
 
-      const result = await service.getCreatorPicks(OID.toString(), OID.toString(), 1, 12);
+      const result = await service.getCreatorCodes(OID.toString(), 1, 12);
 
-      const filter = MockPodModel.find.mock.calls[0][0] as any;
-      expect(filter.visibility).toBeUndefined();
-      expect(result.items).toHaveLength(1);
+      expect(result.items).toEqual([]);
+      expect(result.total).toBe(0);
     });
   });
 });

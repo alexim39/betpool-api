@@ -193,17 +193,17 @@ export class SocialController {
     }
   }
 
-  async getCreatorPicks(req: AuthRequest, res: Response): Promise<void> {
+  async getCreatorCodes(req: AuthRequest, res: Response): Promise<void> {
     try {
       const userId = getUserId(req);
       if (!userId) { res.status(401).json({ success: false, message: 'Unauthorized' }); return; }
       const targetId = String(req.query.userId || '');
       if (!targetId || targetId.length !== 24) { res.status(400).json({ success: false, message: 'Invalid user ID' }); return; }
-      const data = await socialService.getCreatorPicks(userId, targetId, parsePage(req), parseLimit(req, 12));
+      const data = await socialService.getCreatorCodes(targetId, parsePage(req), parseLimit(req, 12));
       res.json({ success: true, data });
     } catch (error: any) {
-      logger.error('Social getCreatorPicks error', error);
-      res.status(500).json({ success: false, message: error?.message || 'Failed to fetch creator picks' });
+      logger.error('Social getCreatorCodes error', error);
+      res.status(500).json({ success: false, message: error?.message || 'Failed to fetch creator codes' });
     }
   }
 

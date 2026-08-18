@@ -10,8 +10,11 @@ import { SocialLikeModel, SocialSaveModel, SocialCommentModel, SocialActivityMod
 import { adminService } from '../modules/admin/admin.service';
 
 /**
- * Destructive utility — deletes every pod created through the user "publish a
- * pick" flow (POST /pods): pods whose creator is not an admin/Ora account.
+ * Destructive utility — deletes every pod created through the old user
+ * "publish a pick" flow: pods that set a `visibility` (public/followers) or
+ * carry `metadata.source === 'user-pick'`, plus any pod whose creator is not
+ * an admin/Ora account. Fixture-synced / Ora-curated pods (source 'bsd',
+ * oraCurated) are left untouched.
  *
  * Active/published pods are cancelled first so all pending stakes are refunded
  * (wallets credited + refund transactions recorded), then the pod and all of
@@ -29,10 +32,12 @@ function hasFlag(name: string): boolean {
   return process.argv.includes(name);
 }
 
+const totals: Record<string, number> = {};
+
 async function countAndDelete(model: mongoose.Model<any>, filter: Record<string, unknown>, dryRun: boolean, label: string): Promise<void> {
   const count = await model.countDocuments(filter);
   if (count > 0) {
-    console.log(`[DeleteUserPods] ${dryRun ? 'WOULD DELETE' : 'DELETED'} ${label}: ${count}`);
+    totals[label] = (totals[label] || 0) + count;
     if (!dryRun) await model.deleteMany(filter);
   }
 }
@@ -53,7 +58,11 @@ async function run(): Promise<void> {
   console.log(`[DeleteUserPods] Admin accounts (Ora + staff): ${adminIds.length} — ${adminIds.join(', ') || 'none'}`);
 
   const pods = await PodModel.find({
-    createdBy: { $nin: adminIds, $ne: null }
+    $or: [
+      { 'metadata.source': 'user-pick' },
+      { visibility: { $exists: true } },
+      { createdBy: { $nin: adminIds } }
+    ]
   })
     .select('_id title status homeTeam awayTeam createdBy currentParticipants')
     .sort({ createdAt: 1 })
@@ -89,7 +98,6 @@ async function run(): Promise<void> {
       }
     } else {
       alreadySettled++;
-      console.log(`[DeleteUserPods] ${dryRun ? 'WOULD DELETE' : 'DELETED'} pod ${podId} "${pod.title}" (${pod.status}) — no refund needed, history preserved`);
     }
 
     await countAndDelete(PickOutcomeModel, { pod: podId }, dryRun, `pick outcomes for pod ${podId}`);
@@ -103,7 +111,18 @@ async function run(): Promise<void> {
     await countAndDelete(PodModel, { _id: podId }, dryRun, `pod ${podId}`);
   }
 
-  console.log(`[DeleteUserPods] ${dryRun ? 'DRY RUN — nothing changed.' : 'Done.'} ${pods.length} user pods found (${toRefund} cancelled with refunds, ${alreadySettled} already settled).`);
+  if (dryRun) {
+    console.log('[DeleteUserPods] DRY RUN — nothing changed.');
+  } else {
+    console.log('[DeleteUserPods] Done.');
+  }
+  console.log(`[DeleteUserPods] ${pods.length} old-design pods found (${toRefund} cancelled with refunds, ${alreadySettled} already settled).`);
+  const summarized: Record<string, number> = {};
+  for (const [key, value] of Object.entries(totals)) {
+    const label = key.split(' for ')[0].replace(/s$/, '');
+    summarized[label] = (summarized[label] || 0) + value;
+  }
+  console.log('[DeleteUserPods] Related records removed:', JSON.stringify(summarized, null, 2));
   console.log('[DeleteUserPods] Re-run with --confirm to execute. Restart the API after executing so the feed cache picks up the change.');
   await mongoose.disconnect();
 }
