@@ -371,8 +371,8 @@ export class AuthController {
         return;
       }
 
-      const { fullName, email } = req.body;
-      const user = await userService.updateProfile(userId, { fullName, email });
+const { fullName, email, username } = req.body;
+      const user = await userService.updateProfile(userId, { fullName, email, username });
       if (!user) {
         res.status(404).json({ success: false, message: 'User not found' });
         return;
@@ -381,7 +381,7 @@ export class AuthController {
       res.json({ success: true, data: user });
     } catch (error: any) {
       logger.error('Update profile error', error.message);
-      const message = error.message?.includes('already in use')
+      const message = error.message?.includes('already in use') || error.message?.includes('taken') || error.message?.includes('reserved')
         ? error.message
         : 'Failed to update profile';
       res.status(500).json({ success: false, message });

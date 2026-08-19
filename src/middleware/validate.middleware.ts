@@ -104,6 +104,7 @@ export const validateTransfer = [
 export const validateUpdateProfile = [
   body('fullName').optional().isLength({ min: 2 }).withMessage('Full name must be at least 2 characters'),
   body('email').optional().isEmail().withMessage('Invalid email address'),
+  body('username').optional().matches(/^[a-z0-9._-]{3,24}$/i).withMessage('Username must be 3-24 characters (letters, numbers, dots, dashes, underscores)'),
   validate
 ];
 

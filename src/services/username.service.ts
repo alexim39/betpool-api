@@ -4,6 +4,25 @@ const MAX_ATTEMPTS = 6;
 
 const SUFFIX_CHARS = 'abcdefghjkmnpqrstuvwxyz23456789';
 
+export const USERNAME_REGEX = /^[a-z0-9._-]{3,24}$/;
+
+const RESERVED_USERNAMES = new Set(['ora', 'admin', 'support', 'betpool', 'investbetz']);
+
+export function normalizeUsername(value: string): string {
+  return (value || '').trim().toLowerCase();
+}
+
+export function validateUsername(value: string): string | null {
+  const username = normalizeUsername(value);
+  if (!USERNAME_REGEX.test(username)) {
+    return 'Username must be 3-24 characters (letters, numbers, dots, dashes, underscores)';
+  }
+  if (RESERVED_USERNAMES.has(username)) {
+    return 'That username is reserved';
+  }
+  return null;
+}
+
 function slugifyName(fullName: string): string {
   return (fullName || '')
     .toLowerCase()
@@ -38,7 +57,7 @@ export async function reserveUsername(
   }
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const candidate = generateUsername(fullName);
-    if (taken.has(candidate)) continue;
+    if (taken.has(candidate) || RESERVED_USERNAMES.has(candidate)) continue;
     const clash = await UserModel.findOne({ username: candidate }).select('_id').lean();
     if (!clash) return candidate;
   }

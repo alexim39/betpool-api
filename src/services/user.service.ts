@@ -8,7 +8,7 @@ import { BankAccountModel } from '../models/bank-account.model';
 import { otpService } from './otp.service';
 import { paymentService } from './payment.service';
 import { logger } from './logger.service';
-import { reserveUsername } from './username.service';
+import { reserveUsername, normalizeUsername, validateUsername } from './username.service';
 
 export interface SignupData {
   phone: string;
@@ -348,18 +348,37 @@ export class UserService {
     return UserModel.findOne({ email: email.toLowerCase().trim() }).select('-pinHash');
   }
 
-  async updateProfile(userId: string, data: Partial<Pick<IUser, 'fullName' | 'email'>>): Promise<IUser | null> {
+  async updateProfile(userId: string, data: Partial<Pick<IUser, 'fullName' | 'email' | 'username'>>): Promise<IUser | null> {
     if (data.email) {
       const existing = await UserModel.findOne({ email: data.email, _id: { $ne: userId } }).lean();
       if (existing) {
         throw new Error('This email is already in use by another account');
       }
     }
-    return UserModel.findByIdAndUpdate(
-      userId,
-      { $set: data },
-      { new: true, select: '-pinHash' }
-    );
+    if (data.username) {
+      const username = normalizeUsername(data.username);
+      const invalid = validateUsername(username);
+      if (invalid) {
+        throw new Error(invalid);
+      }
+      const existing = await UserModel.findOne({ username, _id: { $ne: userId } }).lean();
+      if (existing) {
+        throw new Error('That username is already taken');
+      }
+      data.username = username;
+    }
+    try {
+      return await UserModel.findByIdAndUpdate(
+        userId,
+        { $set: data },
+        { new: true, select: '-pinHash' }
+      );
+    } catch (error: any) {
+      if (error?.code === 11000) {
+        throw new Error('That username is already taken');
+      }
+      throw error;
+    }
   }
 
   async verifyToken(token: string): Promise<IUser | null> {
