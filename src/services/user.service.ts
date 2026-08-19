@@ -8,6 +8,7 @@ import { BankAccountModel } from '../models/bank-account.model';
 import { otpService } from './otp.service';
 import { paymentService } from './payment.service';
 import { logger } from './logger.service';
+import { reserveUsername, normalizeUsername, validateUsername } from './username.service';
 
 export interface SignupData {
   phone: string;
@@ -80,10 +81,12 @@ export class UserService {
   async provisionFirstAdmin(email: string, fullName?: string): Promise<void> {
     const pinHash = await bcrypt.hash(Math.random().toString(), this.PIN_SALT_ROUNDS);
     const referralCode = this.generateReferralCode();
+    const username = await reserveUsername(fullName || 'Admin', new Set(), true);
 
     await UserModel.create({
       phone: `+234${Math.random().toString().slice(2, 12)}`,
       fullName: fullName || 'Admin',
+      username,
       email: email.toLowerCase().trim(),
       pinHash,
       role: 'admin',
@@ -121,6 +124,7 @@ export class UserService {
 
     const pinHash = await bcrypt.hash(data.pin, this.PIN_SALT_ROUNDS);
     const referralCode = this.generateReferralCode();
+    const username = await reserveUsername(data.fullName);
 
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -130,6 +134,7 @@ export class UserService {
       const [user] = await UserModel.create([{
         phone: formattedPhone,
         fullName: data.fullName,
+        username,
         pinHash,
         email: data.email || undefined,
         referralCode,
@@ -343,18 +348,37 @@ export class UserService {
     return UserModel.findOne({ email: email.toLowerCase().trim() }).select('-pinHash');
   }
 
-  async updateProfile(userId: string, data: Partial<Pick<IUser, 'fullName' | 'email'>>): Promise<IUser | null> {
+  async updateProfile(userId: string, data: Partial<Pick<IUser, 'fullName' | 'email' | 'username'>>): Promise<IUser | null> {
     if (data.email) {
       const existing = await UserModel.findOne({ email: data.email, _id: { $ne: userId } }).lean();
       if (existing) {
         throw new Error('This email is already in use by another account');
       }
     }
-    return UserModel.findByIdAndUpdate(
-      userId,
-      { $set: data },
-      { new: true, select: '-pinHash' }
-    );
+    if (data.username) {
+      const username = normalizeUsername(data.username);
+      const invalid = validateUsername(username);
+      if (invalid) {
+        throw new Error(invalid);
+      }
+      const existing = await UserModel.findOne({ username, _id: { $ne: userId } }).lean();
+      if (existing) {
+        throw new Error('That username is already taken');
+      }
+      data.username = username;
+    }
+    try {
+      return await UserModel.findByIdAndUpdate(
+        userId,
+        { $set: data },
+        { new: true, select: '-pinHash' }
+      );
+    } catch (error: any) {
+      if (error?.code === 11000) {
+        throw new Error('That username is already taken');
+      }
+      throw error;
+    }
   }
 
   async verifyToken(token: string): Promise<IUser | null> {

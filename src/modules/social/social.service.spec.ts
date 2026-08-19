@@ -29,7 +29,7 @@ jest.mock('./creator-virality.service', () => ({
 }));
 jest.mock('./social.model', () => ({
   SocialLikeModel: { findOne: jest.fn(), create: jest.fn(), deleteOne: jest.fn(), countDocuments: jest.fn(), aggregate: jest.fn(), distinct: jest.fn() },
-  SocialSaveModel: { findOne: jest.fn(), create: jest.fn(), deleteOne: jest.fn(), distinct: jest.fn() },
+  SocialSaveModel: { find: jest.fn(), findOne: jest.fn(), create: jest.fn(), deleteOne: jest.fn(), countDocuments: jest.fn(), distinct: jest.fn() },
   SocialFollowModel: { find: jest.fn(), findOne: jest.fn(), create: jest.fn(), deleteOne: jest.fn(), countDocuments: jest.fn(), aggregate: jest.fn() },
   SocialCommentModel: { find: jest.fn(), findById: jest.fn(), create: jest.fn(), countDocuments: jest.fn(), aggregate: jest.fn() },
   SocialActivityModel: { find: jest.fn(), create: jest.fn(), countDocuments: jest.fn(), aggregate: jest.fn().mockResolvedValue([]) }
@@ -108,6 +108,9 @@ describe('SocialService', () => {
     service = new SocialService();
     cacheService.clear('social:');
     jest.clearAllMocks();
+    MockBookingCodeModel.findById.mockReturnValue({
+      select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(null) })
+    });
   });
 
   describe('toggleLike', () => {
@@ -517,20 +520,22 @@ describe('SocialService', () => {
     it('returns profile stats, achievements and follow state', async () => {
       oraChain(OID.toString());
       MockUserModel.findById.mockReturnValue({
-        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: OID, fullName: 'Ada Lovelace', isActive: true, isSuspended: false }) })
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: OID, fullName: 'Ada Lovelace', username: 'ada_lovelace', isActive: true, isSuspended: false }) })
       });
       MockBookingCodeModel.countDocuments.mockResolvedValue(6);
       MockSocialFollowModel.countDocuments
         .mockResolvedValueOnce(12)
         .mockResolvedValueOnce(3);
-      MockSocialFollowModel.findOne.mockReturnValue(findOneChain({ _id: 'f' }));
+      MockSocialFollowModel.findOne.mockReturnValue({
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: 'f' }) })
+      });
       MockBookingCodeModel.find.mockReturnValue(findChain([{ _id: OID }, { _id: 'c2' }]));
       MockSocialLikeModel.aggregate.mockResolvedValue([{ count: 14 }]);
       MockStakeModel.aggregate.mockResolvedValue([{ _id: OID }, { _id: 'u9' }]);
 
       const result = await service.getProfile('me', OID.toString());
 
-      expect(result.user).toEqual({ id: OID.toString(), fullName: 'Ada Lovelace', isOra: true });
+      expect(result.user).toEqual({ id: OID.toString(), fullName: 'Ada Lovelace', username: 'ada_lovelace', isOra: true });
       expect(result.stats).toEqual({ codes: 6, followers: 12, following: 3, likesReceived: 14, stakers: 2 });
       expect(result.isFollowing).toBe(true);
       expect(result.achievements).toContain('ai_curator');
@@ -594,8 +599,84 @@ describe('SocialService', () => {
     });
   });
 
+  describe('listSavedPods', () => {
+    function saveRowsChain(rows: unknown[]) {
+      MockSocialSaveModel.find.mockReturnValue({
+        sort: jest.fn().mockReturnValue({
+          skip: jest.fn().mockReturnValue({
+            limit: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(rows) })
+          })
+        })
+      });
+    }
+
+    function podsChain(pods: unknown[]) {
+      MockPodModel.find.mockReturnValue({
+        select: jest.fn().mockReturnValue({
+          populate: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(pods) })
+        })
+      });
+    }
+
+    function codesChain(codes: unknown[]) {
+      MockBookingCodeModel.find.mockReturnValue({
+        sort: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(codes) })
+      });
+    }
+
+    it('returns saved active pods and booking codes', async () => {
+      const codeId = new mongoose.Types.ObjectId('507f1f77bcf86cd799439013');
+      saveRowsChain([{ _id: 's1', pod: POD }, { _id: 's2', pod: codeId }]);
+      MockSocialSaveModel.countDocuments.mockResolvedValue(2);
+      podsChain([{
+        _id: POD,
+        title: 'A vs B',
+        sport: 'football',
+        homeTeam: 'A',
+        awayTeam: 'B',
+        status: 'active',
+        stakingClosesAt: new Date('2026-08-20T10:00:00Z'),
+        createdBy: { _id: OID, fullName: 'Ada Lovelace' }
+      }]);
+      codesChain([{
+        _id: codeId,
+        code: 'SAVE12345',
+        userId: OID,
+        createdAt: new Date('2026-08-01T10:00:00Z'),
+        expiresAt: new Date('2026-08-03T10:00:00Z'),
+        legs: [{ podId: 'p1', homeTeam: 'C', awayTeam: 'D', selection: 'Home Win', multiplier: 1.5 }]
+      }]);
+      MockUserModel.find.mockReturnValue({
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: OID, fullName: 'Ada Lovelace' }]) })
+      });
+
+      const result = await service.listSavedPods('u1', 1, 20);
+
+      expect(result.total).toBe(2);
+      expect(result.items[0]).toMatchObject({ kind: 'pod', _id: POD });
+      expect(result.items[1]).toMatchObject({ kind: 'code', code: 'SAVE12345', creatorName: 'Ada Lovelace' });
+    });
+
+    it('returns an empty page when nothing is saved', async () => {
+      saveRowsChain([]);
+      MockSocialSaveModel.countDocuments.mockResolvedValue(0);
+
+      const result = await service.listSavedPods('u1', 1, 20);
+
+      expect(result.items).toEqual([]);
+      expect(result.total).toBe(0);
+    });
+  });
+
   describe('getCreatorCodes', () => {
+    function userChain(fullName: string | null) {
+      MockUserModel.findById.mockReturnValue({
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(fullName ? { _id: OID, fullName, username: 'ada_lovelace' } : null) })
+      });
+    }
+
     it('returns booking codes as code posts for the creator', async () => {
+      userChain('Ada Lovelace');
       const booking = {
         _id: new mongoose.Types.ObjectId('507f1f77bcf86cd799439013'),
         code: 'ABC23456',
@@ -625,6 +706,8 @@ describe('SocialService', () => {
         code: 'ABC23456',
         codeId: String(booking._id),
         creatorId: OID.toString(),
+        creatorName: 'Ada Lovelace',
+        creatorUsername: 'ada_lovelace',
         combinedMultiplier: 3,
         legCount: 2,
         totalLegs: 2,
@@ -636,6 +719,7 @@ describe('SocialService', () => {
     });
 
     it('returns an empty page when the creator has no codes', async () => {
+      userChain(null);
       MockBookingCodeModel.find.mockReturnValue({
         sort: jest.fn().mockReturnValue({
           skip: jest.fn().mockReturnValue({

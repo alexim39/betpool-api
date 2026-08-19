@@ -123,7 +123,7 @@ export class SocialService {
     if (rows.length === 0 && codeRows.length === 0) return [];
     const ids = [...new Set([...rows.map(r => r._id), ...codeRows.map(r => r._id)])];
     const users = await UserModel.find({ _id: { $in: ids }, isActive: true, isSuspended: false })
-      .select('_id fullName')
+      .select('_id fullName username')
       .lean();
     if (users.length === 0) return [];
     const oraId = await this.getOraCreatorId();
@@ -145,6 +145,7 @@ export class SocialService {
         return {
           id,
           fullName: (u as any).fullName || 'BetPool user',
+          username: (u as any).username || null,
           podCount: counts.get(id) || 0,
           codeCount: codeCounts.get(id) || 0,
           followerCount: followerCounts.get(id) || 0,
@@ -163,7 +164,11 @@ export class SocialService {
   }
 
   async getProfile(requesterId: string, targetId: string): Promise<Record<string, any>> {
-    const target = await UserModel.findById(targetId).select('_id fullName isActive isSuspended').lean();
+    const cacheKey = `social:profile:${requesterId}:${targetId}`;
+    const cached = cacheService.get<Record<string, any>>(cacheKey);
+    if (cached) return cached;
+
+    const target = await UserModel.findById(targetId).select('_id fullName username isActive isSuspended').lean();
     if (!target || !(target as any).isActive || (target as any).isSuspended) {
       throw new AppError('User not found', 404);
     }
@@ -197,10 +202,11 @@ export class SocialService {
       isTopCreator: false,
       rank: null
     }));
-    return {
+    const result: Record<string, any> = {
       user: {
         id: targetId,
         fullName: (target as any).fullName || 'BetPool user',
+        username: (target as any).username || null,
         isOra
       },
       stats: { codes, followers, following, likesReceived, stakers },
@@ -209,6 +215,8 @@ export class SocialService {
       isSelf: requesterId === targetId,
       isFollowing: isOra || !!followRow
     };
+    cacheService.set(cacheKey, result, 30_000);
+    return result;
   }
 
   private async countLikesReceived(targetId: string): Promise<number> {
@@ -259,14 +267,14 @@ export class SocialService {
         .sort({ createdAt: -1 })
         .skip((safePage - 1) * safeLimit)
         .limit(safeLimit)
-        .populate('follower', 'fullName')
+        .populate('follower', 'fullName username')
         .lean() as Promise<Record<string, any>[]>,
       SocialFollowModel.countDocuments(filter)
     ]);
     const users = rows
       .map(r => {
         const u = r?.follower as any;
-        return { id: String(u?._id || ''), fullName: u?.fullName || 'BetPool user' };
+        return { id: String(u?._id || ''), fullName: u?.fullName || 'BetPool user', username: u?.username || null };
       })
       .filter(u => u.id);
     const items = await this.attachFollowState(requesterId, users, targetId);
@@ -282,21 +290,21 @@ export class SocialService {
         .sort({ createdAt: -1 })
         .skip((safePage - 1) * safeLimit)
         .limit(safeLimit)
-        .populate('followee', 'fullName')
+        .populate('followee', 'fullName username')
         .lean() as Promise<Record<string, any>[]>,
       SocialFollowModel.countDocuments(filter)
     ]);
     const users = rows
       .map(r => {
         const u = r?.followee as any;
-        return { id: String(u?._id || ''), fullName: u?.fullName || 'BetPool user' };
+        return { id: String(u?._id || ''), fullName: u?.fullName || 'BetPool user', username: u?.username || null };
       })
       .filter(u => u.id);
     const items = await this.attachFollowState(requesterId, users, targetId);
     return { items, total, page: safePage, limit: safeLimit, pages: Math.ceil(total / safeLimit) };
   }
 
-  private async attachFollowState(requesterId: string, users: { id: string; fullName: string }[], targetId: string): Promise<Record<string, any>[]> {
+  private async attachFollowState(requesterId: string, users: { id: string; fullName: string; username?: string | null }[], targetId: string): Promise<Record<string, any>[]> {
     const oraId = await this.getOraCreatorId();
     const mine = await SocialFollowModel.find({ follower: requesterId }).select('followee').lean();
     const followed = new Set(mine.map(f => f.followee.toString()));
@@ -304,6 +312,7 @@ export class SocialService {
     return users.map(u => ({
       id: u.id,
       fullName: u.fullName,
+      username: u.username || null,
       isOra: u.id === oraId,
       isSelf: u.id === selfId,
       isFollowing: u.id === oraId || followed.has(u.id)
@@ -315,20 +324,23 @@ export class SocialService {
     const safeLimit = Math.min(100, Math.max(5, limit || 12));
     const target = new mongoose.Types.ObjectId(targetId);
     const filter = { userId: target };
-    const [rows, total, boosted] = await Promise.all([
+    const [rows, total, boosted, creator] = await Promise.all([
       BookingCodeModel.find(filter)
         .sort({ createdAt: -1 })
         .skip((safePage - 1) * safeLimit)
         .limit(safeLimit)
         .lean(),
       BookingCodeModel.countDocuments(filter),
-      creatorViralityService.isTopCreator(targetId).catch(() => false)
+      creatorViralityService.isTopCreator(targetId).catch(() => false),
+      UserModel.findById(targetId).select('fullName username').lean()
     ]);
-    const items = rows.map(b => this.toCodePostFromBooking(b, boosted));
+    const creatorName = (creator as any)?.fullName || 'BetPool user';
+    const creatorUsername = (creator as any)?.username || null;
+    const items = rows.map(b => this.toCodePostFromBooking(b, boosted, creatorName, creatorUsername));
     return { items, total, page: safePage, limit: safeLimit, pages: Math.ceil(total / safeLimit) };
   }
 
-  private toCodePostFromBooking(booking: Record<string, any>, boosted: boolean): Record<string, any> {
+  private toCodePostFromBooking(booking: Record<string, any>, boosted: boolean, creatorName = 'BetPool user', creatorUsername: string | null = null): Record<string, any> {
     const legs = (booking?.legs || []).map((l: any) => ({
       podId: String(l.podId || ''),
       homeTeam: l.homeTeam,
@@ -342,7 +354,8 @@ export class SocialService {
       codeId: String(booking._id),
       code: booking.code,
       creatorId: String(booking.userId),
-      creatorName: 'BetPool user',
+      creatorName,
+      creatorUsername,
       boosted,
       createdAt: booking.createdAt ? new Date(booking.createdAt).getTime() : Date.now(),
       expiresAt: booking.expiresAt ? new Date(booking.expiresAt).toISOString() : null,
@@ -381,20 +394,37 @@ export class SocialService {
     if (podIds.length === 0) {
       return { items: [], total, page: safePage, limit: safeLimit, pages: Math.ceil(total / safeLimit) };
     }
-    const raw = (await PodModel.find({
-      _id: { $in: podIds.map(id => new mongoose.Types.ObjectId(id)) },
-      status: 'active',
-      stakingClosesAt: { $gte: now }
-    })
-      .select('-legs -marketOdds')
-      .populate('createdBy', 'fullName')
-      .lean()) as any[];
-    const byId = new Map(this.mapFeedPods(raw).map(p => [String(p._id), p]));
-    const items = podIds
+    const ids = podIds.map(id => new mongoose.Types.ObjectId(id));
+    const [rawPods, rawCodes] = await Promise.all([
+      PodModel.find({
+        _id: { $in: ids },
+        status: 'active',
+        stakingClosesAt: { $gte: now }
+      })
+        .select('-legs -marketOdds')
+        .populate('createdBy', 'fullName')
+        .lean(),
+      BookingCodeModel.find({ _id: { $in: ids } }).sort({ createdAt: -1 }).lean()
+    ]);
+    const creatorIds = [...new Set(rawCodes.map((b: any) => String(b.userId)).filter(Boolean))];
+    const creators = creatorIds.length > 0
+      ? await UserModel.find({ _id: { $in: creatorIds } }).select('fullName username').lean()
+      : [];
+    const creatorRows = new Map(creators.map(c => [String(c._id), c]));
+    const byId = new Map(this.mapFeedPods(rawPods as any[]).map(p => [String(p._id), { ...p, kind: 'pod' }]));
+    const byCodeId = new Map(rawCodes.map((b: any) => {
+      const creator = creatorRows.get(String(b.userId)) as any;
+      return [
+        String(b._id),
+        this.toCodePostFromBooking(b, false, creator?.fullName || 'BetPool user', creator?.username || null)
+      ];
+    }));
+    const pods = podIds
       .map(id => byId.get(id))
       .filter(Boolean)
       .sort((a: any, b: any) => new Date(a.stakingClosesAt).getTime() - new Date(b.stakingClosesAt).getTime());
-    return { items, total, page: safePage, limit: safeLimit, pages: Math.ceil(total / safeLimit) };
+    const codes = podIds.map(id => byCodeId.get(id)).filter(Boolean);
+    return { items: [...pods, ...codes], total, page: safePage, limit: safeLimit, pages: Math.ceil(total / safeLimit) };
   }
 
   async addComment(userId: string, podId: string, text: string): Promise<Record<string, any>> {
@@ -416,7 +446,7 @@ export class SocialService {
         .sort({ createdAt: -1 })
         .skip((safePage - 1) * safeLimit)
         .limit(safeLimit)
-        .populate('user', 'fullName')
+        .populate('user', 'fullName username')
         .lean() as Promise<Record<string, any>[]>,
       SocialCommentModel.countDocuments(filter)
     ]);
@@ -469,7 +499,7 @@ export class SocialService {
         .sort({ createdAt: -1 })
         .skip((safePage - 1) * safeLimit)
         .limit(safeLimit)
-        .populate('actor', 'fullName')
+        .populate('actor', 'fullName username')
         .lean() as Promise<Record<string, any>[]>,
       SocialActivityModel.countDocuments(actorFilter)
     ]);
@@ -499,6 +529,7 @@ export class SocialService {
       code,
       creatorId,
       creatorName: creator?.fullName || payload.creatorName || 'BetPool user',
+      creatorUsername: creator?.username || null,
       boosted,
       createdAt: activity?.createdAt ? new Date(activity.createdAt).getTime() : Date.now(),
       expiresAt: view?.expiresAt || payload.expiresAt || null,
@@ -530,7 +561,7 @@ export class SocialService {
         .skip((safePage - 1) * safeLimit)
         .limit(safeLimit)
         .populate('pod', 'title homeTeam awayTeam league sport gainsMultiplier')
-        .populate('actor', 'fullName')
+        .populate('actor', 'fullName username')
         .lean() as Promise<Record<string, any>[]>,
       SocialActivityModel.countDocuments(filter)
     ]);

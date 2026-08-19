@@ -38,14 +38,6 @@ export function getMaxBookingCodeLegs(): number {
   return parseInt(process.env.MAX_BOOKING_CODE_LEGS || '30', 10);
 }
 
-function getMinKickoffHoursAhead(): number {
-  return parseInt(process.env.BOOKING_CODE_MIN_HOURS_AHEAD || '24', 10);
-}
-
-function getMaxKickoffDaysAhead(): number {
-  return parseInt(process.env.BOOKING_CODE_MAX_DAYS_AHEAD || '7', 10);
-}
-
 function generateCode(): string {
   const bytes = crypto.randomBytes(CODE_LENGTH);
   let code = '';
@@ -93,18 +85,6 @@ export class BookingCodeService {
     }
 
     const now = new Date();
-    const minKickoff = new Date(now.getTime() + getMinKickoffHoursAhead() * 60 * 60 * 1000);
-    const maxKickoff = new Date(now.getTime() + getMaxKickoffDaysAhead() * 24 * 60 * 60 * 1000);
-
-    const outOfWindow = pods.filter(p => {
-      const kickoff = p.matchDate ? new Date(p.matchDate) : null;
-      return !kickoff || isNaN(kickoff.getTime()) || kickoff < minKickoff || kickoff > maxKickoff;
-    });
-    if (outOfWindow.length > 0) {
-      throw new Error(
-        `Selections must be for games kicking off within the next ${getMinKickoffHoursAhead()} hours to ${getMaxKickoffDaysAhead()} days: ${outOfWindow.map(p => p.title).join(', ')}`
-      );
-    }
 
     const unavailable = pods.filter(p =>
       p.status !== 'active' ||
@@ -113,6 +93,17 @@ export class BookingCodeService {
     );
     if (unavailable.length > 0) {
       throw new Error(`One or more selections are no longer available: ${unavailable.map(p => p.title).join(', ')}`);
+    }
+
+    const matchKeys = new Set<string>();
+    const duplicateMatches = pods.filter(p => {
+      const key = `${p.homeTeam}|${p.awayTeam}|${p.matchDate || ''}`;
+      if (matchKeys.has(key)) return true;
+      matchKeys.add(key);
+      return false;
+    });
+    if (duplicateMatches.length > 0) {
+      throw new Error(`Cannot combine multiple selections from the same match: ${duplicateMatches.map(p => p.title).join(', ')}`);
     }
 
     let code = '';
@@ -194,11 +185,14 @@ export class BookingCodeService {
     const byId = new Map(pods.map(p => [String(p._id), p]));
     const now = new Date();
 
-    const legs: BookingCodeLegView[] = booking.podIds.map(podId => {
+    const seenMatches = new Set<string>();
+    const legs: BookingCodeLegView[] = [];
+    for (const podId of booking.podIds) {
       const p = byId.get(podId);
       const snap = booking.legs.find(l => l.podId === podId);
+      let leg: BookingCodeLegView;
       if (!p) {
-        return {
+        leg = {
           podId,
           homeTeam: snap?.homeTeam || '—',
           awayTeam: snap?.awayTeam || '—',
@@ -209,22 +203,29 @@ export class BookingCodeService {
           available: false,
           stakingClosesAt: null
         };
+      } else {
+        leg = {
+          podId,
+          homeTeam: p.homeTeam,
+          awayTeam: p.awayTeam,
+          selection: p.selection,
+          multiplier: p.gainsMultiplier,
+          league: p.league,
+          status: p.status,
+          available:
+            p.status === 'active' &&
+            new Date(p.stakingClosesAt) > now &&
+            (!p.matchDate || new Date(p.matchDate) > now) &&
+            (p.currentExposure || 0) < (p.maxTotalExposure || 0),
+          stakingClosesAt: new Date(p.stakingClosesAt).toISOString()
+        };
       }
-      return {
-        podId,
-        homeTeam: p.homeTeam,
-        awayTeam: p.awayTeam,
-        selection: p.selection,
-        multiplier: p.gainsMultiplier,
-        league: p.league,
-        status: p.status,
-        available:
-          p.status === 'active' &&
-          new Date(p.stakingClosesAt) > now &&
-          (p.currentExposure || 0) < (p.maxTotalExposure || 0),
-        stakingClosesAt: new Date(p.stakingClosesAt).toISOString()
-      };
-    });
+
+      const matchKey = `${leg.homeTeam}|${leg.awayTeam}|${p ? p.matchDate || '' : ''}`;
+      if (seenMatches.has(matchKey)) continue;
+      seenMatches.add(matchKey);
+      legs.push(leg);
+    }
 
     let creator: { id: string; name: string } | null = null;
     try {

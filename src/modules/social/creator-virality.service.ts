@@ -84,18 +84,23 @@ export class CreatorViralityService {
   }
 
   async getVirality(userId: string): Promise<CreatorVirality> {
+    const cacheKey = `virality:user:${userId}`;
+    const cached = cacheService.get<CreatorVirality>(cacheKey);
+    if (cached) return cached;
     const [agg, leaderboard] = await Promise.all([
       this.aggregate(userId),
       this.getLeaderboard(TOP_CREATOR_COUNT)
     ]);
     const rank = leaderboard.findIndex(e => e.id === userId);
     const isTopCreator = rank >= 0 && rank < TOP_CREATOR_COUNT;
-    return {
+    const result: CreatorVirality = {
       ...agg,
       badge: this.badgeForWinnings(agg.score),
       isTopCreator,
       rank: rank >= 0 ? rank + 1 : null
     };
+    cacheService.set(cacheKey, result, 60_000);
+    return result;
   }
 
   async getLeaderboard(limit = 20): Promise<LeaderboardEntry[]> {
