@@ -5,6 +5,7 @@ const Schema = mongoose.Schema;
 export interface IUser extends mongoose.Document {
   phone: string;
   fullName: string;
+  username?: string;
   email?: string;
   pinHash: string;
   role: 'user' | 'admin';
@@ -51,6 +52,15 @@ export const UserSchema = new Schema({
     required: true,
     trim: true,
     maxlength: 100
+  },
+  username: {
+    type: String,
+    lowercase: true,
+    trim: true,
+    sparse: true,
+    unique: true,
+    maxlength: 24,
+    match: /^[a-z0-9._-]+$/
   },
   email: {
     type: String,

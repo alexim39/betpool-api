@@ -44,6 +44,8 @@ const MockTransactionModel = require('../../models/transaction.model').Transacti
 const mockBcryptHash = bcrypt.hash as jest.Mock;
 const mockBcryptCompare = bcrypt.compare as jest.Mock;
 
+const usernameChain = () => ({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(null) }) });
+
 describe('UserService', () => {
   let service: UserService;
 
@@ -65,7 +67,9 @@ describe('UserService', () => {
     };
 
     it('should create a user and wallet', async () => {
-      MockUserModel.findOne.mockResolvedValue(null);
+      MockUserModel.findOne.mockImplementation((filter: any) =>
+        filter?.username ? usernameChain() : Promise.resolve(null)
+      );
       mockBcryptHash.mockResolvedValue('hashed-pin-123');
       const mockUser = {
         _id: 'user-id-1',
@@ -87,6 +91,9 @@ describe('UserService', () => {
 
       expect(MockUserModel.findOne).toHaveBeenCalledWith({ phone: '2348031234567' });
       expect(MockUserModel.create).toHaveBeenCalled();
+      expect(MockUserModel.create.mock.calls[0][0][0]).toMatchObject({
+        username: expect.stringMatching(/^test_user_/)
+      });
       expect(MockWalletModel.create).toHaveBeenCalled();
       expect(result.user).toBe(mockUser);
       expect(result.token).toBeTruthy();
@@ -104,7 +111,8 @@ describe('UserService', () => {
     it('should link referral code if valid referrer found', async () => {
       MockUserModel.findOne
         .mockResolvedValueOnce(null) // no existing user
-        .mockReturnValueOnce({ select: jest.fn().mockResolvedValue({ _id: 'referrer-id-1', referralCode: 'REF123' }) }); // referrer found
+        .mockReturnValueOnce({ select: jest.fn().mockResolvedValue({ _id: 'referrer-id-1', referralCode: 'REF123' }) }) // referrer found
+        .mockImplementation((filter: any) => filter?.username ? usernameChain() : Promise.resolve(undefined));
       mockBcryptHash.mockResolvedValue('hashed-pin');
       const mockUser = {
         _id: 'user-id-2',
@@ -124,7 +132,8 @@ describe('UserService', () => {
     it('should NOT link a referral code belonging to an affiliate (paid promoter)', async () => {
       MockUserModel.findOne
         .mockResolvedValueOnce(null) // no existing user
-        .mockReturnValueOnce({ select: jest.fn().mockResolvedValue({ _id: 'promoter-id-1', referralCode: 'PROMO1', isAffiliate: true }) });
+        .mockReturnValueOnce({ select: jest.fn().mockResolvedValue({ _id: 'promoter-id-1', referralCode: 'PROMO1', isAffiliate: true }) })
+        .mockImplementation((filter: any) => filter?.username ? usernameChain() : Promise.resolve(undefined));
       mockBcryptHash.mockResolvedValue('hashed-pin');
       const mockUser = {
         _id: 'user-id-3',
@@ -144,7 +153,8 @@ describe('UserService', () => {
     it('should NOT link a self-referral via matching email', async () => {
       MockUserModel.findOne
         .mockResolvedValueOnce(null) // no existing user
-        .mockReturnValueOnce({ select: jest.fn().mockResolvedValue({ _id: 'me-id-1', referralCode: 'MYCODE', email: 'same@example.com' }) });
+        .mockReturnValueOnce({ select: jest.fn().mockResolvedValue({ _id: 'me-id-1', referralCode: 'MYCODE', email: 'same@example.com' }) })
+        .mockImplementation((filter: any) => filter?.username ? usernameChain() : Promise.resolve(undefined));
       mockBcryptHash.mockResolvedValue('hashed-pin');
       const mockUser = {
         _id: 'user-id-4',
