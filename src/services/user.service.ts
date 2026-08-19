@@ -155,6 +155,7 @@ export class UserService {
       logger.info('Wallet created', wallet._id);
 
       user.lastLoginAt = new Date();
+      user.lastActiveAt = new Date();
       await user.save({ session });
 
       await session.commitTransaction();
@@ -211,6 +212,7 @@ export class UserService {
     user.lockedUntil = null;
     const token = this.generateToken(user._id.toString(), user.role, user.tokenVersion);
     user.lastLoginAt = new Date();
+    user.lastActiveAt = new Date();
     await user.save();
 
     return { user, token };
@@ -259,6 +261,7 @@ export class UserService {
 
     const token = this.generateToken(user._id.toString(), user.role, user.tokenVersion);
     user.lastLoginAt = new Date();
+    user.lastActiveAt = new Date();
     await user.save();
 
     return { user, token };
@@ -276,6 +279,7 @@ export class UserService {
 
     const token = this.generateToken(user._id.toString(), user.role, user.tokenVersion);
     user.lastLoginAt = new Date();
+    user.lastActiveAt = new Date();
     await user.save();
 
     return { user, token };

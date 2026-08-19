@@ -241,6 +241,7 @@ export class AuthController {
 
       const token = userService.generateToken(user._id.toString(), user.role);
       user.lastLoginAt = new Date();
+      user.lastActiveAt = new Date();
       await user.save();
       res.json({ success: true, data: { user, token } });
     } catch (error: any) {

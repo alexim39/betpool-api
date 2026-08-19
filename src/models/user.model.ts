@@ -32,6 +32,7 @@ export interface IUser extends mongoose.Document {
   isActive: boolean;
   isSuspended: boolean;
   lastLoginAt?: Date;
+  lastActiveAt?: Date;
   digestOptOut?: boolean;
   lastDigestSentAt?: Date;
   createdAt: Date;
@@ -143,6 +144,7 @@ export const UserSchema = new Schema({
     default: false
   },
   lastLoginAt: { type: Date },
+  lastActiveAt: { type: Date, index: true },
   digestOptOut: { type: Boolean, default: false },
   lastDigestSentAt: { type: Date }
 }, {

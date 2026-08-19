@@ -139,6 +139,7 @@ export class OtpService {
       }
       if (purpose === 'login' && user) {
         user.lastLoginAt = new Date();
+        user.lastActiveAt = new Date();
         await user.save();
         return { valid: true, user };
       }
@@ -148,6 +149,7 @@ export class OtpService {
       const user = await UserModel.findOne({ email: phone.toLowerCase() });
       if (user) {
         user.lastLoginAt = new Date();
+        user.lastActiveAt = new Date();
         await user.save();
         return { valid: true, user };
       }

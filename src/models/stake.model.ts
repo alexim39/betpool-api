@@ -13,6 +13,8 @@ export interface IStakeItem {
   matchDate: string;
   status: 'pending' | 'won' | 'lost' | 'void';
   settledAt?: Date;
+  homeScore?: number | null;
+  awayScore?: number | null;
 }
 
 export interface IStake extends mongoose.Document {
@@ -64,7 +66,9 @@ const StakeItemSchema = new Schema({
   gainsMultiplier: { type: Number, required: true, min: 1.01 },
   matchDate: { type: String, required: true },
   status: { type: String, enum: ['pending', 'won', 'lost', 'void'], default: 'pending' },
-  settledAt: { type: Date }
+  settledAt: { type: Date },
+  homeScore: { type: Number, default: null },
+  awayScore: { type: Number, default: null }
 }, { _id: false });
 
 const StakeSchema = new Schema({

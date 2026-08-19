@@ -61,7 +61,7 @@ export interface UpdateUserInput {
   isAffiliate?: boolean;
 }
 
-const USER_SORTABLE_FIELDS = new Set(['createdAt', 'fullName', 'phone', 'lastLoginAt', 'walletBalance']);
+const USER_SORTABLE_FIELDS = new Set(['createdAt', 'fullName', 'phone', 'lastLoginAt', 'lastActiveAt', 'walletBalance']);
 
 export class AdminService {
   private readonly PLATFORM_FEE_PERCENT = 10;
@@ -338,6 +338,8 @@ export class AdminService {
           if (item.pod.toString() === id && item.status === 'pending') {
             item.status = itemResult;
             item.settledAt = new Date();
+            item.homeScore = homeScore ?? null;
+            item.awayScore = awayScore ?? null;
           }
         }
 
@@ -826,6 +828,7 @@ export class AdminService {
           role: 'user', isSuspended: false,
           $or: [
             { lastLoginAt: { $gte: thirtyDaysAgo } },
+            { lastActiveAt: { $gte: thirtyDaysAgo } },
             { _id: { $in: await StakeModel.distinct('user', { createdAt: { $gte: thirtyDaysAgo } }) } },
           ],
         });
