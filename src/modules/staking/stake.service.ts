@@ -269,9 +269,12 @@ export class StakeService {
         if (!s.isParlay || !Array.isArray(s.items)) continue;
         for (const item of s.items) {
           const pod = item?.pod ? scoreMap.get(item.pod.toString()) : undefined;
-          if (pod) {
-            item.homeScore = pod.homeScore ?? null;
-            item.awayScore = pod.awayScore ?? null;
+          if (pod && pod.homeScore != null && pod.awayScore != null) {
+            item.homeScore = pod.homeScore;
+            item.awayScore = pod.awayScore;
+          } else if (item.homeScore == null && item.awayScore == null && pod) {
+            item.homeScore = null;
+            item.awayScore = null;
           }
         }
       }
@@ -961,6 +964,9 @@ export class StakeService {
     if (!stake) return null;
     if (stake.isSettled) throw new Error('Stake already settled');
     if (stake.cashoutRequested) throw new Error('Cashout already requested');
+    if (stake.isParlay && this.computeAutoCashoutQuote(stake) <= 0) {
+      throw new Error('This bet can no longer be cashed out');
+    }
 
     const CASHOUT_FEE_PERCENT = 10;
     const cashoutAmount = Math.floor(stake.stakeAmount * (1 - CASHOUT_FEE_PERCENT / 100));
@@ -979,6 +985,9 @@ export class StakeService {
     if (!stake) return null;
     if (stake.isSettled) throw new Error('Stake already settled');
     if (stake.cashoutRequested) throw new Error('Cashout already requested');
+    if (stake.isParlay && this.computeAutoCashoutQuote(stake) <= 0) {
+      throw new Error('This bet can no longer be cashed out');
+    }
 
     const CASHOUT_FEE_PERCENT = 10;
     const cashoutAmount = Math.floor(stake.stakeAmount * (1 - CASHOUT_FEE_PERCENT / 100));

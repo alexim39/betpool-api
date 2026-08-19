@@ -21,7 +21,7 @@ export const authMiddleware = async (req: AuthRequest, res: Response, next: Next
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; role?: string; tokenVersion?: number };
     // Verify tokenVersion and user status
-    const user = await UserModel.findById(decoded.userId).select('tokenVersion isActive isSuspended').lean();
+    const user = await UserModel.findById(decoded.userId).select('tokenVersion isActive isSuspended lastActiveAt').lean();
     if (!user || !user.isActive || user.isSuspended) {
       return res.status(401).json({ success: false, message: 'Account suspended or inactive' });
     }
@@ -29,6 +29,14 @@ export const authMiddleware = async (req: AuthRequest, res: Response, next: Next
       return res.status(401).json({ success: false, message: 'Session expired. Please log in again.' });
     }
     req.user = { userId: decoded.userId, role: decoded.role, tokenVersion: decoded.tokenVersion };
+    // Track real activity (throttled to one write per user per 5 minutes)
+    const now = Date.now();
+    if (!user.lastActiveAt || now - user.lastActiveAt.getTime() > 5 * 60 * 1000) {
+      UserModel.updateOne(
+        { _id: decoded.userId, $or: [{ lastActiveAt: null }, { lastActiveAt: { $lt: new Date(now - 5 * 60 * 1000) } }] },
+        { $set: { lastActiveAt: new Date(now) } }
+      ).catch(() => { /* non-fatal tracking write */ });
+    }
     next();
   } catch {
     return res.status(401).json({ success: false, message: 'Invalid or expired token' });
