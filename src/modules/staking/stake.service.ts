@@ -57,8 +57,9 @@ export class StakeService {
   private readonly PLATFORM_FEE_PERCENT = 10;
 
   /**
-   * Validates that a booking code exists, has not expired, and covers exactly
-   * the pods being staked. Returns the code (normalized) or throws.
+   * Validates that a booking code exists, has not expired, and covers the pods
+   * being staked. Any subset of the code's pods may be staked (a leg may be
+   * dropped if it closed or duplicated a match). Returns the code or throws.
    */
   private async resolveBookingCode(code: string | undefined, podIds: string[]): Promise<string | null> {
     if (!code) return null;
@@ -66,9 +67,9 @@ export class StakeService {
     const booking = await BookingCodeModel.findOne({ code: normalized }).lean();
     if (!booking) throw new Error('Booking code not found');
     if (new Date(booking.expiresAt) < new Date()) throw new Error('Booking code has expired');
-    const codePods = booking.podIds.map(p => String(p));
+    const codeSet = new Set(booking.podIds.map(p => String(p)));
     const stakePods = podIds.map(p => String(p));
-    if (codePods.length !== stakePods.length || !codePods.every(p => stakePods.includes(p))) {
+    if (stakePods.length < 2 || !stakePods.every(p => codeSet.has(p))) {
       throw new Error('The selections do not match this booking code');
     }
     return normalized;
@@ -508,6 +509,9 @@ export class StakeService {
         }
         if (pod.status !== 'active') {
           throw new Error(`"${pod.title}" is not available for staking`);
+        }
+        if (!pod.isLive && pod.matchDate && new Date(pod.matchDate) <= now) {
+          throw new Error(`"${pod.title}" has already started and cannot be staked`);
         }
         if (pod.gainsMultiplier < 1.10) {
           throw new Error(`"${pod.title}" must have minimum odds of 1.10x`);

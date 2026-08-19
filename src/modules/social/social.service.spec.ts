@@ -108,6 +108,9 @@ describe('SocialService', () => {
     service = new SocialService();
     cacheService.clear('social:');
     jest.clearAllMocks();
+    MockBookingCodeModel.findById.mockReturnValue({
+      select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(null) })
+    });
   });
 
   describe('toggleLike', () => {
@@ -523,7 +526,9 @@ describe('SocialService', () => {
       MockSocialFollowModel.countDocuments
         .mockResolvedValueOnce(12)
         .mockResolvedValueOnce(3);
-      MockSocialFollowModel.findOne.mockReturnValue(findOneChain({ _id: 'f' }));
+      MockSocialFollowModel.findOne.mockReturnValue({
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: 'f' }) })
+      });
       MockBookingCodeModel.find.mockReturnValue(findChain([{ _id: OID }, { _id: 'c2' }]));
       MockSocialLikeModel.aggregate.mockResolvedValue([{ count: 14 }]);
       MockStakeModel.aggregate.mockResolvedValue([{ _id: OID }, { _id: 'u9' }]);
@@ -595,7 +600,14 @@ describe('SocialService', () => {
   });
 
   describe('getCreatorCodes', () => {
+    function userChain(fullName: string | null) {
+      MockUserModel.findById.mockReturnValue({
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(fullName ? { _id: OID, fullName } : null) })
+      });
+    }
+
     it('returns booking codes as code posts for the creator', async () => {
+      userChain('Ada Lovelace');
       const booking = {
         _id: new mongoose.Types.ObjectId('507f1f77bcf86cd799439013'),
         code: 'ABC23456',
@@ -625,6 +637,7 @@ describe('SocialService', () => {
         code: 'ABC23456',
         codeId: String(booking._id),
         creatorId: OID.toString(),
+        creatorName: 'Ada Lovelace',
         combinedMultiplier: 3,
         legCount: 2,
         totalLegs: 2,
@@ -636,6 +649,7 @@ describe('SocialService', () => {
     });
 
     it('returns an empty page when the creator has no codes', async () => {
+      userChain(null);
       MockBookingCodeModel.find.mockReturnValue({
         sort: jest.fn().mockReturnValue({
           skip: jest.fn().mockReturnValue({

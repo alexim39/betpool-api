@@ -163,6 +163,10 @@ export class SocialService {
   }
 
   async getProfile(requesterId: string, targetId: string): Promise<Record<string, any>> {
+    const cacheKey = `social:profile:${requesterId}:${targetId}`;
+    const cached = cacheService.get<Record<string, any>>(cacheKey);
+    if (cached) return cached;
+
     const target = await UserModel.findById(targetId).select('_id fullName isActive isSuspended').lean();
     if (!target || !(target as any).isActive || (target as any).isSuspended) {
       throw new AppError('User not found', 404);
@@ -197,7 +201,7 @@ export class SocialService {
       isTopCreator: false,
       rank: null
     }));
-    return {
+    const result: Record<string, any> = {
       user: {
         id: targetId,
         fullName: (target as any).fullName || 'BetPool user',
@@ -209,6 +213,8 @@ export class SocialService {
       isSelf: requesterId === targetId,
       isFollowing: isOra || !!followRow
     };
+    cacheService.set(cacheKey, result, 30_000);
+    return result;
   }
 
   private async countLikesReceived(targetId: string): Promise<number> {
@@ -315,20 +321,22 @@ export class SocialService {
     const safeLimit = Math.min(100, Math.max(5, limit || 12));
     const target = new mongoose.Types.ObjectId(targetId);
     const filter = { userId: target };
-    const [rows, total, boosted] = await Promise.all([
+    const [rows, total, boosted, creator] = await Promise.all([
       BookingCodeModel.find(filter)
         .sort({ createdAt: -1 })
         .skip((safePage - 1) * safeLimit)
         .limit(safeLimit)
         .lean(),
       BookingCodeModel.countDocuments(filter),
-      creatorViralityService.isTopCreator(targetId).catch(() => false)
+      creatorViralityService.isTopCreator(targetId).catch(() => false),
+      UserModel.findById(targetId).select('fullName').lean()
     ]);
-    const items = rows.map(b => this.toCodePostFromBooking(b, boosted));
+    const creatorName = (creator as any)?.fullName || 'BetPool user';
+    const items = rows.map(b => this.toCodePostFromBooking(b, boosted, creatorName));
     return { items, total, page: safePage, limit: safeLimit, pages: Math.ceil(total / safeLimit) };
   }
 
-  private toCodePostFromBooking(booking: Record<string, any>, boosted: boolean): Record<string, any> {
+  private toCodePostFromBooking(booking: Record<string, any>, boosted: boolean, creatorName = 'BetPool user'): Record<string, any> {
     const legs = (booking?.legs || []).map((l: any) => ({
       podId: String(l.podId || ''),
       homeTeam: l.homeTeam,
@@ -342,7 +350,7 @@ export class SocialService {
       codeId: String(booking._id),
       code: booking.code,
       creatorId: String(booking.userId),
-      creatorName: 'BetPool user',
+      creatorName,
       boosted,
       createdAt: booking.createdAt ? new Date(booking.createdAt).getTime() : Date.now(),
       expiresAt: booking.expiresAt ? new Date(booking.expiresAt).toISOString() : null,
