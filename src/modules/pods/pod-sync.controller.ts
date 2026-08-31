@@ -13,6 +13,13 @@ export class PodSyncController {
         daysAhead: daysAhead ? parseInt(daysAhead as string, 10) : undefined,
       });
 
+      // If quota exhausted, surface as 429 so admin toast can show countdown
+      const isQuota = (result as any).code === 'taster_exhausted' || (result as any).status === 429 || result.errors.some(e => e.toLowerCase().includes('quota exhausted'));
+      if (isQuota) {
+        res.status(429).json({ error: true, status: 429, code: 'taster_exhausted', detail: result.errors[0] || 'Daily quota exhausted', result });
+        return;
+      }
+
       // Kick off Ora's daily games analysis (batch analyze at sync) — non-blocking
       aiGamesService.analyzeToday()
         .then(analysis => console.log('[Games Today] analysis:', JSON.stringify(analysis)))

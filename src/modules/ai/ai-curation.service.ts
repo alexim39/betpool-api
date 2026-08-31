@@ -164,6 +164,14 @@ export const LEAGUE_NAMES: Record<number, string> = {
   126: 'Olympics',
 };
 
+function isQuotaError(err: any): boolean {
+  const status = err?.response?.status;
+  const data = err?.response?.data;
+  return status === 429 || data?.code === 'taster_exhausted' || String(data?.detail || '').toLowerCase().includes('free daily');
+}
+function quotaDetail(err: any): string | undefined {
+  return err?.response?.data?.detail || err?.response?.data?.message;
+}
 export class AICurationService {
   private get apiKey(): string { return process.env.SPORTSAPI_KEY || ''; }
   private get baseUrl(): string {
@@ -212,7 +220,8 @@ export class AICurationService {
           params: { status: 'notstarted', date_from: dateFrom, date_to: dateTo, limit: PAGE, offset },
           timeout: 20000,
         });
-      } catch {
+      } catch (err: any) {
+        if (isQuotaError(err)) throw Object.assign(err, { isQuota: true, quotaDetail: quotaDetail(err) });
         break;
       }
       const events: BSDEvent[] = res.data?.results || [];
@@ -287,7 +296,19 @@ export class AICurationService {
     const today = new Date();
     const dateFrom = today.toISOString().split('T')[0];
     const dateTo = new Date(today.getTime() + 7 * 86400000).toISOString().split('T')[0];
-    const fixtures: BSDEvent[] = await this.fetchUpcomingFixtures(dateFrom, dateTo);
+    let fixtures: BSDEvent[] = [];
+    try {
+      fixtures = await this.fetchUpcomingFixtures(dateFrom, dateTo);
+    } catch (err: any) {
+      if ((err as any).isQuota || isQuotaError(err)) {
+        const detail = (err as any).quotaDetail || quotaDetail(err);
+        result.success = false;
+        result.errors.push(`${detail || 'Daily football API quota exhausted'} — resets at midnight UTC (00:00 UTC). No curation possible until then. Reduce leagues/days or upgrade at https://sports.bzzoiro.com/pricing/.`);
+        result.skippedReason = 'Quota exhausted — taster plan daily limit reached.';
+        return result;
+      }
+      throw err;
+    }
 
     result.total = fixtures.length;
     result.apiLog.push(`Total fixtures to analyze: ${fixtures.length}`);

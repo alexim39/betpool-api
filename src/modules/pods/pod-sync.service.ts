@@ -2,6 +2,16 @@ import axios from 'axios';
 import { PodModel } from '../../models/pod.model';
 import mongoose from 'mongoose';
 
+function isQuotaError(err: any): boolean {
+  const status = err?.response?.status;
+  const data = err?.response?.data;
+  return status === 429 || data?.code === 'taster_exhausted' || String(data?.detail || '').toLowerCase().includes('free daily') || String(err?.message || '').includes('429');
+}
+function quotaMessage(detail?: string): string {
+  const base = detail || 'Your account has used its free daily football API quota.';
+  return `${base} Resets at midnight UTC (00:00 UTC). No new fixtures/odds can be fetched until then. Mitigation: use SPORTSAPI_SYNC_DAYS=2 and 2-3 leagues only, avoid repeated manual Sync today, publish existing draft pods, or upgrade at https://sports.bzzoiro.com/pricing/.`;
+}
+
 const MARKET_DEFAULT_MULTIPLIERS = [
   { selection: 'Home Win', marketType: '1X2', defaultMultiplier: 2.0 },
   { selection: 'Draw', marketType: '1X2', defaultMultiplier: 3.5 },
@@ -69,7 +79,7 @@ export class PodSyncService {
     return h;
   }
 
-  private async fetchAllEvents(dateFrom: string, dateTo: string): Promise<any[]> {
+  private async fetchAllEvents(dateFrom: string, dateTo: string, result?: SyncResult): Promise<any[]> {
     const all: any[] = [];
     let url: string | null = `${this.baseUrl}/events/`;
     const params: Record<string, string> = {
@@ -79,12 +89,28 @@ export class PodSyncService {
     };
 
     while (url) {
-      const res = await axios.get(url, { headers: this.headers, params, timeout: 20000 });
-      const events = res.data?.results || [];
-      all.push(...events);
-      url = res.data?.next || null;
-      // Clear params after first call so URL query string handles pagination
-      if (url) params.status = 'notstarted';
+      try {
+        const res = await axios.get(url, { headers: this.headers, params, timeout: 20000 });
+        const events = res.data?.results || [];
+        all.push(...events);
+        url = res.data?.next || null;
+        // Clear params after first call so URL query string handles pagination
+        if (url) params.status = 'notstarted';
+      } catch (err: any) {
+        if (isQuotaError(err)) {
+          const detail = err.response?.data?.detail || err.response?.data?.message;
+          const msg = quotaMessage(detail);
+          if (result) {
+            result.errors.push(msg);
+            result.apiLog.push(`quota exhausted at offset ${all.length}`);
+          }
+          // re-throw with quota flag so outer catch formats it once
+          err.isQuota = true;
+          err.quotaDetail = detail;
+          throw err;
+        }
+        throw err;
+      }
     }
     return all;
   }
@@ -106,7 +132,7 @@ export class PodSyncService {
     const adminObjectId = new mongoose.Types.ObjectId(adminUserId);
 
     try {
-      const events = await this.fetchAllEvents(dateFrom, dateTo);
+      const events = await this.fetchAllEvents(dateFrom, dateTo, result);
       result.details.push(`BSD sync: ${events.length} unique fixtures, ${dateFrom}..${dateTo}`);
       result.apiLog.push(`fetched ${events.length} events total`);
 
@@ -168,7 +194,13 @@ fixturesProcessed++;
 
           if (selections.length > 0) fixturesWithOdds++;
           result.apiLog.push(`odds event=${eventId}: ${selections.length} selections`);
-        } catch {
+        } catch (err: any) {
+          if (isQuotaError(err)) {
+            const detail = err.response?.data?.detail || err.response?.data?.message;
+            result.errors.push(quotaMessage(detail));
+            result.apiLog.push(`quota hit on odds event=${eventId} — aborting remaining fixtures`);
+            break; // stop hammering quota; remaining fixtures would also 429
+          }
           // odds unavailable — skip this fixture entirely rather than use defaults
         }
 
@@ -248,10 +280,18 @@ fixturesProcessed++;
       const status = err.response?.status;
       const data = err.response?.data;
       result.apiLog.push(`FATAL: ${err.message}`);
-      result.errors.push(
-        status === 401 ? 'Auth failed — check SPORTSAPI_KEY. Sign up at https://sports.bzzoiro.com/register/' :
-        `sync error: ${err.message}${data ? ' ' + JSON.stringify(data).slice(0, 150) : ''}`
-      );
+      result.success = false;
+      if (status === 401) {
+        result.errors.push('Auth failed — check SPORTSAPI_KEY. Sign up at https://sports.bzzoiro.com/register/');
+      } else if (isQuotaError(err) || (err as any).isQuota) {
+        const detail = (err as any).quotaDetail || data?.detail || data?.message;
+        result.errors.push(quotaMessage(detail));
+        // keep HTTP-semantic flag for controller
+        (result as any).code = 'taster_exhausted';
+        (result as any).status = 429;
+      } else {
+        result.errors.push(`sync error: ${err.message}${data ? ' ' + JSON.stringify(data).slice(0, 300) : ''}`);
+      }
     }
 
     return result;

@@ -116,6 +116,11 @@ export interface GamesListResult {
   personalized: boolean;
 }
 
+function isQuotaError(err: any): boolean {
+  const status = err?.response?.status;
+  const data = err?.response?.data;
+  return status === 429 || data?.code === 'taster_exhausted' || String(data?.detail || '').toLowerCase().includes('free daily');
+}
 export class AIGamesService {
   private get apiKey(): string { return process.env.SPORTSAPI_KEY || ''; }
   private get baseUrl(): string {
@@ -149,7 +154,8 @@ export class AIGamesService {
           params: { status: 'notstarted', date_from: dateFrom, date_to: dateTo, limit: PAGE, offset },
           timeout: 20000,
         });
-      } catch {
+      } catch (err: any) {
+        if (isQuotaError(err)) throw Object.assign(err, { isQuota: true });
         break;
       }
       const events: BSDEvent[] = res.data?.results || [];
@@ -603,7 +609,17 @@ Return ONLY valid JSON with no markdown:
     const dateFrom = now.toISOString().split('T')[0];
     const dateTo = new Date(now.getTime() + 2 * 86400000).toISOString().split('T')[0];
 
-    const fixtures = await this.fetchFixtures(dateFrom, dateTo);
+    let fixtures: BSDEvent[] = [];
+    try {
+      fixtures = await this.fetchFixtures(dateFrom, dateTo);
+    } catch (err: any) {
+      if ((err as any).isQuota || isQuotaError(err)) {
+        result.success = false;
+        result.errors.push('Daily football API quota exhausted — taster plan resets at midnight UTC (00:00 UTC). No new fixtures can be fetched until then.');
+        return result;
+      }
+      throw err;
+    }
     result.fixturesFound = fixtures.length;
     result.apiLog.push(`games fixtures: ${fixtures.length} (${dateFrom}..${dateTo})`);
     if (fixtures.length === 0) return result;
