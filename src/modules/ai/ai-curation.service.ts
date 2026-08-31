@@ -569,11 +569,11 @@ export class AICurationService {
         ? `Reserves: ₦${financialHealth.totalReserves.toLocaleString()} | Exposure: ₦${financialHealth.totalExposure.toLocaleString()} | Ratio: ${(financialHealth.reserveRatio * 100).toFixed(0)}% | Active pods: ${financialHealth.activePodCount}`
         : 'Financial data unavailable';
 
-      // Build the enhanced prompt
-      const prompt = `Analyze this football match for BetPool's pod curation:
+      // Build the enhanced prompt — Elite Multi-Sport Risk Analyst / High-Probability Engine
+      const prompt = `Analyze this match for BetPool's ultra-safe pod curation. You are an Elite Multi-Sport Risk Analyst and High-Probability Prediction Engine. Consistent long-term winning streaks > high odds. Maximum probability, minimum risk.
 
 MATCH: ${fixture.home_team} vs ${fixture.away_team}
-LEAGUE: ${leagueName} | Round: ${fixture.round_number || 'N/A'}
+SPORT: Football | LEAGUE: ${leagueName} | Round: ${fixture.round_number || 'N/A'}
 DATE: ${fixture.event_date}
 
 TEAM FORM:
@@ -592,30 +592,69 @@ ${finStr}
 ORA LEDGER PERFORMANCE (accuracy from settled outcomes — weight proven leagues/markets higher, be extra cautious in risky ones):
 ${curationAccuracyService.promptBlock(leagueName, accuracy)}
 
-CRITICAL RULES (SURVIVAL DEPENDS ON FOLLOWING THESE):
-- BetPool's profit model: we earn commission ONLY when pods WIN. Every losing pod earns zero revenue. This is a survival requirement.
-- We need HIGH WINNING CONSISTENCY above all else. Recommend ONLY outcomes that have a very high probability of winning.
-- PREFER double chance: "Home or Draw", "Away or Draw" or "Home or Away" — these win when either covered side hits, so they should be the default choice to double our chance of winning.
-- Direct outcomes ("Home Win", "Away Win", "Draw" alone), BTTS and Draw No Bet are ALLOWED ONLY when you are very sure — a clear favourite with overwhelming form/H2H evidence, or overwhelming goal-scoring evidence — and must have confidence >= 80. Otherwise double chance wins.
-- Goals: if the game should be high scoring, recommend "Over 1.5" (never Over 2.5 or higher — the lower line is safer). If low scoring is expected, prefer the safest under: "Under 4.5" or "Under 3.5" (these win more often); "Under 2.5" only when you are very sure.
-- ODDS DO NOT MATTER — winning probability is everything. The most likely outcome wins, no matter how low its multiplier. Never trade win probability for higher odds.
+=== 1. MY CORE STRATEGY KEYS (BY SPORT) — YOU MUST SELECT STRICTLY FROM THESE ===
+FOOTBALL:
+* Double Chance: Home or Draw (1X), Away or Draw (X2).
+* Draw No Bet (DNB): Home DNB or Away DNB.
+* High-Probability Goal Lines: Over 1.5 Total Goals, or Under 3.5 / Under 4.5 Total Goals.
+* Team Goal Lines: Home Team Over 0.5 Goals or Away Team Over 0.5 Goals.
+* Asian Handicaps: Underdog +1.5 or Underdog +2.5.
+* Safe Multi-Markets: Double Chance combined with Under 4.5 Goals (e.g., 1X & Under 4.5).
+BASKETBALL (NBA / EUROLEAGUE):
+* Alternative Point Spreads: Buying a massive safety cushion on a favorite (e.g., backing a favorite at +6.5 to +10.5 instead of a straight win).
+* Alternative Game Totals (Under/Over): Setting a line 12 to 15 points safer than the bookmaker's standard line.
+* Team Total Points: Backing a high-scoring team to cross an ultra-low, adjusted alternative points floor.
+TENNIS (ATP / WTA):
+* To Win a Set (Over 0.5 Sets): Backing a heavy favorite or highly consistent player to win at least one set in the match.
+* Alternative Games Handicap: Giving a massive games advantage cushion to a reliable player (e.g., +4.5 or +5.5 games handicap).
+* Alternative Match Games (Over): Setting an ultra-low alternative total games line (e.g., Over 16.5 or 17.5 total games).
+
+=== 2. STRICT STATISTICAL FILTERS — MATCH MUST PASS BEFORE RECOMMEND ===
+* For Football (1X / X2): The chosen team must have avoided defeat in at least 80% of their last 10 corresponding home/away matches.
+* For Football (Over 1.5): Both competing teams must have seen Over 1.5 goals land in at least 85% of their respective matches this season.
+* For Basketball (Alternative Spreads): The backed team must have covered your adjusted spread line in 90% of their last 10 games.
+* For Tennis (To Win a Set / Handicaps): The chosen player must have successfully won at least one set in 90% of their last 15 matches on this specific court surface (Hard, Clay, or Grass).
+
+=== 3. MANDATORY RED FLAGS (IMMEDIATE FILTER OUT — RETURN SKIP) ===
+* Local Derbies / Fierce Rivalries: Form is irrelevant in these high-emotion games.
+* Dead Rubber Matches: Late-season games where a team or player has already qualified or has nothing left to play for.
+* Extreme Fatigue / Travel Strain: Basketball teams on a back-to-back (B2B) road trip, or a Tennis player who just won a tournament final in a different country/time zone less than 48 hours ago.
+* Surface Disadvantage (Tennis): Avoid backing players who have a sub-50% career win rate on the specific tournament surface.
+* Managerial Changes or Injury Crises: Football/Basketball teams with coaching changes within 14 days or missing core floor generals/goalkeepers. Any tennis player with reported medical timeouts or tape on major joints in their previous round.
+
+=== 4. YOUR OUTPUT FORMAT ===
+For every match that passes all filters, the reasoning must contain:
+* Sport & Match: [Sport Name] - [Participant A] vs [Participant B] ([League/Tournament Name])
+* Recommended Ultra-Safe Pick: [e.g., Home or Draw / Over 1.5 Goals / Player A to Win 1 Set / 1X & Under 4.5]
+* Probability Confidence (%): [calculated percentage based on your data]
+* Supporting Stat 1: [The selected team/player has hit this threshold in X% of recent matches]
+* Supporting Stat 2: [Head-to-head records or specific structural metrics that guarantee high safety]
+* Risk Warning: [Briefly note the only realistic scenario where this safe bet could fail]
+Analyze the upcoming fixtures for the next 48 hours and give me the highest probability picks that fit this exact blueprint.
+
+CRITICAL SURVIVAL RULES:
+- You CARE ONLY about maximum probability and minimizing risk, NOT high odds. Winning probability beats odds size every time.
 - NEVER recommend a multiplier below 1.20x (minimum floor).
-- NEVER recommend an outcome with confidence below ${Math.min(70, effectiveThreshold)}% — the risk of losing is unacceptable.
+- NEVER recommend with confidence below ${Math.min(70, effectiveThreshold)}% — otherwise SKIP.
 - Prefer 10 excellent pods over 30 mediocre ones. Quality over quantity is the only path to survival.
-- Never combine outcomes into parlays — set combinedRecommendation.enabled = false always. A double chance single is safer than any parlay.
+- Never combine outcomes into parlays — set combinedRecommendation.enabled = false always. A safe single is safer than any parlay.
+- If any RED FLAG is present or STRICT FILTER fails, return SKIP.
 
 Return valid JSON matching this structure:
 {
   "recommendations": [
     {
-      "selection": "Home or Draw" | "Away or Draw" | "Home or Away" | "Over 1.5" | "Under 3.5" | "Under 4.5" | "Home Win" | "Away Win" | "Draw" | "BTTS Yes" | "BTTS No" | "Draw No Bet",
+      "selection": "Home or Draw (1X)" | "Away or Draw (X2)" | "Home DNB" | "Away DNB" | "Over 1.5 Total Goals" | "Under 3.5 Total Goals" | "Under 4.5 Total Goals" | "Home Team Over 0.5 Goals" | "Away Team Over 0.5 Goals" | "Underdog +1.5" | "Underdog +2.5" | "1X & Under 4.5" | "X2 & Under 4.5" | "Alternative Spread +6.5" | "Alternative Total Under" | "Team Total Over" | "To Win a Set (Over 0.5 Sets)" | "+4.5 Games Handicap" | "Over 16.5 Total Games" | "Home or Draw" | "Away or Draw" | "Over 1.5" | "Under 3.5" | "Under 4.5",
       "confidence": number (0-100),
       "recommendedMultiplier": number (1.20-10.0),
-      "reasoning": "Brief justification"
+      "reasoning": "Supporting Stat 1 + Supporting Stat 2 + Risk Warning",
+      "supportingStat1": "The selected team/player has hit this threshold in X% of recent matches",
+      "supportingStat2": "Head-to-head records or structural metrics that guarantee high safety",
+      "riskWarning": "Briefly note the only realistic scenario where this safe bet could fail"
     }
   ],
   "verdict": "RECOMMEND" | "SKIP",
-  "overallReasoning": "Brief explanation",
+  "overallReasoning": "Sport & Match + Recommended Ultra-Safe Pick + Probability Confidence + red-flag check",
   "combinedRecommendation": {
     "enabled": boolean,
     "leg1Market": string,
@@ -631,11 +670,10 @@ Return valid JSON matching this structure:
 }
 
 Rules:
-- RECOMMEND only if at least one outcome has confidence >= ${effectiveThreshold}
-- If no outcome reaches ${effectiveThreshold}%, return SKIP
-- The best recommendation is the one with the HIGHEST confidence (win probability) — never the one with the best odds.
-- Direct 1X2, BTTS and Draw No Bet recommendations require confidence >= 80 — otherwise default to the double chance.
-- combinedRecommendation.enabled must always be false.
+- RECOMMEND only if at least one outcome has confidence >= ${effectiveThreshold} AND passes all Strict Statistical Filters AND no Red Flags.
+- If no outcome reaches ${effectiveThreshold}% or any Red Flag present or filter fails, return SKIP
+- The best recommendation is HIGHEST confidence (win probability) — never best odds
+- combinedRecommendation.enabled must always be false
 - SKIP if reserve ratio is below 0.20 (critical)
 - Return ONLY the JSON object, no markdown or other text`;
 
@@ -652,7 +690,7 @@ Rules:
           body: JSON.stringify({
             model: process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash',
             messages: [
-              { role: 'system', content: 'You are Ora, BetPool\'s senior odds analyst. Our survival depends on winning consistency. You are cautious and analytical. You PREFER double-chance picks (e.g. "Home or Draw", "Over 1.5", safe unders like "Under 3.5"/"Under 4.5") — you only consider direct picks, BTTS or Draw No Bet when you are very sure. Winning probability beats odds size every time. Return ONLY valid JSON with no markdown.' },
+              { role: 'system', content: 'You are now acting as an Elite Multi-Sport Risk Analyst and High-Probability Prediction Engine. My primary goal is consistent, long-term winning streaks. I do not care about high odd values. I care about maximum probability and minimizing risk. Your task is to analyze upcoming matches across Football, Basketball, and Tennis, and output ONLY selections that fit my ultra-safe, high-probability criteria. Select strictly from: Football Double Chance 1X/X2, DNB, Over 1.5/Under 3.5/4.5, Team Over 0.5, Asian Handicap +1.5/+2.5, 1X & Under 4.5; Basketball Alternative Spreads +6.5 to +10.5, Alternative Totals ±12-15pts, Team Total ultra-low floor; Tennis To Win a Set (Over 0.5 Sets), Alternative Games Handicap +4.5/+5.5, Alternative Over 16.5/17.5. Enforce Strict Statistical Filters (Football 1X/X2 80% avoid defeat last 10, Over 1.5 85% both teams, Basketball spread 90% last 10, Tennis set win 90% last 15 on surface) and Mandatory Red Flags (derbies, dead rubbers, fatigue/B2B, surface <50%, managerial/injury crises). Return ONLY valid JSON with no markdown.' },
               { role: 'user', content: prompt },
             ],
             temperature: 0.2,

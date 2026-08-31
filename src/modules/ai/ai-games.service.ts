@@ -274,10 +274,10 @@ export class AIGamesService {
         ? `Total: ${h2h.total_matches} | Home wins: ${h2h.home_wins} | Draws: ${h2h.draws} | Away wins: ${h2h.away_wins} | Goals avg: ${h2h.avg_total_goals.toFixed(2)}`
         : 'No H2H data';
 
-      const prompt = `You are Ora, BetPool's daily games analyst. Pick the SINGLE best bet for each match.
+      const prompt = `You are now acting as an Elite Multi-Sport Risk Analyst and High-Probability Prediction Engine. Consistent long-term winning streaks > high odds. Maximum probability, minimum risk.
 
 MATCH: ${fixture.home_team} vs ${fixture.away_team}
-LEAGUE: ${this.leagueName(fixture.league_id)} | Round: ${fixture.round_number || 'N/A'}
+SPORT: Football | LEAGUE: ${this.leagueName(fixture.league_id)} | Round: ${fixture.round_number || 'N/A'}
 DATE: ${fixture.event_date}
 
 TEAM FORM:
@@ -290,21 +290,41 @@ ${h2hStr}
 CURRENT MARKET ODDS:
 ${oddsStr}
 
-Rules (SURVIVAL — winning consistency is everything):
-- PREFER double chance: "Home or Draw", "Away or Draw" or "Home or Away" — these win when either covered side hits, so they should be the default choice to double our chance of winning.
-- Direct outcomes ("Home Win", "Away Win", "Draw" alone), BTTS and Draw No Bet are ALLOWED ONLY when you are very sure — a clear favourite with overwhelming form/H2H evidence, or overwhelming goal-scoring evidence. Otherwise double chance wins.
-- Goals: if the game should be high scoring, pick "Over 1.5" (never Over 2.5 or higher — the lower line is safer). If low scoring is expected, prefer the safest under: "Under 4.5" or "Under 3.5" (these win more often); "Under 2.5" only when you are very sure.
-- ODDS DO NOT MATTER. Win probability is everything — a winning pick at 1.20x beats a risky pick at 3.00x. Pick the most likely outcome no matter how low its odds.
-- Never pick a multiplier below 1.20x (minimum floor).
-- You must pick SOMETHING — always return one best pick with honest confidence.
+=== 1. MY CORE STRATEGY KEYS (BY SPORT) — STRICTLY FROM THESE ===
+FOOTBALL: Double Chance 1X (Home or Draw), X2 (Away or Draw); DNB Home/Away DNB; Over 1.5 / Under 3.5 / Under 4.5; Team Over 0.5 Home/Away; Asian Handicap Underdog +1.5/+2.5; Safe Multi 1X & Under 4.5 / X2 & Under 4.5
+BASKETBALL: Alternative Spread +6.5 to +10.5 on favorite; Alternative Totals ±12-15pts safer than standard; Team Total ultra-low floor
+TENNIS: To Win a Set (Over 0.5 Sets); Alternative Games Handicap +4.5/+5.5; Alternative Over 16.5/17.5 total games
+
+=== 2. STRICT STATISTICAL FILTERS — MUST PASS ===
+* Football 1X/X2: chosen team avoided defeat in >=80% last 10 home/away
+* Football Over 1.5: BOTH teams seen Over 1.5 in >=85% respective matches this season
+* Basketball Alternative Spreads: backed team covered adjusted spread in 90% last 10
+* Tennis To Win a Set/Handicaps: player won >=1 set in 90% last 15 on this surface (Hard/Clay/Grass)
+
+=== 3. MANDATORY RED FLAGS (IMMEDIATE SKIP) ===
+* Local Derbies / Fierce Rivalries; Dead Rubber (already qualified/nothing to play for); Extreme Fatigue/B2B road or tennis final in different country <48h; Surface Disadvantage tennis <50% win on surface; Managerial change <14 days or missing core GK/floor general; tennis medical timeout/tape
+
+=== 4. YOUR OUTPUT FORMAT ===
+For this match that passes all filters, provide:
+* Sport & Match: Football - ${fixture.home_team} vs ${fixture.away_team} ([League])
+* Recommended Ultra-Safe Pick: [e.g., Home or Draw (1X) / Over 1.5 / To Win a Set / 1X & Under 4.5]
+* Probability Confidence (%): [calculated %]
+* Supporting Stat 1: [threshold hit in X% recent matches]
+* Supporting Stat 2: [H2H or structural metric guaranteeing safety]
+* Risk Warning: [only realistic fail scenario]
+
+You must pick SOMETHING ultra-safe that passes all filters — never pick a multiplier below 1.20x. Winning probability beats odds size.
 
 Return ONLY valid JSON with no markdown:
 {
-  "selection": "e.g. Home or Draw | Away or Draw | Home or Away | Over 1.5 | Under 3.5 | Under 4.5 | Home Win | BTTS Yes",
-  "marketType": "e.g. Double Chance | Over/Under 1.5 | Over/Under 3.5 | 1X2 | BTTS",
-  "multiplier": number (1.20-10.0, must be an odds value present in the market odds or a fair estimate),
+  "selection": "e.g. Home or Draw (1X) | Away or Draw (X2) | Home DNB | Away DNB | Over 1.5 Total Goals | Under 3.5 | Under 4.5 | Home Team Over 0.5 | Away Team Over 0.5 | Underdog +1.5 | Underdog +2.5 | 1X & Under 4.5 | X2 & Under 4.5 | To Win a Set (Over 0.5 Sets) | +4.5 Games Handicap | Over 16.5 Total Games",
+  "marketType": "e.g. Double Chance | Over/Under 1.5 | Under 3.5 | DNB | Asian Handicap | To Win a Set",
+  "multiplier": number (1.20-10.0, must be odds present or fair estimate),
   "confidence": number (0-100),
-  "reasoning": "One sentence justification"
+  "reasoning": "Supporting Stat 1 + Supporting Stat 2 + Risk Warning",
+  "supportingStat1": "string",
+  "supportingStat2": "string",
+  "riskWarning": "string"
 }`;
 
       const controller = new AbortController();
@@ -320,11 +340,11 @@ Return ONLY valid JSON with no markdown:
           body: JSON.stringify({
             model: process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash',
             messages: [
-              { role: 'system', content: 'You are Ora, BetPool\'s daily games analyst. Return ONLY valid JSON with no markdown.' },
+              { role: 'system', content: 'You are now acting as an Elite Multi-Sport Risk Analyst and High-Probability Prediction Engine. Consistent long-term winning streaks > high odds. Maximum probability, minimum risk. Select STRICTLY from ultra-safe markets: Football 1X/X2, DNB, Over 1.5/Under 3.5/4.5, Team Over 0.5, +1.5/+2.5, 1X & Under 4.5; Basketball Alt Spreads +6.5-10.5, Alt Totals ±12-15pts, Team Total floor; Tennis To Win a Set, +4.5/+5.5 Games Handicap, Over 16.5/17.5. Enforce Strict Filters (80% avoid defeat/85% Over1.5/90% spread/90% set win on surface) and Red Flags (derbies, dead rubbers, fatigue/B2B, surface <50%, managerial/injury). Return ONLY valid JSON with no markdown.' },
               { role: 'user', content: prompt },
             ],
             temperature: 0.2,
-            max_tokens: 400,
+            max_tokens: 600,
           }),
           signal: controller.signal,
         });
