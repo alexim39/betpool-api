@@ -14,7 +14,7 @@ export class StakeController {
         return;
       }
 
-      const { podId, oddsOfferId, podIds, stakeAmount, bookingCode } = req.body as { podId?: string; oddsOfferId?: string; podIds?: string[]; stakeAmount: number; bookingCode?: string };
+      const { podId, oddsOfferId, podIds, stakeAmount, bookingCode, idempotencyKey } = req.body as { podId?: string; oddsOfferId?: string; podIds?: string[]; stakeAmount: number; bookingCode?: string; idempotencyKey?: string };
 
       if (!stakeAmount) {
         res.status(400).json({ success: false, message: 'Stake amount required' });
@@ -28,7 +28,10 @@ export class StakeController {
 
       // Accumulator (multi-pod) bet
       if (podIds && podIds.length >= 2) {
-        const result = await stakeService.placeAccumulator({ userId, podIds, stakeAmount, bookingCode });
+        const result = await stakeService.placeAccumulator({
+          userId, podIds, stakeAmount, bookingCode,
+          ...(typeof idempotencyKey === 'string' && idempotencyKey ? { idempotencyKey } : {})
+        });
         res.status(201).json({
           success: true,
           message: 'Accumulator placed successfully',

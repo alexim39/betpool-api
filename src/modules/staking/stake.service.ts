@@ -665,7 +665,12 @@ export class StakeService {
       userService.payReferralBonusOnStake(userId).catch(e => console.error('Referral bonus error', e));
 
       const podTitle = `${pods[0].homeTeam} vs ${pods[0].awayTeam} +${podIds.length - 1}`;
-      await notifyStakePlaced(userId, `${podTitle} (${podIds.length}-leg parlay)`, stakeAmount, potentialPayout).catch(e => console.error(e));
+      // Fire-and-forget: notifications (in-app write + SMTP email) must never gate
+      // the 201 response. Awaiting them here delayed every betslip response by the
+      // slowest step, so a client/proxy drop in that window surfaced as
+      // "Failed to place accumulator" while the stake was already committed —
+      // and the retry then minted a duplicate stake.
+      notifyStakePlaced(userId, `${podTitle} (${podIds.length}-leg parlay)`, stakeAmount, potentialPayout).catch(e => console.error(e));
 
       abtestService.recordEvent(userId, 'personalization', 'stake_placed', {
         isParlay: true,
