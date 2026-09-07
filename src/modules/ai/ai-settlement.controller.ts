@@ -124,6 +124,26 @@ export class AISettlementController {
     }
   }
 
+  async listStuckStakes(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const olderThanDays = Math.min(365, Math.max(1, parseInt(String(req.query.olderThanDays || '7'), 10) || 7));
+      const stakes = await aiSettlementService.listStuckStakes(olderThanDays);
+      res.json({ success: true, data: stakes, count: stakes.length });
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message || 'Failed to list stuck stakes' });
+    }
+  }
+
+  async sweepStaleStakes(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const olderThanDays = Math.min(365, Math.max(1, parseInt(String(req.body?.olderThanDays || '7'), 10) || 7));
+      const result = await aiSettlementService.sweepStaleStakes(req.user!.userId, olderThanDays);
+      res.json({ success: true, ...result });
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message || 'Stale-stake sweep failed' });
+    }
+  }
+
   async countPendingReviews(req: AuthRequest, res: Response): Promise<void> {
     try {
       const counts = await aiSettlementService.countPendingReviews();

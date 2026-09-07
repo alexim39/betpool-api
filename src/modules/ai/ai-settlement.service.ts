@@ -1,9 +1,36 @@
 import axios from 'axios';
 import { PodModel, IPod } from '../../models/pod.model';
+import { StakeModel } from '../../models/stake.model';
 import { AdminService } from '../admin/admin.service';
 import { UserModel } from '../../models/user.model';
 import { createInAppNotification } from '../../services/notification.service';
 import { logger } from '../../services/logger.service';
+
+export interface StuckStakeLeg {
+  index: number;
+  podId: string | null;
+  podTitle: string;
+  podStatus: string | null;
+  matchDate: string | null;
+  reason: string;
+}
+
+export interface StuckStake {
+  stakeId: string;
+  user: string;
+  ageDays: number;
+  status: string;
+  isParlay: boolean;
+  legs: StuckStakeLeg[];
+}
+
+export interface SweepResult {
+  scanned: number;
+  resolved: number;
+  stillStuck: StuckStake[];
+  skippedInternal: number;
+  errors: string[];
+}
 
 export interface SettlementCheckResult {
   podId: string;
@@ -354,6 +381,29 @@ export class AISettlementService {
           continue;
         }
 
+        // Path 5 (runs first): a match whose date passed days ago must never
+        // still report a live/upcoming status — the feed went stale. Flag it
+        // instead of skipping silently forever (this orphaned parlay legs).
+        const STALE_MS = 3 * 86400000;
+        const liveStatuses = ['1st_half', '2nd_half', 'halftime', 'extra_time', 'penalties', 'inprogress', 'live', 'notstarted', 'scheduled'];
+        const matchTime = pod.matchDate ? new Date(pod.matchDate).getTime() : NaN;
+        if (
+          check.matchStatus &&
+          liveStatuses.includes(check.matchStatus.toLowerCase()) &&
+          Number.isFinite(matchTime) &&
+          matchTime < now.getTime() - STALE_MS
+        ) {
+          stuck++;
+          await PodModel.findByIdAndUpdate(pod._id, {
+            $set: {
+              settlementStatus: 'stuck',
+              settlementDisputed: false,
+              settlementStuckReason: `Match date passed over 3 days ago but sports API still reports status "${check.matchStatus}". Manual settlement required.`,
+            },
+          });
+          continue;
+        }
+
         // Path 4: Mark as stuck for manual review
         if (check.recommendedResult === 'cannot_determine' && !check.disputed) {
           const isStuck = !check.fixtureId
@@ -404,6 +454,161 @@ export class AISettlementService {
     })
       .populate('createdBy', 'fullName phone')
       .sort({ updatedAt: -1 });
+  }
+
+  /**
+   * Stakes stuck active although every pending leg's fixture concluded long
+   * ago (or the pod is gone). This is the "active for months" detector — e.g.
+   * a voided/postponed fixture whose pod never reached `settled` pins the
+   * whole parlay, because parlay resolution requires every leg non-pending.
+   */
+  async listStuckStakes(olderThanDays = 7, limit = 100): Promise<StuckStake[]> {
+    const cutoff = new Date(Date.now() - olderThanDays * 86400000);
+    const stakes = await StakeModel.find({
+      status: { $in: ['pending', 'confirmed'] },
+      createdAt: { $lt: cutoff },
+      // Bet Manager pool stakes are internal accounting (invisible on user
+      // /bets pages) with their own reconcile flow — never auto-resolve them.
+      'metadata.betManager': { $ne: true },
+    })
+      .populate('items.pod', 'title status matchDate')
+      .populate('pod', 'title status matchDate')
+      .populate('user', 'phone fullName')
+      .sort({ createdAt: 1 })
+      .limit(limit)
+      .lean();
+    const out: StuckStake[] = [];
+    for (const s of stakes as any[]) {
+      const items: any[] = Array.isArray(s.items) && s.items.length > 0
+        ? s.items
+        : [{ pod: s.pod, status: 'pending', homeTeam: s.homeTeam, awayTeam: s.awayTeam, selection: s.selection }];
+      const pending = items
+        .map((it, index) => ({ it, index }))
+        .filter(x => x.it && x.it.status === 'pending');
+      if (pending.length === 0) continue;
+      const legs: StuckStakeLeg[] = [];
+      let allConcluded = true;
+      for (const { it, index } of pending) {
+        const p = it.pod && typeof it.pod === 'object' ? it.pod : null;
+        const md = p?.matchDate ? new Date(p.matchDate).getTime() : NaN;
+        if (p && Number.isFinite(md) && md >= cutoff.getTime()) {
+          allConcluded = false; // genuinely upcoming leg — not stale
+          break;
+        }
+        const fallbackTitle = it.homeTeam || it.awayTeam
+          ? `${it.homeTeam || '?'} vs ${it.awayTeam || '?'}` : 'Unknown fixture';
+        legs.push({
+          index,
+          podId: p ? String(p._id) : (it.pod ? String(it.pod) : null),
+          podTitle: p?.title || fallbackTitle,
+          podStatus: p?.status || null,
+          matchDate: p?.matchDate ? new Date(p.matchDate).toISOString() : null,
+          reason: !p
+            ? 'Pod document is gone — leg can never resolve on its own'
+            : `Pod "${p.status}", fixture concluded before ${cutoff.toISOString().split('T')[0]}`,
+        });
+      }
+      if (!allConcluded || legs.length === 0) continue;
+      const created = s.createdAt ? new Date(s.createdAt).getTime() : Date.now();
+      const u = s.user && typeof s.user === 'object'
+        ? (s.user.fullName || s.user.phone || String(s.user._id))
+        : String(s.user || 'unknown');
+      out.push({
+        stakeId: String(s._id),
+        user: u,
+        ageDays: Math.floor((Date.now() - created) / 86400000),
+        status: s.status,
+        isParlay: items.length > 1,
+        legs,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Resolves stale stakes leg-by-leg through the normal determination rules
+   * (finished+scores → win/loss, postponed/cancelled/abandoned/gone fixture
+   * → void). Anything indeterminable is left pending and reported — never
+   * silently skipped again.
+   */
+  async sweepStaleStakes(adminUserId: string, olderThanDays = 7): Promise<SweepResult> {
+    const stuck = await this.listStuckStakes(olderThanDays, 200);
+    const adminService = new AdminService();
+    const result: SweepResult = { scanned: stuck.length, resolved: 0, stillStuck: [], skippedInternal: 0, errors: [] };
+    try {
+      result.skippedInternal = await StakeModel.countDocuments({
+        status: { $in: ['pending', 'confirmed'] },
+        createdAt: { $lt: new Date(Date.now() - olderThanDays * 86400000) },
+        'metadata.betManager': true,
+      });
+    } catch { /* reporting only */ }
+    const MAX_LEGS = 100;
+    let legsTouched = 0;
+    for (const s of stuck) {
+      let blocking = false;
+      for (const leg of s.legs) {
+        if (legsTouched >= MAX_LEGS) {
+          blocking = true;
+          break;
+        }
+        try {
+          let verdict: 'win' | 'loss' | 'void' | null = null;
+          if (!leg.podId) {
+            verdict = 'void'; // fixture pod is gone — void/refund is the only safe resolution
+          } else {
+            const check = await this.checkPod(leg.podId);
+            if (check.disputed) {
+              leg.reason = `Disputed: ${check.disputeReason || check.reasoning}`;
+              blocking = true;
+              continue;
+            }
+            if (check.recommendedResult === 'cannot_determine') {
+              leg.reason = check.reasoning || 'Cannot determine result yet';
+              blocking = true;
+              continue;
+            }
+            const terminal = check.matchStatus === 'finished' ||
+              (check.recommendedResult === 'void' && check.confidence >= 80);
+            if (!terminal) {
+              leg.reason = `Match status "${check.matchStatus}" — not final`;
+              blocking = true;
+              continue;
+            }
+            verdict = check.recommendedResult;
+          }
+          if (s.isParlay) {
+            await adminService.settleStakeLeg(s.stakeId, leg.index, verdict, adminUserId);
+          } else {
+            await adminService.settleStake(
+              s.stakeId,
+              verdict,
+              adminUserId,
+              `Stale-stake sweep: ${leg.reason}`
+            );
+          }
+          legsTouched++;
+        } catch (err: any) {
+          result.errors.push(`Stake ${s.stakeId} leg ${leg.index + 1}: ${err.message}`);
+          blocking = true;
+        }
+      }
+      try {
+        const fresh = await StakeModel.findById(s.stakeId).select('status').lean();
+        if (fresh && !['pending', 'confirmed'].includes((fresh as any).status)) {
+          result.resolved++;
+        } else {
+          if (!blocking) {
+            // All legs processed but stake still open (e.g. capped mid-run).
+            blocking = true;
+          }
+          result.stillStuck.push(s);
+        }
+      } catch (err: any) {
+        result.errors.push(`Stake ${s.stakeId} re-check: ${err.message}`);
+        result.stillStuck.push(s);
+      }
+    }
+    return result;
   }
 
   async countPendingReviews(): Promise<{ disputed: number; stuck: number }> {

@@ -11,8 +11,21 @@ jest.mock('../../models/pod.model', () => ({
     countDocuments: jest.fn(),
   },
 }));
+jest.mock('../../models/stake.model', () => ({
+  StakeModel: { find: jest.fn(), findById: jest.fn(), countDocuments: jest.fn() },
+}));
+
+const mockSettleStakeLeg = jest.fn().mockResolvedValue({});
+const mockSettleStake = jest.fn().mockResolvedValue({});
+jest.mock('../admin/admin.service', () => ({
+  AdminService: jest.fn().mockImplementation(() => ({
+    settleStakeLeg: (...args: any[]) => mockSettleStakeLeg(...args),
+    settleStake: (...args: any[]) => mockSettleStake(...args),
+  })),
+}));
 
 import { PodModel } from '../../models/pod.model';
+import { StakeModel } from '../../models/stake.model';
 
 const axiosGetMock = axios.get as unknown as jest.Mock;
 
@@ -246,5 +259,219 @@ describe('AISettlementService.checkPod', () => {
     const result = await service.checkPod('pod-1');
     expect(result.matchFound).toBe(true);
     expect(result.recommendedResult).toBe('win');
+  });
+});
+
+describe('AISettlementService.listStuckStakes', () => {
+  let service: AISettlementService;
+  const stakeFind = StakeModel.find as jest.Mock;
+
+  const oldDate = new Date(Date.now() - 60 * 86400000);
+  const futureDate = new Date(Date.now() + 86400000);
+
+  function mockStakeFind(stakes: any[]) {
+    const lean = jest.fn().mockResolvedValue(stakes);
+    const limit = jest.fn().mockReturnValue({ lean });
+    const sort = jest.fn().mockReturnValue({ limit });
+    const p3: any = { populate: jest.fn(), sort };
+    p3.populate.mockReturnValue({ sort });
+    const p2: any = { populate: jest.fn().mockReturnValue(p3) };
+    const p1: any = { populate: jest.fn().mockReturnValue(p2) };
+    stakeFind.mockReturnValue(p1);
+  }
+
+  const staleLeg = (overrides: Record<string, unknown> = {}) => ({
+    pod: { _id: 'pod-1', title: 'A vs B', status: 'active', matchDate: oldDate },
+    status: 'pending',
+    homeTeam: 'A',
+    awayTeam: 'B',
+    selection: 'Home or Draw',
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = new AISettlementService();
+  });
+
+  it('lists old stakes whose pending legs all concluded long ago', async () => {
+    mockStakeFind([{
+      _id: 'stake-1',
+      user: { _id: 'u1', fullName: 'Alex Imenwo' },
+      status: 'confirmed',
+      createdAt: oldDate,
+      items: [staleLeg(), { ...staleLeg(), status: 'won' }],
+    }]);
+    const out = await service.listStuckStakes(7);
+    expect(out).toHaveLength(1);
+    expect(out[0].stakeId).toBe('stake-1');
+    expect(out[0].user).toBe('Alex Imenwo');
+    expect(out[0].legs).toHaveLength(1);
+    expect(out[0].legs[0].podId).toBe('pod-1');
+  });
+
+  it('excludes stakes with a genuinely upcoming leg', async () => {
+    mockStakeFind([{
+      _id: 'stake-2',
+      user: 'u2',
+      status: 'confirmed',
+      createdAt: oldDate,
+      items: [staleLeg({ pod: { _id: 'pod-9', title: 'C vs D', status: 'active', matchDate: futureDate } })],
+    }]);
+    const out = await service.listStuckStakes(7);
+    expect(out).toHaveLength(0);
+  });
+
+  it('includes legs whose pod document is gone', async () => {
+    mockStakeFind([{
+      _id: 'stake-3',
+      user: 'u3',
+      status: 'pending',
+      createdAt: oldDate,
+      items: [{ pod: null, status: 'pending', homeTeam: 'E', awayTeam: 'F' }],
+    }]);
+    const out = await service.listStuckStakes(7);
+    expect(out).toHaveLength(1);
+    expect(out[0].legs[0].podId).toBeNull();
+    expect(out[0].legs[0].reason).toContain('gone');
+  });
+});
+
+describe('AISettlementService.sweepStaleStakes', () => {
+  let service: AISettlementService;
+  const stakeFind = StakeModel.find as jest.Mock;
+  const stakeFindById = StakeModel.findById as jest.Mock;
+
+  const oldDate = new Date(Date.now() - 60 * 86400000);
+
+  function mockStakeFind(stakes: any[]) {
+    const lean = jest.fn().mockResolvedValue(stakes);
+    const limit = jest.fn().mockReturnValue({ lean });
+    const sort = jest.fn().mockReturnValue({ limit });
+    const p3: any = { populate: jest.fn(), sort };
+    p3.populate.mockReturnValue({ sort });
+    const p2: any = { populate: jest.fn().mockReturnValue(p3) };
+    const p1: any = { populate: jest.fn().mockReturnValue(p2) };
+    stakeFind.mockReturnValue(p1);
+  }
+
+  const staleStake = (items: any[]) => ({
+    _id: 'stake-1',
+    user: { _id: 'u1', fullName: 'Alex Imenwo' },
+    status: 'confirmed',
+    createdAt: oldDate,
+    items,
+  });
+
+  const stalePodLeg = () => ({
+    pod: { _id: 'pod-1', title: 'A vs B', status: 'active', matchDate: oldDate },
+    status: 'pending',
+    homeTeam: 'A',
+    awayTeam: 'B',
+    selection: 'Home or Draw',
+  });
+
+  // Realistic 2-leg parlay: one leg already decided, one still pending.
+  const parlayWithPendingLeg = (pendingLeg: any) => [
+    pendingLeg,
+    { pod: { _id: 'pod-2', title: 'C vs D', status: 'settled', matchDate: oldDate }, status: 'won', homeTeam: 'C', awayTeam: 'D', selection: 'Over 1.5' },
+  ];
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    service = new AISettlementService();
+    mockSettleStakeLeg.mockResolvedValue({});
+    mockSettleStake.mockResolvedValue({});
+    (StakeModel.countDocuments as jest.Mock).mockResolvedValue(0);
+    (PodModel.findById as jest.Mock).mockReturnValue({ populate: jest.fn().mockResolvedValue(pod('Home or Draw')) });
+  });
+
+  it('voids the leg of a postponed fixture and counts the stake resolved', async () => {
+    axiosGetMock.mockImplementation((url: string) => {
+      if (url.includes('/events/123/')) {
+        return Promise.resolve({ data: { id: 123, status: 'postponed', home_team_id: 11, away_team_id: 22, event_date: '2026-06-01T19:00:00.000Z' } });
+      }
+      return Promise.resolve({ data: { results: [] } });
+    });
+    mockStakeFind([staleStake(parlayWithPendingLeg(stalePodLeg()))]);
+    (stakeFindById as jest.Mock).mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ status: 'void' }) }) });
+
+    const res = await service.sweepStaleStakes('admin-1', 7);
+
+    expect(mockSettleStakeLeg).toHaveBeenCalledWith('stake-1', 0, 'void', 'admin-1');
+    expect(res.resolved).toBe(1);
+    expect(res.stillStuck).toHaveLength(0);
+  });
+
+  it('voids legs whose pod document is gone without calling the sports API', async () => {
+    mockStakeFind([staleStake(parlayWithPendingLeg({ pod: null, status: 'pending', homeTeam: 'E', awayTeam: 'F' }))]);
+    (stakeFindById as jest.Mock).mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ status: 'void' }) }) });
+
+    const res = await service.sweepStaleStakes('admin-1', 7);
+
+    expect(axiosGetMock).not.toHaveBeenCalled();
+    expect(mockSettleStakeLeg).toHaveBeenCalledWith('stake-1', 0, 'void', 'admin-1');
+    expect(res.resolved).toBe(1);
+  });
+
+  it('settles a finished match leg as win from scores', async () => {
+    mockMatch(2, 0);
+    mockStakeFind([staleStake(parlayWithPendingLeg(stalePodLeg()))]);
+    (stakeFindById as jest.Mock).mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ status: 'won' }) }) });
+
+    const res = await service.sweepStaleStakes('admin-1', 7);
+
+    expect(mockSettleStakeLeg).toHaveBeenCalledWith('stake-1', 0, 'win', 'admin-1');
+    expect(res.resolved).toBe(1);
+  });
+
+  it('leaves indeterminable legs pending and reports them as still stuck', async () => {
+    axiosGetMock.mockImplementation((url: string) => {
+      if (url.includes('/events/123/')) {
+        return Promise.resolve({ data: { id: 123, status: 'notstarted', home_team_id: 11, away_team_id: 22, event_date: '2026-06-01T19:00:00.000Z' } });
+      }
+      return Promise.resolve({ data: { results: [] } });
+    });
+    mockStakeFind([staleStake(parlayWithPendingLeg(stalePodLeg()))]);
+    (stakeFindById as jest.Mock).mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ status: 'confirmed' }) }) });
+
+    const res = await service.sweepStaleStakes('admin-1', 7);
+
+    expect(mockSettleStakeLeg).not.toHaveBeenCalled();
+    expect(res.resolved).toBe(0);
+    expect(res.stillStuck).toHaveLength(1);
+    expect(res.stillStuck[0].legs[0].reason).toContain('notstarted');
+  });
+
+  it('resolves a single (non-parlay) stale stake via settleStake, not settleStakeLeg', async () => {
+    mockStakeFind([{
+      _id: 'stake-9',
+      user: 'u9',
+      status: 'confirmed',
+      createdAt: new Date(Date.now() - 60 * 86400000),
+      items: [],
+      pod: null,
+    }]);
+    (stakeFindById as jest.Mock).mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ status: 'void' }) }) });
+
+    const res = await service.sweepStaleStakes('admin-1', 7);
+
+    expect(mockSettleStakeLeg).not.toHaveBeenCalled();
+    expect(mockSettleStake).toHaveBeenCalledWith('stake-9', 'void', 'admin-1', expect.any(String));
+    expect(res.resolved).toBe(1);
+    expect(res.skippedInternal).toBe(0);
+  });
+
+  it('excludes internal bet-manager pool stakes from auto-resolution', async () => {
+    mockStakeFind([]);
+    (StakeModel.countDocuments as jest.Mock).mockResolvedValue(5);
+
+    const res = await service.sweepStaleStakes('admin-1', 7);
+
+    const findFilter = (StakeModel.find as jest.Mock).mock.calls[0][0];
+    expect(findFilter['metadata.betManager']).toEqual({ $ne: true });
+    expect(res.scanned).toBe(0);
+    expect(mockSettleStakeLeg).not.toHaveBeenCalled();
+    expect(mockSettleStake).not.toHaveBeenCalled();
   });
 });

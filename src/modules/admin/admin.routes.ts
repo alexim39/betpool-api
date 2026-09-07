@@ -54,6 +54,8 @@ router.post('/ai/curate', aiCurationController.curate);
 router.get('/ai/curate/status/:jobId', aiCurationController.getStatus);
 router.get('/ai/curate/latest', aiCurationController.getLatest);
 router.post('/ai/settle-all', aiSettlementController.settleAll);
+router.post('/ai/sweep-stale-stakes', aiSettlementController.sweepStaleStakes);
+router.get('/ai/settlement/stuck-stakes', aiSettlementController.listStuckStakes);
 
 // User management
   router.get('/users', adminController.listUsers);

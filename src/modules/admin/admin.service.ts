@@ -1618,6 +1618,8 @@ export class AdminService {
         let newStatus: IStake['status'];
         let txType = 'refund';
         let txDescription = '';
+        let parlayFee = 0;
+        let insuranceApplied = false;
 
         if (allWon) {
           payoutAmount = stake.netPayout;
@@ -1626,19 +1628,49 @@ export class AdminService {
           newStatus = 'won';
           txType = 'payout';
           txDescription = 'Parlay won (admin)';
+          parlayFee = stake.platformFee;
         } else if (allVoid) {
           payoutAmount = stake.stakeAmount;
           wallet.balance += payoutAmount;
           newStatus = 'void';
           txDescription = 'Parlay voided (admin)';
         } else if (anyLost) {
-          payoutAmount = 0;
-          newStatus = 'lost';
-          txDescription = 'Parlay lost - leg(s) lost';
+          // Lucky-loser insurance — same rule as pod-driven settlement:
+          // exactly one failed leg on a large enough slip still pays the
+          // winning legs as a reduced accumulator.
+          const activeItems = stake.items.filter(i => i.status === 'won');
+          const insurance = evaluateAccumulatorInsurance(stake.items);
+          if (insurance.applies && activeItems.length > 0) {
+            const recalculatedMultiplier = activeItems.reduce((acc, i) => acc * i.gainsMultiplier, 1);
+            const recalculatedPayout = Math.floor(stake.stakeAmount * recalculatedMultiplier);
+            const recalculatedFee = Math.floor(recalculatedPayout * (this.PLATFORM_FEE_PERCENT / 100));
+            payoutAmount = recalculatedPayout - recalculatedFee;
+            wallet.balance += payoutAmount;
+            wallet.totalWon += payoutAmount;
+            newStatus = 'won';
+            txType = 'payout';
+            txDescription = 'Parlay won (admin, insurance: 1 leg lost, reduced payout)';
+            parlayFee = recalculatedFee;
+            insuranceApplied = true;
+          } else {
+            payoutAmount = 0;
+            newStatus = 'lost';
+            txDescription = 'Parlay lost - leg(s) lost';
+          }
         } else {
-          payoutAmount = 0;
-          newStatus = 'lost';
-          txDescription = 'Parlay lost - mixed outcome';
+          // Mixed won + void, no losses: pay the reduced accumulator on the
+          // winning legs (same as pod-driven settlement — never a loss).
+          const activeItems = stake.items.filter(i => i.status === 'won');
+          const recalculatedMultiplier = activeItems.reduce((acc, i) => acc * i.gainsMultiplier, 1);
+          const recalculatedPayout = Math.floor(stake.stakeAmount * recalculatedMultiplier);
+          const recalculatedFee = Math.floor(recalculatedPayout * (this.PLATFORM_FEE_PERCENT / 100));
+          payoutAmount = recalculatedPayout - recalculatedFee;
+          wallet.balance += payoutAmount;
+          wallet.totalWon += payoutAmount;
+          newStatus = 'won';
+          txType = 'payout';
+          txDescription = 'Parlay won (admin, reduced — void legs excluded)';
+          parlayFee = recalculatedFee;
         }
 
         wallet.lastTransactionAt = new Date();
@@ -1651,14 +1683,14 @@ export class AdminService {
             type: txType,
             status: 'completed',
             amount: payoutAmount,
-            fee: allWon ? stake.platformFee : 0,
+            fee: parlayFee,
             netAmount: payoutAmount,
             balanceBefore: wallet.balance - payoutAmount,
             balanceAfter: wallet.balance,
             currency: 'NGN',
             reference: `PLEG_${stake._id}_${legIndex}`,
             provider: 'internal',
-            metadata: { description: txDescription, isParlay: true, legCount: stake.items.length, settledLeg: legIndex }
+            metadata: { description: txDescription, isParlay: true, legCount: stake.items.length, settledLeg: legIndex, insuranceApplied }
           }], { session });
         }
 
@@ -1667,6 +1699,12 @@ export class AdminService {
         stake.settledBy = new mongoose.Types.ObjectId(settledBy);
         stake.settlementNotes = `Leg ${legIndex + 1} ${result} — ${txDescription}`;
         stake.settledOdds = stake.combinedMultiplier;
+        if (insuranceApplied) stake.insuranceApplied = true;
+        // Release pool exposure now that the parlay is fully settled
+        // (mirrors pod-driven settlement — previously leaked here).
+        for (const item of stake.items) {
+          await PodModel.findByIdAndUpdate(item.pod, { $inc: { currentExposure: -stake.stakeAmount } }).session(session);
+        }
       } else {
         stake.settlementNotes = `Leg ${legIndex + 1} settled as ${result} — ${stake.items.filter(i => i.status !== 'pending').length}/${stake.items.length} legs done`;
         stake.markModified('items');

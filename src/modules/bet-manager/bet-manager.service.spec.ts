@@ -43,6 +43,9 @@ jest.mock('../../models/transaction.model', () => ({
 jest.mock('../../models/pod.model', () => ({
   PodModel: { aggregate: jest.fn(), findOneAndUpdate: jest.fn(), findByIdAndUpdate: jest.fn() },
 }));
+jest.mock('../../services/user.service', () => ({
+  userService: { payReferralBonusOnStake: jest.fn().mockResolvedValue(undefined) },
+}));
 jest.mock('../../utils/transaction', () => ({
   runTransaction: jest.fn(async (fn: (session: any) => Promise<unknown>) => {
     const session = { commitTransaction: jest.fn(), abortTransaction: jest.fn(), endSession: jest.fn() };
@@ -407,5 +410,66 @@ describe('BetManagerService.getDepositHistory', () => {
     const query = depositFind.mock.calls[0][0];
     expect(query.status).toBeUndefined();
     expect(depositFind.mock.results[0].value.sort).toHaveBeenCalledWith({ depositedAt: -1 });
+  });
+});
+
+describe('BetManagerService.getOrCreatePoolWallet', () => {
+  it('heals a legacy pool wallet doc missing user instead of failing later saves', async () => {
+    walletFindById.mockReset();
+    const save = jest.fn().mockResolvedValue(undefined);
+    const legacy = { _id: POOL_WALLET_IDS.defender, balance: 0, save };
+    walletFindById.mockResolvedValueOnce(legacy as any);
+
+    const id = await betManagerService.getOrCreatePoolWallet('defender');
+
+    expect(id).toEqual(POOL_WALLET_IDS.defender);
+    expect((legacy as any).user).toEqual(POOL_WALLET_IDS.defender);
+    expect(save).toHaveBeenCalled();
+  });
+
+  it('tolerates a concurrent first-creation race (duplicate key) and returns the id', async () => {
+    walletFindById.mockReset();
+    (WalletModel.create as jest.Mock).mockReset();
+    const raced = { _id: POOL_WALLET_IDS.defender, user: POOL_WALLET_IDS.defender };
+    walletFindById
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(raced as any);
+    (WalletModel.create as jest.Mock).mockRejectedValueOnce({ code: 11000 });
+
+    const id = await betManagerService.getOrCreatePoolWallet('defender');
+
+    expect(id).toEqual(POOL_WALLET_IDS.defender);
+  });
+});
+
+describe('BetManagerService.deposit', () => {
+  it('succeeds for defender when the pool wallet doc is legacy (missing user)', async () => {
+    walletFindById.mockReset();
+    const poolSave = jest.fn().mockResolvedValue(undefined);
+    const legacyPool: any = { _id: POOL_WALLET_IDS.defender, balance: 0, lockedBalance: 0, lastTransactionAt: null, save: poolSave };
+    let poolCalls = 0;
+    (walletFindById as jest.Mock).mockImplementation(() => {
+      poolCalls++;
+      if (poolCalls === 1) return legacyPool; // getOrCreatePoolWallet heal
+      if (poolCalls === 2) return { _id: POOL_WALLET_IDS.defender, balance: 0 }; // getCurrentNav
+      return { session: () => Promise.resolve(legacyPool) }; // deposit pool load (.session chain)
+    });
+    const userSave = jest.fn().mockResolvedValue(undefined);
+    walletFindOne.mockReturnValue(sessioned({ balance: 200_000, lockedBalance: 0, lastTransactionAt: null, save: userSave }));
+    cycleFindOne.mockReturnValue({ sort: async () => null, session: async () => null });
+    accountAggregate.mockResolvedValueOnce([{ _id: null, total: 0 }]);
+    allocAggregate.mockResolvedValueOnce([{ _id: null, total: 0 }]);
+    const accountSave = jest.fn().mockResolvedValue(undefined);
+    accountFindOne.mockReturnValue({ session: async () => ({ _id: 'account-1', units: 0, totalDeposited: 0, totalWithdrawn: 0, totalProfit: 0, save: accountSave }) });
+    depositCreate.mockResolvedValueOnce({});
+
+    const result = await betManagerService.deposit('user-1', 'defender');
+
+    expect(result.success).toBe(true);
+    expect(legacyPool.user).toEqual(POOL_WALLET_IDS.defender);
+    expect(poolSave).toHaveBeenCalled();
+    expect(userSave).toHaveBeenCalled();
+    expect(depositCreate).toHaveBeenCalled();
+    expect(depositCreate.mock.calls[0][0][0]).toMatchObject({ userId: 'user-1', type: 'deposit', status: 'locked' });
   });
 });

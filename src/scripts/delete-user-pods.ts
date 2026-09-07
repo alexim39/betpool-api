@@ -77,14 +77,17 @@ async function run(): Promise<void> {
   const cancelledBy = adminIds[0] || '000000000000000000000000';
   let toRefund = 0;
   let alreadySettled = 0;
+  let skippedLiveStakes = 0;
+
+  const countActiveStakes = (podId: string) => StakeModel.countDocuments({
+    $or: [{ pod: podId }, { 'items.pod': podId }],
+    status: { $in: ['pending', 'confirmed'] }
+  });
 
   for (const pod of pods) {
     const podId = String(pod._id);
     const refundable = pod.status === 'active' || pod.status === 'published';
-    const activeStakes = await StakeModel.countDocuments({
-      $or: [{ pod: podId }, { 'items.pod': podId }],
-      status: { $in: ['pending', 'confirmed'] }
-    });
+    const activeStakes = await countActiveStakes(podId);
 
     if (refundable) {
       toRefund++;
@@ -98,6 +101,18 @@ async function run(): Promise<void> {
       }
     } else {
       alreadySettled++;
+    }
+
+    // SAFETY: never delete a pod document while live stakes still reference
+    // it — orphan legs can never resolve through settlePod and pin whole
+    // parlays "active" forever (this stranded real user bets in the past).
+    // Re-count after the cancel attempt: cancelPod voids pending legs, so a
+    // correct cancel leaves zero active stakes behind.
+    const remaining = dryRun ? activeStakes : await countActiveStakes(podId);
+    if (remaining > 0) {
+      skippedLiveStakes++;
+      console.error(`[DeleteUserPods] !! SKIPPED pod ${podId} "${pod.title}" — ${remaining} active stake(s) still reference it. Settle/void those legs first, then re-run.`);
+      continue;
     }
 
     await countAndDelete(PickOutcomeModel, { pod: podId }, dryRun, `pick outcomes for pod ${podId}`);
@@ -116,7 +131,7 @@ async function run(): Promise<void> {
   } else {
     console.log('[DeleteUserPods] Done.');
   }
-  console.log(`[DeleteUserPods] ${pods.length} old-design pods found (${toRefund} cancelled with refunds, ${alreadySettled} already settled).`);
+  console.log(`[DeleteUserPods] ${pods.length} old-design pods found (${toRefund} cancelled with refunds, ${alreadySettled} already settled, ${skippedLiveStakes} SKIPPED with live stakes).`);
   const summarized: Record<string, number> = {};
   for (const [key, value] of Object.entries(totals)) {
     const label = key.split(' for ')[0].replace(/s$/, '');

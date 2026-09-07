@@ -64,31 +64,63 @@ function escapeRegex(s: string): string {
 }
 
 export class BetManagerService {
+  /**
+   * Self-heals pool/system wallet docs created before `Wallet.user` became
+   * required. Without this, any later `.save()` on such a legacy doc throws
+   * "Wallet validation failed: user: Path `user` is required." and aborts
+   * the whole transaction (this broke defender deposits).
+   */
+  private async healWalletUser(wallet: { user?: unknown; save: () => Promise<unknown> } | null, walletId: mongoose.Types.ObjectId, label: string): Promise<void> {
+    if (!wallet || (wallet as any).user) return;
+    (wallet as any).user = walletId;
+    await wallet.save();
+    logger.warn('BetManager wallet healed (missing user backfilled)', { label, walletId: walletId.toString() });
+  }
+
   async getOrCreatePoolWallet(tier: BetManagerTier): Promise<mongoose.Types.ObjectId> {
     const walletId = POOL_WALLET_IDS[tier];
     const existing = await WalletModel.findById(walletId);
-    if (existing) return walletId;
-    await WalletModel.create({
-      _id: walletId,
-      user: walletId,
-      balance: 0,
-      lockedBalance: 0,
-      currency: 'NGN',
-    });
+    if (existing) {
+      await this.healWalletUser(existing as any, walletId, `pool:${tier}`);
+      return walletId;
+    }
+    try {
+      await WalletModel.create({
+        _id: walletId,
+        user: walletId,
+        balance: 0,
+        lockedBalance: 0,
+        currency: 'NGN',
+      });
+    } catch (err: any) {
+      // Concurrent first-deposit race: another request created it first.
+      if (err?.code !== 11000) throw err;
+      const raced = await WalletModel.findById(walletId);
+      if (raced) await this.healWalletUser(raced as any, walletId, `pool:${tier}`);
+    }
     logger.info('BetManager pool wallet created', { tier, walletId: walletId.toString() });
     return walletId;
   }
 
   async getOrCreateSystemWallet(walletId: mongoose.Types.ObjectId, label: string): Promise<mongoose.Types.ObjectId> {
     const existing = await WalletModel.findById(walletId);
-    if (existing) return walletId;
-    await WalletModel.create({
-      _id: walletId,
-      user: walletId,
-      balance: 0,
-      lockedBalance: 0,
-      currency: 'NGN',
-    });
+    if (existing) {
+      await this.healWalletUser(existing as any, walletId, label);
+      return walletId;
+    }
+    try {
+      await WalletModel.create({
+        _id: walletId,
+        user: walletId,
+        balance: 0,
+        lockedBalance: 0,
+        currency: 'NGN',
+      });
+    } catch (err: any) {
+      if (err?.code !== 11000) throw err;
+      const raced = await WalletModel.findById(walletId);
+      if (raced) await this.healWalletUser(raced as any, walletId, label);
+    }
     logger.info('BetManager system wallet created', { label, walletId: walletId.toString() });
     return walletId;
   }

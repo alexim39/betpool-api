@@ -189,6 +189,17 @@ export class AIAutomationService {
           result.settlement.settled = settlement.settled;
           for (const e of settlement.errors) result.settlement.errors.push(e);
           logger.info(`[Ora Automation] Settlement: ${settlement.settled} settled, ${settlement.disputed} disputed, ${settlement.stuck} stuck`);
+          // Sweep stakes pinned active by long-concluded fixtures (e.g. a
+          // voided/postponed leg whose pod never settled) so no bet can sit
+          // "active" for months again.
+          try {
+            const sweep = await aiSettlementService.sweepStaleStakes(adminUser, 7);
+            result.settlement.settled += sweep.resolved;
+            for (const e of sweep.errors) result.settlement.errors.push(`Sweep: ${e}`);
+            logger.info(`[Ora Automation] Stale-stake sweep: ${sweep.resolved} resolved, ${sweep.stillStuck.length} still stuck`);
+          } catch (sweepErr: any) {
+            result.settlement.errors.push(`Sweep: ${sweepErr.message}`);
+          }
         }
       } catch (err: any) {
         logger.error('[Ora Automation] Settlement error', err.message);
