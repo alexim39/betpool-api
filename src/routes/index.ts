@@ -60,7 +60,7 @@ router.use('/loyalty', authMiddleware, loyaltyRoutes);
 router.use('/leaderboard', authMiddleware, leaderboardRoutes);
 router.use('/coaching', authMiddleware, coachingRoutes);
 router.use('/virtual-games', virtualGamesRoutes);
-router.use('/social', authMiddleware, socialRoutes);
+router.use('/social', socialRoutes);
 
 // Admin routes (auth + admin middleware applied at this level)
 router.use('/admin', authMiddleware, adminMiddleware, adminLimiter, abtestAdminRoutes, adminRoutes);

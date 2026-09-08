@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authMiddleware } from '../../middleware/auth.middleware';
+import { optionalAuth } from '../../middleware/auth.middleware';
 import { apiLimiter } from '../../middleware/rateLimit.middleware';
 import {
   validateSocialToggle,
@@ -9,6 +10,15 @@ import {
 import { socialController } from './social.controller';
 
 const router = Router();
+
+// --- Public read-only profile (no login required) ---
+// These use optionalAuth: guests see same cover/codes/badges/track-record,
+// but `isFollowing`/`isSelf` resolve to false. No write operation is public.
+router.get('/public/profile/:userId', optionalAuth, apiLimiter, socialController.getPublicProfile);
+router.get('/public/creator-codes', optionalAuth, apiLimiter, socialController.getPublicCreatorCodes);
+router.get('/public/followers', optionalAuth, apiLimiter, socialController.listPublicFollowers);
+router.get('/public/following-list', optionalAuth, apiLimiter, socialController.listPublicFollowingUsers);
+router.get('/public/leaderboard', apiLimiter, socialController.getLeaderboard);
 
 router.post('/likes/toggle', authMiddleware, apiLimiter, validateSocialToggle, socialController.toggleLike);
 router.post('/saves/toggle', authMiddleware, apiLimiter, validateSocialToggle, socialController.toggleSave);

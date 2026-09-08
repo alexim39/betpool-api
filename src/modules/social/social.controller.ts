@@ -165,6 +165,58 @@ export class SocialController {
     }
   }
 
+  // --- Public (optionalAuth) — same data, isFollowing/isSelf = false for guests ---
+  async getPublicProfile(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const userId = getUserId(req) || '';
+      const targetId = String(req.params.userId || '');
+      if (!targetId || targetId.length !== 24) { res.status(400).json({ success: false, message: 'Invalid user ID' }); return; }
+      const data = await socialService.getProfile(userId, targetId);
+      res.json({ success: true, data });
+    } catch (error: any) {
+      logger.error('Social getPublicProfile error', error);
+      res.status(error?.statusCode || 500).json({ success: false, message: error?.message || 'Failed to fetch profile' });
+    }
+  }
+
+  async getPublicCreatorCodes(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const targetId = String(req.query.userId || '');
+      if (!targetId || targetId.length !== 24) { res.status(400).json({ success: false, message: 'Invalid user ID' }); return; }
+      const data = await socialService.getCreatorCodes(targetId, parsePage(req), parseLimit(req, 12));
+      res.json({ success: true, data });
+    } catch (error: any) {
+      logger.error('Social getPublicCreatorCodes error', error);
+      res.status(500).json({ success: false, message: error?.message || 'Failed to fetch creator codes' });
+    }
+  }
+
+  async listPublicFollowers(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const userId = getUserId(req) || '';
+      const targetId = String(req.query.userId || '');
+      if (!targetId || targetId.length !== 24) { res.status(400).json({ success: false, message: 'Invalid user ID' }); return; }
+      const data = await socialService.listFollowers(userId, targetId, parsePage(req), parseLimit(req, 20));
+      res.json({ success: true, data });
+    } catch (error: any) {
+      logger.error('Social listPublicFollowers error', error);
+      res.status(500).json({ success: false, message: error?.message || 'Failed to fetch followers' });
+    }
+  }
+
+  async listPublicFollowingUsers(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const userId = getUserId(req) || '';
+      const targetId = String(req.query.userId || '');
+      if (!targetId || targetId.length !== 24) { res.status(400).json({ success: false, message: 'Invalid user ID' }); return; }
+      const data = await socialService.listFollowingUsers(userId, targetId, parsePage(req), parseLimit(req, 20));
+      res.json({ success: true, data });
+    } catch (error: any) {
+      logger.error('Social listPublicFollowingUsers error', error);
+      res.status(500).json({ success: false, message: error?.message || 'Failed to fetch following list' });
+    }
+  }
+
   async listFollowers(req: AuthRequest, res: Response): Promise<void> {
     try {
       const userId = getUserId(req);
