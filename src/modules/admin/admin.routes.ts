@@ -13,6 +13,7 @@ import { aiCampaignController } from '../ai/ai-campaign.controller';
 import { featuredBannerController } from '../featured-banners/featured-banner.controller';
 import { adminChatController } from '../chat/admin-chat.controller';
 import { betManagerAdminController } from '../bet-manager/bet-manager.admin.controller';
+import { tipsterController } from '../tipster/tipster.controller';
 import { virtualGamesController } from '../virtual-games/virtual-games.controller';
 
 const router = Router();
@@ -162,5 +163,9 @@ router.post('/bet-manager/reserve/seed', betManagerAdminController.seedReserve);
 
 // Virtual Games (admin)
 router.get('/virtual-games/summary', virtualGamesController.adminSummary);
+
+// Creator copy commission (admin)
+router.get('/tipster/commissions', tipsterController.listCommissions);
+router.post('/tipster/commissions/run', tipsterController.runPayout);
 
 export default router;

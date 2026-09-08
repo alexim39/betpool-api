@@ -1,4 +1,4 @@
-export const WALLET_TYPES = ['deposit', 'withdrawal', 'stake', 'payout', 'refund', 'bonus', 'fee', 'adjustment', 'transfer'] as const;
+export const WALLET_TYPES = ['deposit', 'withdrawal', 'stake', 'payout', 'refund', 'bonus', 'commission', 'fee', 'adjustment', 'transfer'] as const;
 export const WALLET_STATUSES = ['pending', 'processing', 'completed', 'failed', 'cancelled', 'reversed'] as const;
 export const WALLET_SORT_FIELDS = ['createdAt', 'amount', 'type', 'status'] as const;
 export type WalletSortOrder = 'asc' | 'desc';

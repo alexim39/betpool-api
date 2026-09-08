@@ -9,6 +9,7 @@ export type TransactionType =
   | 'payout'
   | 'refund'
   | 'bonus'
+  | 'commission'
   | 'fee'
   | 'adjustment'
   | 'transfer';
