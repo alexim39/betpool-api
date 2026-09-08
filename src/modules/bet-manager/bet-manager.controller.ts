@@ -115,6 +115,27 @@ export class BetManagerController {
     }
   }
 
+  async getBetHistory(req: AuthRequest, res: Response): Promise<void> {
+    try {
+      const tier = parseTier(req.params.tier);
+      if (!tier) { res.status(400).json({ success: false, message: 'Invalid tier' }); return; }
+      const page = parseInt(String(req.query.page || ''), 10);
+      const limit = parseInt(String(req.query.limit || ''), 10);
+      const status = typeof req.query.status === 'string' ? req.query.status.slice(0, 20) : undefined;
+      const from = typeof req.query.from === 'string' ? req.query.from.slice(0, 40) : undefined;
+      const to = typeof req.query.to === 'string' ? req.query.to.slice(0, 40) : undefined;
+      const sortField = typeof req.query.sortField === 'string' ? req.query.sortField.slice(0, 40) : undefined;
+      const sortOrder = req.query.sortOrder === 'asc' || req.query.sortOrder === 'desc' ? req.query.sortOrder : undefined;
+      const result = await betManagerService.getBetHistory(tier, page, limit, {
+        status, from, to, sortField, sortOrder,
+      });
+      res.json({ success: true, data: result });
+    } catch (error: any) {
+      logger.error('BetManager getBetHistory error', error);
+      res.status(500).json({ success: false, message: error.message || 'Failed to fetch bet history' });
+    }
+  }
+
   async getPerformance(req: AuthRequest, res: Response): Promise<void> {
     try {
       const userId = req.user!.userId;

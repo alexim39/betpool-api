@@ -42,6 +42,7 @@ export const RESERVE_SEED_AMOUNT = 1_000_000;
 
 const VALID_TIERS: BetManagerTier[] = ['academy', 'goalkeeper', 'defender', 'midfielder', 'striker', 'chairman'];
 const VALID_DEPOSIT_STATUSES = ['locked', 'unlocked', 'withdrawn'];
+const VALID_BET_STATUSES = ['active', 'won', 'lost', 'void', 'refunded'];
 
 export interface DepositHistoryQuery {
   type?: 'deposit' | 'withdrawal';
@@ -392,6 +393,93 @@ export class BetManagerService {
       BetManagerDepositModel.countDocuments(query),
     ]);
     return { deposits, total, page, limit };
+  }
+
+  /**
+   * Pool-level bet transparency for a tier: every game the pooled funds were
+   * staked on, with outcome. Pool bets carry no personal data, so any
+   * authenticated user may view (prospects included). Read-only; mirrors
+   * getDepositHistory conventions (clamps, filters, pagination).
+   */
+  async getBetHistory(
+    tier: BetManagerTier,
+    page = 1,
+    limit = 20,
+    options: DepositHistoryQuery = {}
+  ): Promise<{
+    bets: Record<string, any>[];
+    total: number;
+    page: number;
+    limit: number;
+    stats: Record<string, number>;
+  }> {
+    page = clampInt(page, 1, 1, 10000);
+    limit = clampInt(limit, 20, 5, 100);
+
+    const query: Record<string, any> = { tier };
+    if (options.status && VALID_BET_STATUSES.includes(options.status)) query.status = options.status;
+
+    if (options.from || options.to) {
+      const range: Record<string, Date> = {};
+      const from = new Date(String(options.from ?? ''));
+      if (!isNaN(from.getTime())) range.$gte = from;
+      const to = new Date(String(options.to ?? ''));
+      if (!isNaN(to.getTime())) range.$lte = new Date(to.getTime() + 86399999);
+      if (Object.keys(range).length > 0) query.createdAt = range;
+    }
+
+    const SORT_FIELDS: Record<string, string> = { placedAt: 'createdAt', amount: 'amount', returns: 'returns' };
+    const sortField = SORT_FIELDS[options.sortField || 'placedAt'] || 'createdAt';
+    const sortOrder: 1 | -1 = options.sortOrder === 'asc' ? 1 : -1;
+
+    const [allocs, total, statRows] = await Promise.all([
+      BetManagerAllocationModel.find(query)
+        .sort({ [sortField]: sortOrder })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      BetManagerAllocationModel.countDocuments(query),
+      BetManagerAllocationModel.aggregate([
+        { $match: { tier } },
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ]),
+    ]);
+
+    const podIds = [...new Set(allocs.map((a: any) => String(a.podId)).filter(Boolean))];
+    const pods = podIds.length > 0
+      ? await PodModel.find({ _id: { $in: podIds } })
+          .select('homeTeam awayTeam league selection marketType homeScore awayScore matchDate gainsMultiplier status')
+          .lean()
+      : [];
+    const podMap = new Map((pods as any[]).map(p => [String(p._id), p]));
+
+    const bets = allocs.map((a: any) => {
+      const pod = podMap.get(String(a.podId)) as any;
+      return {
+        _id: String(a._id),
+        podId: String(a.podId),
+        homeTeam: pod?.homeTeam || null,
+        awayTeam: pod?.awayTeam || null,
+        league: pod?.league || null,
+        selection: pod?.selection || null,
+        marketType: pod?.marketType || null,
+        homeScore: pod?.homeScore ?? null,
+        awayScore: pod?.awayScore ?? null,
+        matchDate: pod?.matchDate || null,
+        odds: a.expectedMultiplier,
+        amount: a.amount,
+        status: a.status,
+        returns: a.returns || 0,
+        placedAt: a.createdAt,
+        settledAt: a.settledAt || null,
+      };
+    });
+
+    const stats: Record<string, number> = { active: 0, won: 0, lost: 0, void: 0, refunded: 0 };
+    for (const row of statRows as any[]) {
+      if (row._id in stats) stats[row._id] = row.count;
+    }
+    return { bets, total, page, limit, stats };
   }
 
   async getPerformance(userId: string, tier: BetManagerTier): Promise<{

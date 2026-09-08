@@ -41,7 +41,7 @@ jest.mock('../../models/transaction.model', () => ({
   TransactionModel: { create: jest.fn() },
 }));
 jest.mock('../../models/pod.model', () => ({
-  PodModel: { aggregate: jest.fn(), findOneAndUpdate: jest.fn(), findByIdAndUpdate: jest.fn() },
+  PodModel: { aggregate: jest.fn(), findOneAndUpdate: jest.fn(), findByIdAndUpdate: jest.fn(), find: jest.fn() },
 }));
 jest.mock('../../services/user.service', () => ({
   userService: { payReferralBonusOnStake: jest.fn().mockResolvedValue(undefined) },
@@ -471,5 +471,99 @@ describe('BetManagerService.deposit', () => {
     expect(userSave).toHaveBeenCalled();
     expect(depositCreate).toHaveBeenCalled();
     expect(depositCreate.mock.calls[0][0][0]).toMatchObject({ userId: 'user-1', type: 'deposit', status: 'locked' });
+  });
+});
+
+describe('BetManagerService.getBetHistory', () => {
+  const podFind = PodModel.find as jest.Mock;
+
+  const alloc = (overrides: Record<string, unknown> = {}) => ({
+    _id: 'alloc-1',
+    tier: 'academy',
+    stakeId: 'stake-1',
+    podId: 'pod-1',
+    amount: 1000,
+    expectedMultiplier: 1.5,
+    status: 'won',
+    returns: 1450,
+    createdAt: new Date('2026-08-01T10:00:00Z'),
+    settledAt: new Date('2026-08-02T10:00:00Z'),
+    ...overrides,
+  });
+
+  const pod = {
+    _id: 'pod-1',
+    homeTeam: 'Arsenal',
+    awayTeam: 'Chelsea',
+    league: 'Premier League',
+    selection: 'Home Win',
+    marketType: '1X2',
+    homeScore: 2,
+    awayScore: 0,
+  };
+
+  function mockPage(allocs: unknown[], total: number, stats: unknown[] = []) {
+    allocFind.mockReturnValue({
+      sort: jest.fn().mockReturnValue({
+        skip: jest.fn().mockReturnValue({
+          limit: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(allocs) })
+        })
+      })
+    });
+    allocCount.mockResolvedValue(total);
+    allocAggregate.mockResolvedValue(stats);
+    podFind.mockReturnValue({
+      select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([pod]) })
+    });
+  }
+
+  it('returns pool bets joined with fixture details plus status stats', async () => {
+    mockPage([alloc()], 1, [{ _id: 'won', count: 3 }, { _id: 'lost', count: 1 }]);
+
+    const res = await betManagerService.getBetHistory('academy', 1, 20, {});
+
+    expect(allocFind).toHaveBeenCalledWith({ tier: 'academy' });
+    expect(res.total).toBe(1);
+    expect(res.bets).toHaveLength(1);
+    expect(res.bets[0]).toMatchObject({
+      homeTeam: 'Arsenal',
+      awayTeam: 'Chelsea',
+      selection: 'Home Win',
+      odds: 1.5,
+      amount: 1000,
+      status: 'won',
+      returns: 1450,
+    });
+    expect(res.stats).toMatchObject({ active: 0, won: 3, lost: 1, void: 0, refunded: 0 });
+  });
+
+  it('filters by status and date range, clamps paging and sort fields', async () => {
+    mockPage([], 0);
+
+    const res = await betManagerService.getBetHistory('goalkeeper', 99999, 500, {
+      status: 'hacked', from: '2026-08-01', to: 'not-a-date', sortField: 'returns;drop', sortOrder: 'asc',
+    });
+
+    const filter = allocFind.mock.calls[0][0];
+    expect(filter.tier).toBe('goalkeeper');
+    expect(filter.status).toBeUndefined();
+    expect(filter.createdAt.$gte).toEqual(new Date('2026-08-01T00:00:00.000Z'));
+    expect(filter.createdAt.$lte).toBeUndefined();
+    expect(res.page).toBe(10000);
+    expect(res.limit).toBe(100);
+    expect(res.bets).toEqual([]);
+  });
+
+  it('tolerates allocations whose pod no longer exists', async () => {
+    mockPage([alloc({ podId: 'ghost-pod' })], 1);
+    podFind.mockReturnValue({
+      select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) })
+    });
+
+    const res = await betManagerService.getBetHistory('academy', 1, 20, {});
+
+    expect(res.bets).toHaveLength(1);
+    expect(res.bets[0].homeTeam).toBeNull();
+    expect(res.bets[0].podId).toBe('ghost-pod');
   });
 });
