@@ -10,7 +10,8 @@
     "prod": "tsc && node ./dist/server.js",
     "create-admin": "node scripts/create-admin.mjs",
       "backfill-pod-leagues": "tsc && node ./dist/scripts/backfill-pod-leagues.js",
-      "backfill-pool-wallet-users": "tsc && node ./dist/scripts/backfill-pool-wallet-users.js"
+      "backfill-pool-wallet-users": "tsc && node ./dist/scripts/backfill-pool-wallet-users.js",
+      "backfill-stake-creator": "tsc && node ./dist/scripts/backfill-stake-creator.js"
   },
   "author": "Alex Imenwo",
   "license": "ISC",

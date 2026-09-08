@@ -8,6 +8,7 @@ import { walletService } from './services/wallet.service';
 import { aiDigestService } from './modules/digest/ai-digest.service';
 import { oraPickService } from './modules/ora-pick/ora-pick.service';
 import { betManagerScheduler, ensureSystemWallets } from './modules/bet-manager/bet-manager.scheduler';
+import { tipsterBadgeScheduler } from './modules/tipster/tipster-badge.scheduler';
 import { autoCashoutScheduler } from './modules/staking/auto-cashout.scheduler';
 import { logger } from './services/logger.service';
 
@@ -67,6 +68,11 @@ app.listen(port, () => {
             betManagerScheduler.start();
             logger.info('[Bet Manager] Lifecycle scheduler started — every 2 hours');
         }).catch(e => logger.error('[Bet Manager] Pool wallet bootstrap failed', e));
+    }
+    // Start tipster-badge nightly recompute (settled-data creator tiers; read-only vs live paths)
+    if (process.env.TIPSTER_BADGES !== 'disabled') {
+        tipsterBadgeScheduler.start();
+        logger.info('[Tipster Badges] Nightly badge recompute started — every 24h');
     }
     // Start auto-cashout scheduler (evaluates armed stakes every 30s)
     if (process.env.AUTO_CASHOUT_SCHEDULER !== 'disabled') {

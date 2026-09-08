@@ -59,9 +59,10 @@ export class StakeService {
   /**
    * Validates that a booking code exists, has not expired, and covers the pods
    * being staked. Any subset of the code's pods may be staked (a leg may be
-   * dropped if it closed or duplicated a match). Returns the code or throws.
+   * dropped if it closed or duplicated a match). Returns the code plus the
+   * owning creator's id (for copy attribution), or throws.
    */
-  private async resolveBookingCode(code: string | undefined, podIds: string[]): Promise<string | null> {
+  private async resolveBookingCode(code: string | undefined, podIds: string[]): Promise<{ code: string; creatorId: string | null } | null> {
     if (!code) return null;
     const normalized = String(code).trim().toUpperCase();
     const booking = await BookingCodeModel.findOne({ code: normalized }).lean();
@@ -72,12 +73,7 @@ export class StakeService {
     if (stakePods.length < 2 || !stakePods.every(p => codeSet.has(p))) {
       throw new Error('The selections do not match this booking code');
     }
-    return normalized;
-  }
-
-  private async getBookingCodeCreator(code: string): Promise<string | null> {
-    const booking = await BookingCodeModel.findOne({ code }).select('userId').lean();
-    return booking ? String(booking.userId) : null;
+    return { code: normalized, creatorId: booking.userId ? String(booking.userId) : null };
   }
 
   async placeStake(data: PlaceStakeData): Promise<StakeResult> {
@@ -474,7 +470,14 @@ export class StakeService {
   async placeAccumulator(data: PlaceMultiStakeData): Promise<StakeResult> {
     const { userId, podIds, stakeAmount, idempotencyKey } = data;
 
-    const bookingCode = await this.resolveBookingCode(data.bookingCode, podIds);
+    const booking = await this.resolveBookingCode(data.bookingCode, podIds);
+    const bookingCode = booking?.code || null;
+    // Durable copy attribution: stored on the stake inside the placement
+    // transaction so commission/leaderboard joins never depend on the
+    // (48h-TTL, deletable) booking-code document. Self-copies store null —
+    // same rule as the staked_on_code activity below — so "eligible copied
+    // stake" is simply `creatorId != null`.
+    const creatorId = booking?.creatorId && booking.creatorId !== userId ? booking.creatorId : null;
     const maxLegs = bookingCode ? getMaxBookingCodeLegs() : getMaxAccumulatorLegs();
     if (podIds.length < 2 || podIds.length > maxLegs) {
       throw new Error(`Accumulator requires 2 to ${maxLegs} selections`);
@@ -614,6 +617,7 @@ export class StakeService {
         refundAmount: 0,
         status: 'confirmed',
         bookingCode: bookingCode || undefined,
+        creatorId: creatorId ? new mongoose.Types.ObjectId(creatorId) : undefined,
         metadata: {
           ...(idempotencyKey ? { idempotencyKey } : {}),
           isParlay: true,
@@ -643,23 +647,20 @@ export class StakeService {
 
       await session.commitTransaction();
 
-      if (bookingCode) {
-        const creatorId = await this.getBookingCodeCreator(bookingCode);
-        if (creatorId && creatorId !== userId) {
-          socialService.recordActivity(userId, 'staked_on_code', undefined, {
-            code: bookingCode,
-            creatorId,
-            stakeAmount,
-            legCount: podIds.length
-          }).catch(e => console.error('Staked-on-code activity error', e));
-          const staker = await userService.getUserById(userId).catch(() => null);
-          createInAppNotification(
-            creatorId,
-            'system',
-            'Someone staked on your booking code',
-            `${(staker as any)?.fullName || 'A follower'} placed a ₦${stakeAmount.toLocaleString()} accumulator on code ${bookingCode}.`
-          ).catch(e => console.error(e));
-        }
+      if (bookingCode && creatorId) {
+        socialService.recordActivity(userId, 'staked_on_code', undefined, {
+          code: bookingCode,
+          creatorId,
+          stakeAmount,
+          legCount: podIds.length
+        }).catch(e => console.error('Staked-on-code activity error', e));
+        const staker = await userService.getUserById(userId).catch(() => null);
+        createInAppNotification(
+          creatorId,
+          'system',
+          'Someone staked on your booking code',
+          `${(staker as any)?.fullName || 'A follower'} placed a ₦${stakeAmount.toLocaleString()} accumulator on code ${bookingCode}.`
+        ).catch(e => console.error(e));
       }
 
       userService.payReferralBonusOnStake(userId).catch(e => console.error('Referral bonus error', e));

@@ -27,6 +27,13 @@ jest.mock('./creator-virality.service', () => ({
     getVirality: jest.fn().mockResolvedValue({ score: 0, codesShared: 0, stakesPlaced: 0, wins: 0, badge: 'Rookie', isTopCreator: false, rank: null })
   }
 }));
+jest.mock('../tipster/tipster-badge.service', () => ({
+  tipsterBadgeService: {
+    getBadge: jest.fn().mockResolvedValue(null),
+    getBadges: jest.fn().mockImplementation((ids: string[]) => Promise.resolve(new Map(ids.map(id => [String(id), null]))))
+  },
+  commissionPctForTier: jest.fn().mockReturnValue(0)
+}));
 jest.mock('./social.model', () => ({
   SocialLikeModel: { findOne: jest.fn(), create: jest.fn(), deleteOne: jest.fn(), countDocuments: jest.fn(), aggregate: jest.fn(), distinct: jest.fn() },
   SocialSaveModel: { find: jest.fn(), findOne: jest.fn(), create: jest.fn(), deleteOne: jest.fn(), countDocuments: jest.fn(), distinct: jest.fn() },
@@ -733,6 +740,65 @@ describe('SocialService', () => {
 
       expect(result.items).toEqual([]);
       expect(result.total).toBe(0);
+    });
+
+    it('attaches distinct copier counts excluding the creator', async () => {
+      userChain('Ada Lovelace');
+      const booking = {
+        _id: new mongoose.Types.ObjectId('507f1f77bcf86cd799439013'),
+        code: 'ABC23456',
+        userId: OID,
+        createdAt: new Date('2026-01-01T10:00:00Z'),
+        expiresAt: new Date('2026-01-03T10:00:00Z'),
+        legs: [
+          { podId: 'p1', homeTeam: 'A', awayTeam: 'B', selection: 'Home Win', multiplier: 2 },
+          { podId: 'p2', homeTeam: 'C', awayTeam: 'D', selection: 'Away Win', multiplier: 1.5 }
+        ]
+      };
+      MockBookingCodeModel.find.mockReturnValue({
+        sort: jest.fn().mockReturnValue({
+          skip: jest.fn().mockReturnValue({
+            limit: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([booking]) })
+          })
+        })
+      });
+      MockBookingCodeModel.countDocuments.mockResolvedValue(1);
+      MockStakeModel.aggregate.mockResolvedValue([
+        { _id: 'ABC23456', users: [OID.toString(), 'user-2', 'user-3'] }
+      ]);
+
+      const result = await service.getCreatorCodes(OID.toString(), 1, 12);
+
+      expect(MockStakeModel.aggregate).toHaveBeenCalledWith([
+        { $match: { bookingCode: { $in: ['ABC23456'] } } },
+        { $group: { _id: '$bookingCode', users: { $addToSet: '$user' } } }
+      ]);
+      expect(result.items[0].copies).toBe(2);
+    });
+
+    it('still returns posts when copy counts fail', async () => {
+      userChain('Ada Lovelace');
+      MockBookingCodeModel.find.mockReturnValue({
+        sort: jest.fn().mockReturnValue({
+          skip: jest.fn().mockReturnValue({
+            limit: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([{
+              _id: new mongoose.Types.ObjectId('507f1f77bcf86cd799439013'),
+              code: 'ABC23456',
+              userId: OID,
+              createdAt: new Date('2026-01-01T10:00:00Z'),
+              expiresAt: new Date('2026-01-03T10:00:00Z'),
+              legs: [{ podId: 'p1', homeTeam: 'A', awayTeam: 'B', selection: 'Home Win', multiplier: 2 }]
+            }]) })
+          })
+        })
+      });
+      MockBookingCodeModel.countDocuments.mockResolvedValue(1);
+      MockStakeModel.aggregate.mockRejectedValue(new Error('db down'));
+
+      const result = await service.getCreatorCodes(OID.toString(), 1, 12);
+
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0].copies).toBeUndefined();
     });
   });
 });

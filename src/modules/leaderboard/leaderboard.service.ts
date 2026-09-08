@@ -62,7 +62,7 @@ function groupStage(): Record<string, any> {
   };
 }
 
-function maskName(fullName: string, phone: string): string {
+export function maskName(fullName: string, phone: string): string {
   const name = (fullName || '').trim();
   if (name.length >= 3) {
     return name.slice(0, 1) + '***' + name.slice(-1);

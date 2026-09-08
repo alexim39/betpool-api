@@ -9,6 +9,7 @@ import { logger } from '../../services/logger.service';
 import { createInAppNotification } from '../../services/notification.service';
 import { bookingCodeService } from '../staking/booking-code.service';
 import { creatorViralityService } from './creator-virality.service';
+import { tipsterBadgeService } from '../tipster/tipster-badge.service';
 import {
   SocialLikeModel,
   SocialSaveModel,
@@ -138,6 +139,7 @@ export class SocialService {
     const counts = new Map(rows.map(r => [r._id.toString(), r.podCount]));
     const codeCounts = new Map(codeRows.map(r => [r._id.toString(), r.codeCount]));
     const followerCounts = new Map(followerRows.map(r => [r._id.toString(), r.followers]));
+    const badges = await tipsterBadgeService.getBadges(users.map(u => String(u._id))).catch(() => new Map());
     return users
       .map(u => {
         const id = String(u._id);
@@ -150,7 +152,8 @@ export class SocialService {
           codeCount: codeCounts.get(id) || 0,
           followerCount: followerCounts.get(id) || 0,
           isOra,
-          isFollowing: isOra || followed.has(id)
+          isFollowing: isOra || followed.has(id),
+          tipsterBadge: badges.get(id) || null
         };
       })
       .filter(c => c.id !== userId)
@@ -202,6 +205,7 @@ export class SocialService {
       isTopCreator: false,
       rank: null
     }));
+    const tipsterBadge = await tipsterBadgeService.getBadge(targetId).catch(() => null);
     const result: Record<string, any> = {
       user: {
         id: targetId,
@@ -212,6 +216,7 @@ export class SocialService {
       stats: { codes, followers, following, likesReceived, stakers },
       achievements,
       virality,
+      tipsterBadge,
       isSelf: requesterId === targetId,
       isFollowing: isOra || !!followRow
     };
@@ -337,7 +342,43 @@ export class SocialService {
     const creatorName = (creator as any)?.fullName || 'BetPool user';
     const creatorUsername = (creator as any)?.username || null;
     const items = rows.map(b => this.toCodePostFromBooking(b, boosted, creatorName, creatorUsername));
+    await this.attachCopyCounts(items).catch(() => {});
+    await this.attachCreatorBadges(items).catch(() => {});
     return { items, total, page: safePage, limit: safeLimit, pages: Math.ceil(total / safeLimit) };
+  }
+
+  /**
+   * Batch-attaches distinct-copier counts (`copies`) to code posts in a single
+   * aggregation: stakes placed with each code, excluding the creator's own
+   * stakes. Self-copies are social proof of nothing, so they don't count.
+   */
+  private async attachCopyCounts(posts: Record<string, any>[]): Promise<void> {
+    const codes = [...new Set(posts.map(p => String(p.code || '')).filter(Boolean))];
+    if (codes.length === 0) return;
+    const rows = await StakeModel.aggregate([
+      { $match: { bookingCode: { $in: codes } } },
+      { $group: { _id: '$bookingCode', users: { $addToSet: '$user' } } }
+    ]);
+    const byCode = new Map<string, string[]>(
+      rows.map(r => [String(r._id), (r.users || []).map((u: any) => String(u))])
+    );
+    for (const p of posts) {
+      const users = byCode.get(String(p.code || '')) || [];
+      p.copies = users.filter(u => u && u !== String(p.creatorId || '')).length;
+    }
+  }
+
+  /**
+   * Batch-attaches settled-data tipster badges (`creatorBadge`) to code
+   * posts. Same single-query pattern as copy counts; fail-open.
+   */
+  private async attachCreatorBadges(posts: Record<string, any>[]): Promise<void> {
+    const ids = [...new Set(posts.map(p => String(p.creatorId || '')).filter(Boolean))];
+    if (ids.length === 0) return;
+    const badges = await tipsterBadgeService.getBadges(ids);
+    for (const p of posts) {
+      p.creatorBadge = badges.get(String(p.creatorId || '')) || null;
+    }
   }
 
   private toCodePostFromBooking(booking: Record<string, any>, boosted: boolean, creatorName = 'BetPool user', creatorUsername: string | null = null): Record<string, any> {
@@ -424,6 +465,8 @@ export class SocialService {
       .filter(Boolean)
       .sort((a: any, b: any) => new Date(a.stakingClosesAt).getTime() - new Date(b.stakingClosesAt).getTime());
     const codes = podIds.map(id => byCodeId.get(id)).filter(Boolean);
+    await this.attachCopyCounts(codes as Record<string, any>[]).catch(() => {});
+    await this.attachCreatorBadges(codes as Record<string, any>[]).catch(() => {});
     return { items: [...pods, ...codes], total, page: safePage, limit: safeLimit, pages: Math.ceil(total / safeLimit) };
   }
 
@@ -504,6 +547,8 @@ export class SocialService {
       SocialActivityModel.countDocuments(actorFilter)
     ]);
     const items = await Promise.all(activities.map(a => this.toCodePost(a)));
+    await this.attachCopyCounts(items).catch(() => {});
+    await this.attachCreatorBadges(items).catch(() => {});
     items.sort((a, b) => (b.boosted ? 1 : 0) - (a.boosted ? 1 : 0) || b.createdAt - a.createdAt);
     return { items, total, page: safePage, limit: safeLimit, pages: Math.ceil(total / safeLimit) };
   }

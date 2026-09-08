@@ -32,6 +32,8 @@ export interface IStake extends mongoose.Document {
   insuranceApplied?: boolean;
   status: StakeStatus;
   bookingCode?: string;
+  /** Creator whose booking code was copied. Null/undefined = organic stake or self-copy (never commissionable). */
+  creatorId?: mongoose.Types.ObjectId;
   settledAt?: Date;
   settledBy?: mongoose.Types.ObjectId;
   settlementNotes?: string;
@@ -141,6 +143,12 @@ const StakeSchema = new Schema({
     index: true,
     sparse: true
   },
+  creatorId: {
+    type: Schema.Types.ObjectId,
+    ref: 'User',
+    index: true,
+    sparse: true
+  },
   settledAt: { type: Date },
   settledBy: { type: Schema.Types.ObjectId, ref: 'User' },
   settlementNotes: { type: String, trim: true },
@@ -170,6 +178,7 @@ StakeSchema.index({ status: 1, createdAt: -1 });
 StakeSchema.index({ user: 1, pod: 1 });
 StakeSchema.index({ 'items.pod': 1 });
 StakeSchema.index({ status: 1, settledAt: -1 });
+StakeSchema.index({ creatorId: 1, status: 1, settledAt: -1 });
 StakeSchema.index({ status: 1, 'autoCashout.enabled': 1 });
 
 StakeSchema.virtual('isActive').get(function(this: IStake) {
